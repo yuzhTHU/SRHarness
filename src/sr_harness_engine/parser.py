@@ -24,21 +24,31 @@ from .expression import (
 
 
 FUNCTIONS = {
-    "abs", "cos", "exp", "log", "log10", "sigmoid", "sin", "sqrt", "tan", "tanh"
+    "abs", "arccos", "arcsin", "arctan", "cos", "cosh", "cot", "csc", "exp", "inv",
+    "log", "log10", "sec", "sech", "sigmoid", "sign", "sin", "sinh", "sqrt", "tan",
+    "tanh", "pow2", "pow3",
 }
+BINARY_FUNCTIONS = {"max", "min"}
 
 
 class ExpressionParser(ast.NodeVisitor):
     """Convert a restricted Python expression AST into engine nodes."""
 
-    def __init__(self, symbols: Mapping[str, Symbol] | None = None):
-        self.symbols = dict(symbols or {})
+    def __init__(self, symbols: Mapping[str, Any] | None = None):
+        self.symbols = {}
+        for name, value in (symbols or {}).items():
+            if isinstance(value, Expression):
+                self.symbols[name] = value
+            elif isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"Symbol override {name!r} must be an expression or number.")
+            else:
+                self.symbols[name] = Number(value)
 
     def parse(self, source: str) -> Expression:
         try:
             tree = ast.parse(source, mode="eval")
         except SyntaxError as error:
-            raise ValueError(f"Invalid symbolic expression: {error.msg}.") from error
+            raise SyntaxError(f"Invalid symbolic expression: {error.msg}.") from error
         return self.visit(tree.body)
 
     def generic_visit(self, node: ast.AST):
@@ -83,10 +93,18 @@ class ExpressionParser(ast.NodeVisitor):
             if node.keywords or len(node.args) != 1:
                 raise ValueError(f"{name}(...) expects exactly one positional argument.")
             return Function(name, (self.visit(node.args[0]),))
+        if name in BINARY_FUNCTIONS:
+            if node.keywords or len(node.args) != 2:
+                raise ValueError(f"{name}(...) expects exactly two positional arguments.")
+            return Function(name, tuple(self.visit(argument) for argument in node.args))
         if name == "delay":
             if node.keywords or len(node.args) != 2:
                 raise ValueError("delay(value, delta) expects exactly two arguments.")
             return Function(name, tuple(self.visit(argument) for argument in node.args))
+        if name == "Number":
+            if node.keywords or len(node.args) != 1:
+                raise ValueError("Number(...) expects exactly one numerical literal.")
+            return self.visit(node.args[0])
         if name == "param":
             return self._parameter(node)
         if name == "grouped_param":
@@ -151,6 +169,14 @@ class ExpressionParser(ast.NodeVisitor):
         return result
 
 
-def parse(source: str, symbols: Mapping[str, Symbol] | None = None) -> Expression:
+def parse(
+    source: str,
+    symbols: Mapping[str, Any] | None = None,
+    *,
+    variables: Mapping[str, Any] | None = None,
+) -> Expression:
     """Parse *source* without using ``eval`` or executing user code."""
+    if symbols is not None and variables is not None:
+        raise TypeError("Use either symbols or variables, not both.")
+    symbols = variables if variables is not None else symbols
     return ExpressionParser(symbols).parse(source)

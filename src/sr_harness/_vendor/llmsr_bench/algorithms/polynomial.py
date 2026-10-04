@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from sr_harness.tools import PolynomialFitTool
 from ..core import SEDTask, SRResult
 
@@ -47,7 +47,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         include_bias=True,
     )
 
-    f = nd.parse(result["formula"])
+    f = engine.parse(result["formula"])
 
     def predict(X: np.ndarray) -> np.ndarray:
         pred_data = {feat: X[:, i] for i, feat in enumerate(features)}

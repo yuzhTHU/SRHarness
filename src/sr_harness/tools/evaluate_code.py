@@ -1,6 +1,6 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 """代码模型评估工具。
-用受限 Python 代码构建模型并生成预测，用于补充 nd2py 公式表达能力。
+用受限 Python 代码构建模型并生成预测，用于补充 SRHarness Engine 的公式表达能力。
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import builtins
 import traceback
 import contextlib
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 import multiprocessing as mp
 from typing import Any, Dict
 from ..utils import log_exception
@@ -44,7 +44,7 @@ class EvaluateCodeTool(BaseTool):
     ) -> Dict[str, Any]:
         """Evaluate a Python-defined candidate model on the current dataset.
 
-        Use this tool when a candidate cannot be expressed conveniently as an nd2py formula.
+        Use this tool when a candidate cannot be expressed conveniently as an SRHarness Engine formula.
         The code runs in a restricted sandbox, then the tool computes metrics against the target
         and returns the formatted model under the `formula` key.
 
@@ -126,7 +126,7 @@ class EvaluateCodeTool(BaseTool):
         else:
             raise Exception(f"Sandbox subprocess did not return result and has exited with code {process.exitcode}.")
 
-        opaque_f = nd.parse("__code_model_prediction__")
+        opaque_f = engine.parse("__code_model_prediction__")
         split_data = {"train": data}
         if evaluation_data:
             split_data["validation"] = evaluation_data

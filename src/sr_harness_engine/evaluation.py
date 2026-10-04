@@ -21,6 +21,7 @@ from .expression import (
     Symbol,
     Unary,
 )
+from .tree import children, iter_preorder
 
 
 @dataclass(slots=True)
@@ -117,11 +118,26 @@ class Evaluator:
             return self._delay(arguments[0], arguments[1])
         functions = {
             "abs": np.abs,
+            "arccos": np.arccos,
+            "arcsin": np.arcsin,
+            "arctan": np.arctan,
             "cos": np.cos,
+            "cosh": np.cosh,
+            "cot": lambda value: 1.0 / np.tan(value),
+            "csc": lambda value: 1.0 / np.sin(value),
             "exp": np.exp,
+            "inv": lambda value: 1.0 / value,
             "log": np.log,
             "log10": np.log10,
+            "max": np.maximum,
+            "min": np.minimum,
+            "pow2": lambda value: value**2,
+            "pow3": lambda value: value**3,
+            "sec": lambda value: 1.0 / np.cos(value),
+            "sech": lambda value: 1.0 / np.cosh(value),
             "sin": np.sin,
+            "sinh": np.sinh,
+            "sign": np.sign,
             "sqrt": np.sqrt,
             "tan": np.tan,
             "tanh": np.tanh,
@@ -321,30 +337,8 @@ def grouped_parameter_key(node: GroupedParameter) -> str:
     return f"grouped:{node.by}"
 
 
-def children(node: Expression) -> tuple[Expression, ...]:
-    if isinstance(node, Unary):
-        return (node.operand,)
-    if isinstance(node, Binary):
-        return (node.left, node.right)
-    if isinstance(node, Function):
-        return node.arguments
-    if isinstance(node, Indexed):
-        return (node.base,)
-    if isinstance(node, Reduction):
-        return (node.operand,)
-    if isinstance(node, Aggregate):
-        return (node.relation, node.operand)
-    if isinstance(node, RelationLift):
-        return (node.operand,) if node.relation is None else (node.relation, node.operand)
-    if isinstance(node, GroupedParameter):
-        return (node.by,)
-    return ()
-
-
 def walk(node: Expression):
-    yield node
-    for child in children(node):
-        yield from walk(child)
+    yield from iter_preorder(node)
 
 
 def evaluate(

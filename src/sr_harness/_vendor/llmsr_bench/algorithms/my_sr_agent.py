@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import argparse
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from pathlib import Path
 from logging import getLogger
 from datetime import datetime
@@ -202,7 +202,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         error = f"agent finished with status={result.get('status')!r} but no formula was produced"
         raise RuntimeError(error)
 
-    f = nd.parse(best_formula)
+    f = engine.parse(best_formula)
 
     def predict(X: np.ndarray) -> np.ndarray:
         pred_data = {feat: X[:, i] for i, feat in enumerate(features)}

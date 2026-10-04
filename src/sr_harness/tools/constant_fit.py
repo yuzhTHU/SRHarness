@@ -6,7 +6,7 @@ from itertools import product
 from math import prod
 from typing import Any, Dict
 
-import nd2py as nd
+import sr_harness_engine as engine
 import numpy as np
 
 from .base_tool import BaseTool, ToolMetadata
@@ -37,11 +37,11 @@ class ConstantFitTool(BaseTool):
         """
         if y is not None and not isinstance(y, str):
             raise TypeError("y must be a string expression or None.")
-        original = nd.parse(
+        original = engine.parse(
             self.normalize_formula(eq),
-            variables={"pi": nd.Variable("pi"), "e": nd.Variable("e")},
+            variables={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
         )
-        leaves = [node for node in original.iter_preorder() if isinstance(node, nd.Number)]
+        leaves = [node for node in original.iter_preorder() if isinstance(node, engine.Number)]
         if not leaves:
             return {"exceptions": ["eq contains no numerical constants to replace."]}
         numbers = []
@@ -74,11 +74,11 @@ class ConstantFitTool(BaseTool):
         invalid = 0
         for choices in product(*(item["choices"] for item in numbers)):
             expression = original.copy()
-            original_leaves = [node for node in expression.iter_preorder() if isinstance(node, nd.Number)]
+            original_leaves = [node for node in expression.iter_preorder() if isinstance(node, engine.Number)]
             for leaf, choice in zip(original_leaves, choices):
-                replacement = nd.parse(
+                replacement = engine.parse(
                     choice["expression"],
-                    variables={"pi": nd.Variable("pi"), "e": nd.Variable("e")},
+                    variables={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
                 )
                 expression = expression.replace(leaf, replacement, no_warn=True)
             formula = expression.to_str()
@@ -158,7 +158,7 @@ class ConstantFitTool(BaseTool):
                  "is_original": True}, *options[:cls.MAX_SIMPLE_CANDIDATES_PER_NUMBER]]
 
     @staticmethod
-    def _values(symbol: nd.Symbol, data: Dict[str, Any]) -> np.ndarray:
+    def _values(symbol: engine.Expression, data: Dict[str, Any]) -> np.ndarray:
         with np.errstate(all="ignore"):
             return np.asarray(symbol.eval(data), dtype=float).ravel()
 

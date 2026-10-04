@@ -8,7 +8,7 @@
 import re
 import logging
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
@@ -153,7 +153,7 @@ class SINDyTool(BaseTool):
         return self._clean_formula(equations[0], x_names)
 
     def _clean_formula(self, equation_str: str, x_names: List[str]) -> str:
-        """Clean up SINDy output formula to be compatible with nd2py."""
+        """Clean up SINDy output formula for SRHarness Engine."""
         formula = equation_str.strip()
         # Remove leading/trailing whitespace around operators
         formula = re.sub(r'\s+', ' ', formula)

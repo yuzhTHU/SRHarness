@@ -10,7 +10,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
-import nd2py as nd
 import numpy as np
 
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
@@ -21,21 +20,21 @@ class SR4MDLTool(BaseTool):
     metadata = ToolMetadata(name="sr4mdl")
     REPOSITORY = "https://github.com/tsinghua-fib-lab/SR4MDL"
     BINARY_OPERATORS = {
-        "+": nd.Add,
-        "-": nd.Sub,
-        "*": nd.Mul,
-        "/": nd.Div,
+        "+": "Add",
+        "-": "Sub",
+        "*": "Mul",
+        "/": "Div",
     }
     UNARY_OPERATORS = {
-        "sqrt": nd.Sqrt,
-        "sin": nd.Sin,
-        "cos": nd.Cos,
-        "neg": nd.Neg,
-        "inv": nd.Inv,
-        "log": nd.Log,
-        "exp": nd.Exp,
-        "square": nd.Pow2,
-        "cube": nd.Pow3,
+        "sqrt": "Sqrt",
+        "sin": "Sin",
+        "cos": "Cos",
+        "neg": "Neg",
+        "inv": "Inv",
+        "log": "Log",
+        "exp": "Exp",
+        "square": "Pow2",
+        "cube": "Pow3",
     }
 
     def execute(
@@ -176,23 +175,13 @@ class SR4MDLTool(BaseTool):
         n_iter: int,
     ) -> str:
         root_text = str(root)
+        bundled_engine = str(root / "nd2py_package")
+        if (root / "nd2py_package" / "nd2py").is_dir() and bundled_engine not in sys.path:
+            sys.path.insert(0, bundled_engine)
         if root_text not in sys.path:
             sys.path.insert(0, root_text)
         try:
             import torch
-            import nd2py.utils as nd2_utils
-
-            # SR4MDL pins an older nd2py that re-exported get_fig from utils.
-            # Keep SRAgent's newer nd2py installed and restore only that legacy export.
-            if not hasattr(nd2_utils, "get_fig"):
-                from nd2py.utils.plot import get_fig
-
-                nd2_utils.get_fig = get_fig
-            nd2_utils.init_logger(
-                "sr4mdl",
-                exp_name="SRAgent",
-                info_level="warning",
-            )
             from sr4mdl.env import Tokenizer
             from sr4mdl.model import MDLformer
             from sr4mdl.search import MCTS4MDL
@@ -232,7 +221,7 @@ class SR4MDLTool(BaseTool):
             sample_num=len(y),
             binary=[self.BINARY_OPERATORS[name] for name in binary_operators],
             unary=[self.UNARY_OPERATORS[name] for name in unary_operators],
-            leaf=[nd.Number(1), nd.Number(2), nd.Number(np.pi)],
+            leaf=[1.0, 2.0, float(np.pi)],
             keep_vars=True,
             normalize_y=False,
             normalize_all=False,

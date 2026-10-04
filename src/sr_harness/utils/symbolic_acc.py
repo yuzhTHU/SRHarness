@@ -7,7 +7,7 @@ import math
 import logging
 import warnings
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from .tag2ansi import tag2ansi
 from fractions import Fraction
 from dataclasses import dataclass
@@ -20,8 +20,8 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 
 def llm_judge_equivalence(
-    f_true: nd.Symbol,
-    f_pred: nd.Symbol,
+    f_true: engine.Expression,
+    f_pred: engine.Expression,
     ranges: Dict[str, Tuple[float, float]],
     llm_provider,
     llm_model,
@@ -163,8 +163,8 @@ def my_nsimplify(
 
 
 def get_symbolic_acc(
-    f_true: nd.Symbol,
-    f_pred: nd.Symbol,
+    f_true: engine.Expression,
+    f_pred: engine.Expression,
     data: Dict[str, np.ndarray],
     atol = 1e-8,
     rtol = 1e-6,
@@ -182,8 +182,8 @@ def get_symbolic_acc(
     result (allowing small coefficient rounding and domain identities).
     """
     for var in (
-        [var.name for var in f_true.iter_preorder() if isinstance(var, nd.Variable)] +
-        [var.name for var in f_pred.iter_preorder() if isinstance(var, nd.Variable)]
+        [var.name for var in f_true.iter_preorder() if isinstance(var, engine.Variable)] +
+        [var.name for var in f_pred.iter_preorder() if isinstance(var, engine.Variable)]
     ):
         if var in data:
             pass
@@ -215,14 +215,14 @@ def get_symbolic_acc(
     # 尝试对数值常数进行 nsimplify，看看能否得到数值等价
     if not numeric_result['equivalent']:
         nsimplified_f_pred = f_pred.copy()
-        numbers = [num for num in nsimplified_f_pred.iter_preorder() if isinstance(num, nd.Number)]
+        numbers = [num for num in nsimplified_f_pred.iter_preorder() if isinstance(num, engine.Number)]
         values = my_nsimplify(
             [num.value for num in numbers], 
             tolerance=nsimplify_tolerance, 
             constants={'PI': math.pi, 'E': math.e, 'sqrt(2)': math.sqrt(2), 'sqrt(3)': math.sqrt(3), 'sqrt(5)': math.sqrt(5)}
         )
         for num, value in zip(numbers, values):
-            value = nd.parse(value, {'PI': math.pi, 'E': math.e})
+            value = engine.parse(value, {'PI': math.pi, 'E': math.e})
             nsimplified_f_pred = nsimplified_f_pred.replace(num, value)
         _logger.debug(f"Applied nsimplify to f_pred. Original: {f_pred.to_str()}, Simplified: {nsimplified_f_pred.to_str()}")
         nsimplified_y_pred = nsimplified_f_pred.eval(data)

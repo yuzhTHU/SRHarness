@@ -2,7 +2,7 @@
 """多项式拟合工具。提供对输入变量或表达式的多项式拟合功能，支持自定义最高阶次数、交叉项控制等。"""
 
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from itertools import combinations, product
 from functools import reduce
 from typing import Dict, Any, List, Optional, Tuple, Set
@@ -172,10 +172,10 @@ class PolynomialFitTool(BaseTool):
             if coef == 0:
                 continue
             if term.to_str() == "1":
-                polynomial_parts.append(nd.Number(float(coef)))
+                polynomial_parts.append(engine.Number(float(coef)))
             else:
                 polynomial_parts.append(float(coef) * term)
-        polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else nd.parse("0")
+        polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else engine.parse("0")
 
         evaluation = self.evaluate(
             f=polynomial, 
@@ -207,9 +207,9 @@ class PolynomialFitTool(BaseTool):
     def _simplify_terms(
         design_matrix: np.ndarray,
         target: np.ndarray,
-        terms: List[nd.Symbol],
+        terms: List[engine.Expression],
         coefficients: np.ndarray,
-    ) -> Tuple[List[nd.Symbol], np.ndarray, List[Dict[str, Any]]]:
+    ) -> Tuple[List[engine.Expression], np.ndarray, List[Dict[str, Any]]]:
         """Remove negligible fitted contributions and refit the retained terms.
 
         Raw coefficient magnitudes are not comparable when monomials have
@@ -269,7 +269,7 @@ class PolynomialFitTool(BaseTool):
 
     def _get_allowed_interactions(
         self,
-        features: List[nd.Symbol],
+        features: List[engine.Expression],
         include_interactions: bool,
         blacklist: Optional[List[Tuple[str, str]]],
         whitelist: Optional[List[Tuple[str, str]]],
@@ -311,11 +311,11 @@ class PolynomialFitTool(BaseTool):
 
     def generate_terms(
         self,
-        features: List[nd.Symbol],
+        features: List[engine.Expression],
         max_degree: int,
         allowed_interactions: Set[Tuple[str, str]],
         include_bias: bool,
-    ) -> List[nd.Symbol]:
+    ) -> List[engine.Expression]:
         """Generate symbolic terms whose total degree is no more than max_degree."""
         n_vars = len(features)
         terms = []
@@ -324,7 +324,7 @@ class PolynomialFitTool(BaseTool):
             if total_degree == 0:
                 if not include_bias:
                     continue
-                terms.append(nd.parse("1"))
+                terms.append(engine.parse("1"))
                 continue
             if total_degree > max_degree:
                 continue
@@ -352,7 +352,7 @@ class PolynomialFitTool(BaseTool):
     def _build_design_matrix(
         self,
         data: Dict[str, np.ndarray],
-        terms: List[nd.Symbol],
+        terms: List[engine.Expression],
         n_samples: int,
     ) -> np.ndarray:
         """Evaluate symbolic terms to build the design matrix."""

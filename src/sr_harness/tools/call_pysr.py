@@ -8,7 +8,7 @@ import re
 import os
 import logging
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from pathlib import Path
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
@@ -270,7 +270,7 @@ class PySRTool(BaseTool):
         return self._clean_gplearn_formula(raw_formula)
 
     def _clean_pysr_formula(self, formula: str, x_names: List[str]) -> str:
-        """Clean PySR output for nd2py compatibility.
+        """Clean PySR output for SRHarness Engine compatibility.
         PySR already uses variable_names in output when provided via fit(),
         so we only need to handle special functions and operators.
         """
@@ -302,7 +302,7 @@ class PySRTool(BaseTool):
         return restored
 
     def _clean_gplearn_formula(self, formula: str) -> str:
-        """Clean gplearn output for nd2py compatibility."""
+        """Clean gplearn output for SRHarness Engine compatibility."""
         formula = formula.strip()
         formula = re.sub(r'\bneg\(([^)]+)\)', r'-(\1)', formula)
         formula = re.sub(r'\binv\(([^)]+)\)', r'1/(\1)', formula)

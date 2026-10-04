@@ -46,10 +46,6 @@ cd SRHarness
 conda create -p ./venv python=3.12 -y
 conda activate ./venv
 
-# nd2py 目前从源码安装。
-git clone https://github.com/yuzhTHU/nd2py.git ./third-party/nd2py
-pip install -e ./third-party/nd2py
-
 # 核心包及开发/测试依赖。
 pip install -e ".[dev]"
 ```

@@ -1,7 +1,7 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
 from __future__ import annotations
 from abc import ABCMeta
-from typing import Dict, Type, TypeVar
+from typing import Dict, List, Type, TypeVar
 
 T = TypeVar('T', bound='FactoryMixin')
 
@@ -45,7 +45,7 @@ class FactoryMixin(metaclass=FactoryMeta):
     ═══════════════════════════════════════════════════════════════════════════
 
     ```python
-    from nd2py.utils import FactoryMixin
+    from sr_harness.utils import FactoryMixin
 
     class MyModel(FactoryMixin, nn.Module):
         def __init__(self, config, tokenizer):

@@ -13,7 +13,7 @@ import logging
 import argparse
 import selectors
 import subprocess
-import nd2py as nd
+import sr_harness_engine as engine
 import numpy as np
 from typing import Any
 from pathlib import Path
@@ -151,12 +151,12 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
         raise ValueError(f"Codex did not discover an expression. See {artifacts['event_path']} for details.")
 
     # 返回
-    f = nd.parse(expression.strip().replace("^", "**").replace("np.", "").replace("math.", ""))
+    f = engine.parse(expression.strip().replace("^", "**").replace("np.", "").replace("math.", ""))
     target = task.symbols[0]
     features = task.symbols[1:]
     constants = {}
     for var in f.iter_preorder():
-        if not isinstance(var, nd.Variable) or var.name in features:
+        if not isinstance(var, engine.Variable) or var.name in features:
             pass
         elif var.name.lower() == 'pi':
             constants[var.name] = np.pi

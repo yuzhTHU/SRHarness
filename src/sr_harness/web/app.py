@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-import nd2py as nd
+import sr_harness_engine as engine
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -189,7 +189,7 @@ def _with_formula_latex(record: dict[str, Any]) -> dict[str, Any]:
     record = dict(record)
     core = dict(core)
     try:
-        core["formula_latex"] = nd.parse(str(formula).replace("^", "**")).to_str(latex=True)
+        core["formula_latex"] = engine.parse(str(formula).replace("^", "**")).to_str(latex=True)
     except Exception:
         core["formula_latex"] = None
     record["core"] = core

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
@@ -69,6 +70,67 @@ class Expression:
         )
 
     eval = evaluate
+
+    @property
+    def operands(self) -> tuple[Expression, ...]:
+        """Child expressions, exposed as an immutable tuple."""
+        from .tree import children
+
+        return children(self)
+
+    def iter_preorder(self):
+        """Yield this node followed by its descendants."""
+        from .tree import iter_preorder
+
+        yield from iter_preorder(self)
+
+    def iter_postorder(self):
+        """Yield descendants followed by this node."""
+        from .tree import iter_postorder
+
+        yield from iter_postorder(self)
+
+    def copy(self) -> Expression:
+        return deepcopy(self)
+
+    def replace(self, old: Expression, new: Expression, **_: Any) -> Expression:
+        """Return a tree in which the exact *old* node is replaced by *new*."""
+        from .tree import replace
+
+        return replace(self, old, new)
+
+    def to_str(
+        self,
+        *,
+        latex: bool = False,
+        number_format: str = "",
+        **_: Any,
+    ) -> str:
+        from .render import render
+
+        return render(self, latex=latex, number_format=number_format)
+
+    def to_tree(self, *, number_format: str = "", **_: Any) -> str:
+        """Render a compact preorder tree for diagnostics."""
+        from .tree import children
+
+        lines = [self.to_str(number_format=number_format)]
+
+        def visit(node: Expression, prefix: str, connector: str) -> None:
+            lines.append(f"{prefix}{connector}{node.to_str(number_format=number_format)}")
+            values = children(node)
+            continuation = "  " if connector == "└ " else "│ "
+            for index, child in enumerate(values):
+                last = index == len(values) - 1
+                visit(child, prefix + continuation, "└ " if last else "├ ")
+
+        values = children(self)
+        for index, child in enumerate(values):
+            visit(child, "", "└ " if index == len(values) - 1 else "├ ")
+        return "\n".join(lines)
+
+    def __len__(self) -> int:
+        return sum(1 for _ in self.iter_preorder())
 
     def fit(
         self,
@@ -173,6 +235,9 @@ def as_expression(value: Any) -> Expression:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TypeError(f"Expected an expression or number, got {type(value).__name__}.")
     return Number(value)
+
+
+Variable = Symbol
 
 
 def as_index(value: Index | str) -> Index:

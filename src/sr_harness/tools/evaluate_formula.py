@@ -4,7 +4,7 @@
 评估数学公式对数据的拟合能力，返回多种评价指标。
 """
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from typing import Dict, Any
 from .base_tool import BaseTool, ToolMetadata
 from ..utils.constant_optimizer import fit_constants
@@ -41,10 +41,10 @@ class EvaluateTool(BaseTool):
         eq_f = self.parse_formula(f)
         y_true = np.asarray(eq_y.eval(data)).flatten()
 
-        variables = [var for var in eq_f.iter_preorder() if isinstance(var, nd.Variable)]
+        variables = [var for var in eq_f.iter_preorder() if isinstance(var, engine.Variable)]
         for var in variables:
             if var.name not in data:
-                eq_f = eq_f.replace(var, nd.Number(np.random.rand()))
+                eq_f = eq_f.replace(var, engine.Parameter(var.name, np.random.rand()))
                 fit = True # If there are unknown variables, we must fit the formula to data.
         
         if fit:

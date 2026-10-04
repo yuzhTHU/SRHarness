@@ -1,5 +1,5 @@
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 
 from sr_harness.utils.constant_optimizer import ConstantOptimizerConfig, fit_constants
 
@@ -14,7 +14,7 @@ FAST_CONFIG = ConstantOptimizerConfig(
 
 def test_fit_constants_projects_affine_parameters_without_mutating_input():
     x = np.linspace(-2.0, 2.0, 101)
-    expression = nd.parse("0.3*x + 0.7")
+    expression = engine.parse("0.3*x + 0.7")
     before = expression.to_str(number_format=".16g")
 
     fitted = fit_constants(expression, {"x": x}, 2.5 * x - 1.2, config=FAST_CONFIG)
@@ -26,7 +26,7 @@ def test_fit_constants_projects_affine_parameters_without_mutating_input():
 
 def test_fit_constants_handles_separable_nonlinear_parameters():
     x = np.linspace(-1.5, 1.5, 151)
-    expression = nd.parse("0.2*sin(0.4*x + 0.1) + 0.3*x + 0.5")
+    expression = engine.parse("0.2*sin(0.4*x + 0.1) + 0.3*x + 0.5")
     target = 1.7 * np.sin(2.1 * x - 0.35) - 0.8 * x + 0.25
 
     fitted = fit_constants(
@@ -48,7 +48,7 @@ def test_fit_constants_handles_separable_nonlinear_parameters():
 
 def test_fit_constants_uses_feature_domain_for_large_offsets():
     temperature = np.linspace(270.0, 390.0, 121)
-    expression = nd.parse("0.4*(T - 0.2) + 0.1")
+    expression = engine.parse("0.4*(T - 0.2) + 0.1")
     target = 2.3 * (temperature - 347.0) - 4.2
 
     fitted = fit_constants(expression, {"T": temperature}, target, config=FAST_CONFIG)
@@ -58,7 +58,7 @@ def test_fit_constants_uses_feature_domain_for_large_offsets():
 
 def test_fit_constants_returns_copy_when_there_are_no_fitable_parameters():
     x = np.arange(5.0)
-    expression = nd.Variable("x")
+    expression = engine.Variable("x")
 
     fitted = fit_constants(expression, {"x": x}, x, config=FAST_CONFIG)
 

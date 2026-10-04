@@ -48,10 +48,6 @@ cd SRHarness
 conda create -p ./venv python=3.12 -y
 conda activate ./venv
 
-# nd2py is currently installed from source.
-git clone https://github.com/yuzhTHU/nd2py.git ./third-party/nd2py
-pip install -e ./third-party/nd2py
-
 # Core package plus development/test dependencies.
 pip install -e ".[dev]"
 ```

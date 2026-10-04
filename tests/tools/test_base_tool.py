@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-import nd2py as nd
+import sr_harness_engine as engine
 import numpy as np
 import pytest
 
@@ -304,8 +304,8 @@ class TestBaseToolEvaluate:
         tool = UnitSampleTool(data={"x": x, "y": 2 * x}, target="y")
 
         result = tool.evaluate(
-            f=nd.parse("1.0582314356281874*x + 1.0029397100063842"),
-            y=nd.parse("y"),
+            f=engine.parse("1.0582314356281874*x + 1.0029397100063842"),
+            y=engine.parse("y"),
             show_diagnostics=False,
         )
 
@@ -316,8 +316,8 @@ class TestBaseToolEvaluate:
             data={"x": np.arange(1.0, 5.0), "y": 2 * np.arange(1.0, 5.0)},
             target="y",
         )
-        f = nd.parse("2*x")
-        y = nd.parse("y")
+        f = engine.parse("2*x")
+        y = engine.parse("y")
 
         result = tool.evaluate(f=f, y=y)
         train_result = result["data_split_results"]["train"]
@@ -332,7 +332,7 @@ class TestBaseToolEvaluate:
         assert train_result["diagnostics"]
 
     def test_calculate_metrics_reuses_external_predictions(self):
-        f = nd.parse("missing_prediction")
+        f = engine.parse("missing_prediction")
         metrics = UnitSampleTool.calculate_metrics(
             f, np.array([1.0, 2.0]), np.array([1.0, 2.0])
         )
@@ -340,20 +340,20 @@ class TestBaseToolEvaluate:
         assert metrics["complexity"] == len(f)
 
     def test_calculate_metrics_broadcasts_prediction_and_target_symmetrically(self):
-        f = nd.parse("prediction")
+        f = engine.parse("prediction")
         assert UnitSampleTool.calculate_metrics(f, np.array([2.0, 2.0]), np.array(2.0))["mse"] == 0.0
         assert UnitSampleTool.calculate_metrics(f, np.array(2.0), np.array([2.0, 2.0]))["mse"] == 0.0
 
     def test_incompatible_external_shapes_raise_clear_error(self):
         with pytest.raises(ValueError, match="cannot be broadcast"):
-            UnitSampleTool.calculate_metrics(nd.parse("prediction"), np.ones(2), np.ones(3))
+            UnitSampleTool.calculate_metrics(engine.parse("prediction"), np.ones(2), np.ones(3))
 
     def test_aic_and_bic_use_number_of_fitted_constants(self):
         x = np.arange(1.0, 21.0)
         y_values = 2 * x + np.linspace(-0.2, 0.2, len(x))
         tool = UnitSampleTool(data={"x": x, "y": y_values}, target="y")
-        f = nd.parse("2*x")
-        y = nd.parse("y")
+        f = engine.parse("2*x")
+        y = engine.parse("y")
 
         metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["data_split_results"]["train"]["metrics"]
         residuals = f.eval(tool.context["data"]) - y_values
@@ -368,18 +368,18 @@ class TestBaseToolEvaluate:
 
     def test_requires_nd2py_symbols(self):
         tool = UnitSampleTool(data={})
-        with pytest.raises(TypeError, match="nd2py.Symbol"):
+        with pytest.raises(TypeError, match="sr_harness_engine.Expression"):
             tool.evaluate(
                 f="x",
-                y=nd.parse("y"),
+                y=engine.parse("y"),
             )
 
     def test_formatted_evaluation_uses_equation_and_conditional_ineligibility_notes(self):
         x = np.arange(1.0, 6.0)
         tool = UnitSampleTool(data={"x": x, "y": 2 * x, "z": x}, target="y")
-        eligible = tool.evaluate(f=nd.parse("2*x"), y=nd.parse("y"))
-        wrong_lhs = tool.evaluate(f=nd.parse("x"), y=nd.parse("z"))
-        target_leak = tool.evaluate(f=nd.parse("y + x"), y=nd.parse("y"))
+        eligible = tool.evaluate(f=engine.parse("2*x"), y=engine.parse("y"))
+        wrong_lhs = tool.evaluate(f=engine.parse("x"), y=engine.parse("z"))
+        target_leak = tool.evaluate(f=engine.parse("y + x"), y=engine.parse("y"))
 
         eligible_text = tool.format_evaluation_result(eligible, title="Best fitted rational formula")
         wrong_lhs_text = tool.format_evaluation_result(wrong_lhs, title="Best fitted rational formula")
@@ -398,7 +398,7 @@ class TestBaseToolEvaluate:
             evaluation_data={"x": x + 5, "y": 2 * (x + 5)},
             target="y",
         )
-        evaluation = tool.evaluate(f=nd.parse("2*x"), y=nd.parse("y"))
+        evaluation = tool.evaluate(f=engine.parse("2*x"), y=engine.parse("y"))
         text = tool.format_evaluation_result(evaluation)
         assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | 0.00;\n    MAE=0.00 | 0.00;\n    R2=1.00 | 1.00;" in text
 

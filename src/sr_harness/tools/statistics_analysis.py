@@ -1,7 +1,7 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
 """数据统计分析工具。计算变量或表达式的基本统计量，包括最小值、最大值、均值、方差等。"""
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from typing import Dict, Any, List
 from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 

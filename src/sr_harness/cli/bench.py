@@ -30,7 +30,8 @@ import logging
 import argparse
 import datasets
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
+from sr_harness_engine.tree import transform
 from pathlib import Path
 from datetime import datetime
 from socket import gethostname
@@ -195,8 +196,8 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
 
             # Physical Oscillation / Chemical Reaction 数据集中公式的常数未被正确设置，需要拟合后替换成数值
             if dataset_name in {'phys_osc', 'chem_react'}:
-                formula = nd.parse(expression)
-                if unknowns := sorted({var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable) and var.name not in entry['symbols']}):
+                formula = engine.parse(expression)
+                if unknowns := sorted({var.name for var in formula.iter_preorder() if isinstance(var, engine.Variable) and var.name not in entry['symbols']}):
                     train, y = samples["train"], samples["train"][:, 0]
                     base = {sym: train[:, i] for i, sym in enumerate(entry["symbols"])}
                     def residual(c):
@@ -211,10 +212,10 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
                     for key, val in zip(unknowns, values):
                         expression = re.sub(rf"\b{re.escape(key)}\b", repr(float(val)), expression)
 
-            gt_expression = nd.parse(expression)
+            gt_expression = engine.parse(expression)
 
             # 确保没有未知变量
-            variables = {var.name for var in gt_expression.iter_preorder() if isinstance(var, nd.Variable)}
+            variables = {var.name for var in gt_expression.iter_preorder() if isinstance(var, engine.Variable)}
             if missing := set(variables) - set(entry['symbols']):
                 _logger.warning(f"[{dataset_name}] {name} has unknown variables in expression: {missing}. This problem is SKIPPED.")
                 continue
@@ -259,10 +260,13 @@ def anonymize_problem(problem: Problem) -> Problem:
     anonymized_symbols = [feature_mapping[sym] for sym in problem.symbols]
     anonymized_symbol_descs = ["target variable", *[f"input variable {i}" for i in range(1, len(features) + 1)]]
 
-    anonymized_expression = problem.gt_expression.copy()
-    for var in anonymized_expression.iter_preorder():
-        if isinstance(var, nd.Variable):
-            var.name = feature_mapping[var.name]
+    anonymized_expression = transform(
+        problem.gt_expression,
+        lambda node: (
+            engine.Variable(feature_mapping[node.name])
+            if isinstance(node, engine.Variable) else node
+        ),
+    )
     anonymized_expression_str = anonymized_expression.to_str()
     _logger.debug(
         f"[{problem.equation_idx} @ {problem.dataset_identifier}]"
@@ -332,7 +336,7 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
     try:
         data = {sym: problem.test_samples[:, i] for i, sym in enumerate(problem.symbols)}
         f_true = problem.gt_expression
-        f_pred = nd.parse(result.expression.replace("^", "**").replace("np.", "").replace("math.", ""))
+        f_pred = engine.parse(result.expression.replace("^", "**").replace("np.", "").replace("math.", ""))
         symbolic_acc = get_symbolic_acc(
             f_true,
             f_pred,

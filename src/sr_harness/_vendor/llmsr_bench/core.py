@@ -4,7 +4,7 @@ LLM-SRBench 核心数据结构
 from __future__ import annotations
 
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
 
@@ -53,7 +53,7 @@ class Problem:
     symbol_descs: List[str]
     symbol_properties: List[str]
     raw_expression: str  # 原始的 ground truth 表达式 (如 "8*pi*Ef*epsilon*r**3/(3*sin(2*theta))")
-    gt_expression: nd.Symbol  # 处理后的 ground truth 表达式
+    gt_expression: engine.Expression  # 处理后的 ground truth 表达式
     samples: Dict[str, np.ndarray]  # {"train": ..., "test": ..., "ood_test"?}
 
     @property

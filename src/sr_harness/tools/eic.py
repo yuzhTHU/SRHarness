@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict
 
-import nd2py as nd
+import sr_harness_engine as engine
 import numpy as np
+from sr_harness_engine.tree import replace_at_path, with_children
 
 from .base_tool import BaseTool, ToolMetadata
 
@@ -134,12 +135,16 @@ class EICTool(BaseTool):
     def _evaluate_recursive(
         self, node, data, rng, noise_level, zero_epsilon, path, records
     ):
-        if isinstance(node, nd.Variable):
+        if isinstance(node, engine.Variable):
             clear = np.asarray(data[node.name], dtype=float)
             noisy = clear
             eic = 0.0
-        elif isinstance(node, nd.Number):
+        elif isinstance(node, engine.Number):
             clear = np.asarray(node.value, dtype=float)
+            noisy = clear
+            eic = 0.0
+        elif isinstance(node, (engine.Parameter, engine.GroupedParameter)):
+            clear = np.asarray(node.eval(data), dtype=float)
             noisy = clear
             eic = 0.0
         else:
@@ -161,12 +166,13 @@ class EICTool(BaseTool):
 
     @staticmethod
     def _apply_node(node, operands):
-        local = node.copy()
         local_data = {}
-        for index, _ in enumerate(list(local.operands)):
+        replacements = []
+        for index, _ in enumerate(node.operands):
             name = f"eic_operand_{index}"
-            local.operands[index] = nd.Variable(name)
+            replacements.append(engine.Variable(name))
             local_data[name] = operands[index]
+        local = with_children(node, tuple(replacements))
         with np.errstate(all="ignore"):
             return np.asarray(local.eval(local_data), dtype=float)
 
@@ -198,15 +204,7 @@ class EICTool(BaseTool):
     def _output_impact(formula, path, data, baseline) -> float | None:
         """Estimate subtree relevance by replacing one path with zero."""
         try:
-            candidate = nd.parse(formula.to_str())
-            if not path:
-                masked = nd.Number(0)
-            else:
-                parent = candidate
-                for index in path[:-1]:
-                    parent = parent.operands[index]
-                parent.operands[path[-1]] = nd.Number(0)
-                masked = candidate
+            masked = replace_at_path(formula, path, engine.Number(0))
             prediction = np.asarray(masked.eval(data), dtype=float)
             prediction = np.broadcast_to(prediction, np.shape(baseline))
             valid = np.isfinite(baseline) & np.isfinite(prediction)

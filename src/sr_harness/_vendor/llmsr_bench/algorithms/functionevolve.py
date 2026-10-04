@@ -80,7 +80,7 @@ def _build_result(result: dict, symbols: list[str]):
     names = [f'x{i + 1}' for i in range(len(symbols) - 1)]
     # Benchmark inputs are real-valued.  The upstream simplifier may emit
     # re(x1) when symbols lack assumptions; real symbols reduce that wrapper
-    # before returning an expression to nd2py, which has no ``re`` callable.
+    # before returning an expression to SRHarness Engine, which has no ``re`` callable.
     variables = [sp.Symbol(name, real=True) for name in names]
     local = dict(zip(names, variables))
     local['_RealPow'] = sp.Function('_RealPow')
@@ -103,7 +103,7 @@ def _build_result(result: dict, symbols: list[str]):
 
     expr = expr.xreplace({var: sp.Symbol(name, real=True) for var, name in zip(variables, symbols[1:])})
     expression = str(expr)
-    # nd2py uses NumPy-style inverse-trig names and lower-case abs/min/max.
+    # SRHarness Engine uses NumPy-style inverse-trig names and lower-case abs/min/max.
     for source, target in {'asin': 'arcsin', 'acos': 'arccos', 'atan': 'arctan',
                            'Abs': 'abs', 'Min': 'min', 'Max': 'max'}.items():
         expression = re.sub(rf'\b{source}(?=\()', target, expression)

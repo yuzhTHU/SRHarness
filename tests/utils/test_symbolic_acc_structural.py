@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import nd2py as nd
+import sr_harness_engine as engine
 import numpy as np
 
 from sr_harness.utils.symbolic_acc import get_symbolic_acc, llm_judge_equivalence
@@ -22,7 +22,7 @@ def test_structural_judge_prompt_rejects_near_fit(monkeypatch):
 
     monkeypatch.setattr("sr_harness.api.BaseAPI.create", lambda *args, **kwargs: FakeAPI())
     result = llm_judge_equivalence(
-        nd.parse("exp(x)"), nd.parse("1+x+x**2/2"),
+        engine.parse("exp(x)"), engine.parse("1+x+x**2/2"),
         {"x": (0.0, 0.01)}, "openrouter", "test-model",
     )
 
@@ -38,7 +38,7 @@ def test_structural_judge_overrides_numerically_close_approximation(monkeypatch)
     )
     x = np.linspace(0, 0.01, 100)
     result = get_symbolic_acc(
-        nd.parse("exp(x)"), nd.parse("1+x+x**2/2"),
+        engine.parse("exp(x)"), engine.parse("1+x+x**2/2"),
         {"x": x}, llm_judge=True, return_details=True,
     )
 
@@ -52,7 +52,7 @@ def test_disagreement_sets_reason_without_human_review(monkeypatch):
     )
     x = np.linspace(0, 0.01, 100)
     result = get_symbolic_acc(
-        nd.parse("exp(x)"), nd.parse("1+x+x**2/2"),
+        engine.parse("exp(x)"), engine.parse("1+x+x**2/2"),
         {"x": x}, llm_judge=True, return_details=True,
     )
 
@@ -67,7 +67,7 @@ def test_unavailable_judge_follows_existing_numeric_fallback(monkeypatch):
     )
     x = np.linspace(0, 1, 100)
     result = get_symbolic_acc(
-        nd.parse("x"), nd.parse("x"),
+        engine.parse("x"), engine.parse("x"),
         {"x": x}, llm_judge=True, return_details=True,
     )
 

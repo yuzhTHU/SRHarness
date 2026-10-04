@@ -4,10 +4,6 @@
 # 创建环境
 conda create -p ./venv python=3.12 -y && conda activate ./venv
 
-# nd2py 库尚不稳定，建议以可编辑方式单独安装
-git clone git@github.com:yuzhTHU/nd2py.git ./third-party/nd2py
-pip install -e ./third-party/nd2py
-
 # 安装其它依赖
 pip install -e ".[dev]"
 # pip install -e ".[all]" # 安装所有可选依赖，包括 torch, pysr 等安装起来比较复杂的库

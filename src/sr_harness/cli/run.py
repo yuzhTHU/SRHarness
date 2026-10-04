@@ -8,7 +8,7 @@ import shlex
 import logging
 import argparse
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from pathlib import Path
 from datetime import datetime
 from socket import gethostname
@@ -152,8 +152,8 @@ def make_dataset(args):
     target, formula_str = args.equation.split('=')
     target = target.strip()
     formula_str = formula_str.strip()
-    formula = nd.parse(formula_str)
-    features = set(var.name for var in formula.iter_preorder() if isinstance(var, nd.Variable))
+    formula = engine.parse(formula_str)
+    features = set(var.name for var in formula.iter_preorder() if isinstance(var, engine.Variable))
     features = sorted(list(features))
 
     rng = np.random.default_rng(args.seed)

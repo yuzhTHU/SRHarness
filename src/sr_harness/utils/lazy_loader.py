@@ -18,7 +18,7 @@ def setup_lazy_imports(module_name: str, import_mapping: Dict[str, Tuple[str, st
             except ImportError as e:
                 raise ImportError(
                     f"Failed to import '{name}' from '{module_path}' in module '{module_name}' since missing optional dependency."
-                    f"Try to run `pip install nd2py[{requires}]` or `pip install nd2py[all]` to install the required dependencies."
+                    f"Try to run `pip install sr-harness[{requires}]` or `pip install sr-harness[all]` to install the required dependencies."
                 ) from e
                 
         raise AttributeError(f"模块 {module_name!r} 中不存在属性 {name!r}")

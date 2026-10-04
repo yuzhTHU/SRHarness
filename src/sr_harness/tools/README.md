@@ -50,8 +50,8 @@ class MyTool(BaseTool):
 
 ## 公式处理
 
-在 `execute()` 中处理公式时，应尽量使用 `nd2py` 库（如 `nd.parse()`、`nd.BFGSFit()` 等）而非手动解析或计算。
-- `nd2py` 是本项目中公式表示和求值的标准方式，与框架的其他部分（如 `evaluate()`、parser 等）紧密集成。
+在 `execute()` 中处理公式时，应使用 `sr_harness_engine`（如 `engine.parse()`、`Expression.fit()` 等）而非手动解析或计算。
+它是项目中公式表示、求值与参数优化的标准方式，与 `BaseTool.evaluate()` 及候选记录紧密集成。
 
 ## 公式与指标约定
 
@@ -81,7 +81,7 @@ result["formula"] = custom_formula_text
 return result
 ```
 
-`f` 和 `y` 必须是 `nd2py.Symbol`。`evaluate()` 会分别在训练集和验证集上调用
+`f` 和 `y` 必须是 `sr_harness_engine.Expression`。`evaluate()` 会分别在训练集和验证集上调用
 `f.eval(data)` 与 `y.eval(data)`（不存在的验证集不会返回）。训练集和验证集结果统一保存在
 `data_split_results["train"]` 与 `data_split_results["validation"]` 中，各自包含 `metrics`，以及可选的
 `diagnostics`；不存在验证集时不返回 `validation` 字段。

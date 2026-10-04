@@ -8,7 +8,7 @@ import re
 import time
 import warnings
 import numpy as np
-import nd2py as nd
+import sr_harness_engine as engine
 from pathlib import Path
 from logging import getLogger
 from scipy import stats
@@ -141,9 +141,9 @@ class BaseTool(ABC, FactoryMixin):
         return eq
 
     @classmethod
-    def parse_formula(cls, eq: str) -> nd.Symbol:
+    def parse_formula(cls, eq: str) -> engine.Expression:
         """Normalize and parse a formula with the constants supported by all tools."""
-        return nd.parse(
+        return engine.parse(
             cls.normalize_formula(eq),
             variables={"pi": np.pi, "e": np.e},
         )
@@ -432,11 +432,11 @@ class BaseTool(ABC, FactoryMixin):
         return ""
 
     @classmethod
-    def calculate_metrics(cls, f: nd.Symbol, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+    def calculate_metrics(cls, f: engine.Expression, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
         """Calculate metrics for already-computed target and prediction arrays.
 
         This low-level helper is intentionally separate from :meth:`evaluate` so
-        code-defined models can supply predictions produced outside nd2py while
+        code-defined models can supply predictions produced outside the symbolic engine while
         still using exactly the same metric definitions.
         """
         try:
@@ -461,7 +461,11 @@ class BaseTool(ABC, FactoryMixin):
         ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
         r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
         n_samples = int(y_true.size)
-        n_parameters = sum(np.size(op.value) for op in f.iter_preorder() if isinstance(op, nd.Number))
+        n_parameters = sum(
+            np.size(op.value)
+            for op in f.iter_preorder()
+            if isinstance(op, (engine.Number, engine.Parameter)) and op.value is not None
+        )
         if np.isfinite(ss_res) and ss_res > 0:
             log_likelihood = -n_samples / 2 * (
                 np.log(2 * np.pi) + np.log(ss_res / n_samples) + 1
@@ -489,8 +493,8 @@ class BaseTool(ABC, FactoryMixin):
 
     def evaluate(
         self,
-        f: nd.Symbol,
-        y: nd.Symbol,
+        f: engine.Expression,
+        y: engine.Expression,
         show_diagnostics: bool = True,
     ) -> Dict[str, Any]:
         """Evaluate a symbolic prediction against a symbolic target.
@@ -501,8 +505,8 @@ class BaseTool(ABC, FactoryMixin):
         Set ``show_diagnostics`` to include a compact residual error profile,
         the worst samples, and the strongest residual-variable correlations.
         """
-        if not isinstance(f, nd.Symbol) or not isinstance(y, nd.Symbol):
-            raise TypeError("f and y must both be nd2py.Symbol instances.")
+        if not isinstance(f, engine.Expression) or not isinstance(y, engine.Expression):
+            raise TypeError("f and y must both be sr_harness_engine.Expression instances.")
 
         data_split_results = {
             'train': {'metrics': None, 'diagnostics': None},
@@ -541,7 +545,7 @@ class BaseTool(ABC, FactoryMixin):
             data_split_results.pop('validation')
 
         target = self.context["target"]
-        var_names = {var.name for var in f.iter_preorder() if isinstance(var, nd.Variable)}
+        var_names = {var.name for var in f.iter_preorder() if isinstance(var, engine.Variable)}
         ineligibility_reasons = []
         if y.to_str() != target:
             ineligibility_reasons.append(
@@ -609,12 +613,12 @@ class BaseTool(ABC, FactoryMixin):
         lhs = result.get("target_expression", "LHS")
         formula = result["formula"]
         try:
-            formula = nd.parse(formula).to_str(
+            formula = engine.parse(formula).to_str(
                 number_format=cls.FORMULA_DISPLAY_NUMBER_FORMAT
             )
         except Exception:
             # Some tools use a free-form model description instead of an
-            # nd2py expression. Preserve those descriptions verbatim.
+            # SRHarness Engine expression. Preserve those descriptions verbatim.
             pass
         lines = [
             f"{title}:",
