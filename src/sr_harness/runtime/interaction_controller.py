@@ -18,6 +18,7 @@ class InteractionController:
         self._stopped = False
         self._events: deque[dict[str, Any]] = deque(maxlen=1000)
         self._guidance: deque[str] = deque()
+        self._search_transitions: deque[str] = deque()
         self._replies: dict[str, str] = {}
         self._sequence = 0
         self._questions: dict[str, str] = {}
@@ -30,6 +31,7 @@ class InteractionController:
                 "paused": self._paused,
                 "stopped": self._stopped,
                 "pending_guidance": len(self._guidance),
+                "pending_transition": self._search_transitions[-1] if self._search_transitions else None,
                 "last_event_seq": self._sequence,
                 "questions": dict(self._questions),
                 "waiting_at_boundary": self._waiting_at_boundary,
@@ -51,8 +53,14 @@ class InteractionController:
                 if not message.strip():
                     raise ValueError("message command requires non-empty message")
                 self._guidance.append(message.strip())
+            elif action in {"next_c", "next_r"}:
+                self._search_transitions.clear()
+                self._search_transitions.append(action)
+                self._paused = False
             else:
-                raise ValueError("action must be pause, resume, stop, or message")
+                raise ValueError(
+                    "action must be pause, resume, stop, message, next_c, or next_r"
+                )
             self._publish_locked("control", {"action": action, "message": message})
             self._condition.notify_all()
             return self.status()
@@ -72,6 +80,11 @@ class InteractionController:
             guidance = list(self._guidance)
             self._guidance.clear()
             return guidance
+
+    def take_search_transition(self) -> str | None:
+        """Consume a request to advance to the next branch or restart."""
+        with self._condition:
+            return self._search_transitions.popleft() if self._search_transitions else None
 
     def ask(self, message: str, timeout: float | None = None) -> str:
         event_id = uuid.uuid4().hex

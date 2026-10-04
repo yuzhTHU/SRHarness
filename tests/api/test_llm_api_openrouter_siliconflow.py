@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from sr_harness.api.openrouter_api import OpenRouterAPI
@@ -102,6 +103,59 @@ class _RetryingOpenRouterClient(_FakeOpenRouterClient):
         return _FakeOpenRouterCompletion({"content": "recovered"})
 
 
+class _FakeStreamChunk:
+    def __init__(self, delta=None, usage=None):
+        self.choices = [] if delta is None else [SimpleNamespace(delta=delta)]
+        self.usage = usage
+
+    def to_dict(self):
+        return {"stream_chunk": True}
+
+
+class _StreamingOpenRouterClient(_FakeOpenRouterClient):
+    def create(self, **payload):
+        self.payloads.append(payload)
+        assert payload["stream"] is True
+        assert payload["stream_options"] == {"include_usage": True}
+        return iter([
+            _FakeStreamChunk(SimpleNamespace(
+                content=None,
+                reasoning="inspect ",
+                reasoning_content=None,
+                reasoning_details=None,
+                tool_calls=[],
+            )),
+            _FakeStreamChunk(SimpleNamespace(
+                content="ready",
+                reasoning=None,
+                reasoning_content=None,
+                reasoning_details=None,
+                tool_calls=[SimpleNamespace(
+                    index=0,
+                    id="call_stream",
+                    function=SimpleNamespace(name="demo_tool", arguments='{"x":'),
+                )],
+            )),
+            _FakeStreamChunk(SimpleNamespace(
+                content=None,
+                reasoning=None,
+                reasoning_content=None,
+                reasoning_details=None,
+                tool_calls=[SimpleNamespace(
+                    index=0,
+                    id=None,
+                    function=SimpleNamespace(name=None, arguments=" 7}"),
+                )],
+            )),
+            _FakeStreamChunk(usage=SimpleNamespace(
+                prompt_tokens=7,
+                completion_tokens=11,
+                total_tokens=18,
+                cost=0.001,
+            )),
+        ])
+
+
 class _FakeSiliconFlowResponse:
     def __init__(self, response: dict, status_code: int = 200):
         self._response = response
@@ -178,6 +232,43 @@ def test_openrouter_honors_retry_after_and_recovers(monkeypatch):
 
     assert sleeps == [120.0]
     assert chunks[0][0] == "recovered"
+
+
+def test_openrouter_stream_callback_receives_incremental_snapshots(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _StreamingOpenRouterClient)
+    _StreamingOpenRouterClient.payloads = []
+    updates = []
+    api = OpenRouterAPI(
+        model="deepseek/deepseek-v4-flash-0731",
+        parser="openai",
+        tool_list=[DemoTool],
+    )
+
+    chunks, returned = _consume(api(
+        [{"role": "user", "content": "stream"}],
+        stream_callback=updates.append,
+    ))
+
+    call = ToolCall(
+        "demo_tool",
+        {"x": 7},
+        id="call_stream",
+        raw={
+            "id": "call_stream",
+            "type": "function",
+            "function": {"name": "demo_tool", "arguments": '{"x": 7}'},
+        },
+    )
+    assert chunks[0][0] == "ready"
+    assert chunks[0][1] == [call]
+    assert chunks[0][2]["reasoning"] == "inspect "
+    assert [update["type"] for update in updates] == [
+        "start", "delta", "delta", "delta", "complete",
+    ]
+    assert updates[-1]["content"] == "ready"
+    assert updates[-1]["tool_calls"][0]["function"]["arguments"] == '{"x": 7}'
+    assert returned["usage"]["token"] == {"prompt": 7, "answer": 11}
 
 
 def test_openrouter_empty_response_uses_same_retry_backoff(monkeypatch):

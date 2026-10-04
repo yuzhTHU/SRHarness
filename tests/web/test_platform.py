@@ -1,7 +1,9 @@
+import os
 import threading
 import time
 
 import pytest
+from dotenv import dotenv_values
 
 pytest.importorskip('fastapi')
 pytest.importorskip('httpx')
@@ -65,6 +67,194 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert client.post('/api/session/start', json={'dataset': 'missing.csv'}).status_code == 400
 
 
+def test_runtime_capabilities_can_be_configured(platform):
+    client, session = platform
+    capabilities = client.get('/api/session/capabilities')
+    assert capabilities.status_code == 200
+    payload = capabilities.json()
+    tool_names = {tool['name'] for tool in payload['tools']}
+    skill_names = {skill['name'] for skill in payload['skills']}
+    assert {'evaluate_formula', 'workspace_shell'} <= tool_names
+    assert 'code_executor' not in tool_names
+    assert 'commit_data' not in tool_names
+    assert 'discover-symbolic-laws' in skill_names
+
+    response = client.post('/api/session/settings', json={
+        'llm_provider': 'openrouter',
+        'llm_model': 'test-model',
+        'tools': ['evaluate_formula'],
+        'skills': [],
+        'max_refinement_depth': 12,
+    })
+    assert response.status_code == 200
+    assert response.json()['settings']['tools'] == ['evaluate_formula']
+    assert response.json()['settings']['skills'] == []
+    assert response.json()['settings']['max_refinement_depth'] == 12
+    assert client.post('/api/session/settings', json={
+        'tools': ['not-a-tool'],
+    }).status_code == 400
+
+
+def test_provider_api_key_is_synced_to_dotenv_without_being_returned(
+    tmp_path, monkeypatch,
+):
+    env_path = tmp_path / '.env'
+    monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
+    session = InteractiveSession(tmp_path / 'logs', env_path=env_path)
+    app = create_app(tmp_path, controller=session.controller, session=session)
+
+    with TestClient(app) as client:
+        initial = client.get(
+            '/api/session/provider-credential', params={'provider': 'openrouter'},
+        )
+        assert initial.status_code == 200
+        assert initial.json() == {
+            'provider': 'openrouter',
+            'env_var': 'OPENROUTER_API_KEY',
+            'configured': False,
+            'stored_in_env_file': False,
+        }
+
+        response = client.put('/api/session/provider-credential', json={
+            'provider': 'openrouter', 'api_key': 'test-secret-key',
+        })
+        assert response.status_code == 200
+        assert response.json()['configured'] is True
+        assert response.json()['stored_in_env_file'] is True
+        assert 'test-secret-key' not in response.text
+        assert dotenv_values(env_path)['OPENROUTER_API_KEY'] == 'test-secret-key'
+        assert os.environ['OPENROUTER_API_KEY'] == 'test-secret-key'
+
+        assert client.get(
+            '/api/session/provider-credential', params={'provider': 'unknown'},
+        ).status_code == 400
+        assert client.put('/api/session/provider-credential', json={
+            'provider': 'openrouter', 'api_key': 'line-one\nline-two',
+        }).status_code == 400
+
+
+def test_data_agent_has_independent_runtime_settings(platform):
+    client, session = platform
+    capabilities = client.get(
+        '/api/session/capabilities', params={'agent': 'data'},
+    )
+    assert capabilities.status_code == 200
+    catalog = capabilities.json()
+    assert {'commit_data', 'workspace_code_executor', 'read_skill'} <= {
+        tool['name'] for tool in catalog['tools']
+    }
+    assert 'commit_data' in catalog['default_tools']
+
+    response = client.put('/api/data/agent/settings', json={
+        'llm_provider': 'openai',
+        'llm_model': 'test-data-model',
+        'tool_parser': 'json',
+        'llm_max_tokens': 2048,
+        'max_turns': 4,
+        'tools': ['workspace_shell', 'commit_data'],
+        'skills': [],
+    })
+    assert response.status_code == 200
+    assert response.json()['data_agent_settings'] == {
+        'llm_provider': 'openai',
+        'llm_model': 'test-data-model',
+        'tool_parser': 'json',
+        'llm_max_tokens': 2048,
+        'max_turns': 4,
+        'tools': ['workspace_shell', 'commit_data'],
+        'skills': [],
+    }
+    assert session.settings['llm_provider'] == 'openrouter'
+    assert client.put('/api/data/agent/settings', json={
+        'tools': ['workspace_shell'],
+    }).status_code == 400
+
+
+def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
+    client, session = platform
+    import pandas as pd
+
+    configured = client.put('/api/data/agent/settings', json={
+        'llm_provider': 'deepseek',
+        'llm_model': 'data-preparation-model',
+        'tool_parser': 'openai',
+        'llm_max_tokens': 1234,
+        'max_turns': 3,
+        'tools': ['commit_data'],
+        'skills': [],
+    })
+    assert configured.status_code == 200
+
+    source = session.workspace / '中国人口数量变化与GDP变化.xlsx'
+    pd.DataFrame({
+        '年份': [2020, 2021, 2022, 2023, 2024],
+        'GDP': [101, 115, 121, 127, 134],
+        '人口数量': [1412, 1413, 1412, 1410, 1408],
+    }).to_excel(source, index=False)
+
+    class FakeDataAPI:
+        tool_description_json = []
+
+        def __init__(self):
+            self.turn = 0
+
+        def __call__(self, prompt, **kwargs):
+            self.turn += 1
+
+            def generate():
+                if self.turn == 1:
+                    call = ToolCall('commit_data', {
+                        'path': source.name,
+                        'target': '人口数量',
+                        'features': ['年份', 'GDP'],
+                    }, id='commit')
+                    message = {'role': 'assistant', 'content': '整理并提交数据。', 'tool_calls': [{
+                        'id': 'commit', 'type': 'function', 'function': {
+                            'name': call.name, 'arguments': '{}',
+                        },
+                    }]}
+                    yield {'content': message['content'], 'tool_call': [call], 'message': message}
+                else:
+                    message = {'role': 'assistant', 'content': '数据已经准备好。'}
+                    yield {'content': message['content'], 'tool_call': [], 'message': message}
+                return {'usage': {'token': {}, 'price': {}}, 'responses': []}
+
+            return APICallResult(generate())
+
+    fake = FakeDataAPI()
+    api_options = {}
+
+    def create_api(provider, **kwargs):
+        api_options.update(provider=provider, **kwargs)
+        return fake
+
+    monkeypatch.setattr(BaseAPI, 'create', create_api)
+    response = client.post('/api/data/agent', json={
+        'message': '研究人口数量与其他列的关系。',
+    })
+    assert response.status_code == 200, response.text
+    session.data_thread.join(10)
+    assert session.data_state == 'completed'
+    assert api_options['provider'] == 'deepseek'
+    assert api_options['model'] == 'data-preparation-model'
+    assert session.data_agent.llm_max_tokens == 1234
+    assert session.data_agent.max_turns == 3
+    assert session.context.target == '人口数量'
+    assert session.context.features == ['年份', 'GDP']
+    data_events = session.controller.events()
+    data_event_kinds = [event['kind'] for event in data_events]
+    assert 'data_user' in data_event_kinds
+    assert data_event_kinds.index('data_context') < data_event_kinds.index('data_assistant_start')
+    assert data_event_kinds.index('data_assistant_start') < data_event_kinds.index('data_assistant')
+    assistant_event = next(event for event in data_events if event['kind'] == 'data_assistant')
+    assert assistant_event['payload']['provider'] == 'deepseek'
+    assert assistant_event['payload']['model'] == 'data-preparation-model'
+    preview = client.get('/api/data/context').json()
+    assert preview['revision'] == 1
+    assert preview['rows'] == 5
+    assert preview['data'][0]['年份'] == 2020
+
+
 def test_question_reconnect_and_stop():
     controller = InteractionController()
     results = []
@@ -101,7 +291,13 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
         def __call__(self, prompt, **kwargs):
             prompts.append(prompt.copy())
             if len(prompts) == 1:
-                session.configure({'llm_provider': 'openai', 'llm_model': 'test-next-model'})
+                session.configure({
+                    'llm_provider': 'openai',
+                    'llm_model': 'test-next-model',
+                    'tools': ['evaluate_formula'],
+                    'skills': [],
+                    'max_refinement_depth': 3,
+                })
             def generate():
                 call = ToolCall('evaluate_formula', {'f': 'x**2 + 2*x + 1'}, id='test')
                 message = {'role': 'assistant', 'content': 'Evaluate a quadratic.', 'reasoning': 'Model reasoning',
@@ -130,9 +326,10 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     assert topk
     assert topk[0]['mse'] < 1e-20
     assert client.get('/api/workspace/download?path=notes.txt').content == b'research'
-    assert len(prompts) == 2
+    assert len(prompts) == 3
     assert models[-1] == ('openai', 'test-next-model')
     assert session.settings['llm_model'] == 'test-next-model'
+    assert [tool.metadata.name for tool in session.sr_agent.tools] == ['evaluate_formula']
     assert prompts[0][:2] == [
         {'role': 'system', 'content': 'Custom system prompt'},
         {'role': 'user', 'content': 'Custom user prompt'},
@@ -140,11 +337,60 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     assert all(any(
         (m.get('content') or '').endswith('Prefer simple formulas') for m in p
     ) for p in prompts)
-    kinds = [e['kind'] for e in session.controller.events()]
-    assert all(k in kinds for k in ['context', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle'])
+    events = session.controller.events()
+    kinds = [e['kind'] for e in events]
+    assert all(k in kinds for k in [
+        'context', 'assistant_start', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle',
+    ])
+    assert kinds.index('context') < kinds.index('assistant_start') < kinds.index('assistant')
+    assistant_events = [event for event in events if event['kind'] == 'assistant']
+    assert all(event['payload']['provider'] for event in assistant_events)
+    assert all(event['payload']['model'] for event in assistant_events)
     runs = client.get('/api/runs').json()['runs']
-    assert runs[0]['record_count'] == 2
+    assert runs[0]['record_count'] == 3
     assert client.post('/api/session/start', json={}).status_code == 400
+
+
+def test_advance_to_next_branch_and_restart(platform, monkeypatch):
+    client, session = platform
+    calls = 0
+
+    class AdvancingAPI:
+        tool_description_json = []
+
+        def __call__(self, prompt, **kwargs):
+            nonlocal calls
+            calls += 1
+            session.controller.command('next_c' if calls == 1 else 'next_r')
+
+            def generate():
+                message = {'role': 'assistant', 'content': f'round {calls}'}
+                yield {'content': message['content'], 'tool_call': [], 'message': message}
+                return {'usage': {'token': {}, 'price': {}}, 'responses': []}
+
+            return APICallResult(generate())
+
+    monkeypatch.setattr(BaseAPI, 'create', lambda *args, **kwargs: AdvancingAPI())
+    response = client.post('/api/session/start', json={
+        'max_restart_loop': 2,
+        'global_width': 2,
+        'max_refinement_depth': 4,
+    })
+    assert response.status_code == 200, response.text
+    session.thread.join(20)
+    assert not session.thread.is_alive()
+    assert session.state == 'completed'
+    assert calls == 3
+    coordinates = [
+        event['payload']['coord']
+        for event in session.controller.events()
+        if event['kind'] == 'context'
+    ]
+    assert coordinates == [
+        {'R': 1, 'C': 1, 'L': 1},
+        {'R': 1, 'C': 2, 'L': 1},
+        {'R': 2, 'C': 1, 'L': 1},
+    ]
 
 
 def test_csv_input_and_failure_state(platform, monkeypatch):

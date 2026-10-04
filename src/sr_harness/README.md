@@ -13,12 +13,21 @@ for R in 1..max_restart_loop:       # best-solution restart 次数
 ```
 
 - **R (Restart)**：外层重启循环。每轮重启会用历史最优结果构建新的初始 prompt，引导 LLM 在已有成果上继续搜索。
-  - 注：现在尚未实现基于历史最优结果更新初始 prompt 的功能，因此建议保持 R=1
 - **C (Conversation branch)**：独立对话分支，每个分支从相同的初始 prompt 出发独立探索。
 - **L (Refinement step)**：单个分支内的对话迭代，每轮包含一次完整的 prompt 构建、LLM 请求、工具调用、buffer 更新。
 - **K (Local sample)**：单次 LLM 请求的重复采样次数，产生多个候选响应，产生最佳结果的响应会被追加到 buffer 中，其余结果中不涉及公式评估的工具调用结果也会被追加到 buffer 中以供后续参考。
 
 ## SRAgent 核心组件
+
+`Agent` 抽象基类负责 API、Parser、共享工具上下文和工具执行机制。
+`DataPreparationAgent` 基于它维护独立、可持续的资料整理对话；`SRAgent` 基于它维护
+R-C-L-K 符号回归搜索，`SRAgentInteractive` 则在同一个搜索循环上增加人工控制和事件。
+这些 Agent 可以共享一个 `AgentContext`，但不会混用各自的对话 Buffer。
+
+`AgentContext`：内存中的权威研究上下文。它保存完整结构化数据、目标和自变量、变量
+描述、来源、工作区、当前训练/验证划分以及单调递增的数据版本。工具继续通过 Mapping
+接口读取上下文。数据准备 Agent 调用 `commit_data` 原子提交新版本；运行中的交互式
+SRAgent 只在安全迭代边界刷新划分并把变量变化写入原有对话。
 
 SRAgent 在运行时组织以下核心组件：
 
@@ -67,6 +76,8 @@ SRAgent 在运行时组织以下核心组件：
 ```
 src/sr_harness/
 ├── agents/
+│   ├── agent.py                 # Agent 抽象基类与共享工具执行机制
+│   ├── data_preparation_agent.py # 持久化的数据准备 Agent
 │   ├── sr_agent.py              # SRAgent 主类，包含 run() 主循环和各个步骤方法
 │   └── sr_agent_interactive.py  # 交互式 SRAgent
 ├── api/                         # BaseAPI 与各 Provider API
@@ -74,6 +85,7 @@ src/sr_harness/
 │   └── *_api.py                 # OpenAI、DeepSeek、Gemini 等实现
 ├── core/                        # APICallResult、ToolCall 和搜索状态等核心结构
 │   ├── api.py
+│   ├── context.py               # AgentContext 共享研究上下文
 │   ├── search.py
 │   └── tool.py
 ├── interaction/                 # 终端与 Web 交互管理器

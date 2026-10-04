@@ -53,16 +53,19 @@ class WebInteractionManager(InteractionManager):
     def checkpoint(self) -> list[str]:
         return self.session.controller.checkpoint()
 
+    def take_search_transition(self) -> str | None:
+        return self.session.controller.take_search_transition()
+
     def wait_until_running(self) -> None:
         self.session.controller.wait_until_running()
 
-    def take_model_settings(self):
+    def take_runtime_settings(self):
         with self.session.lock:
             settings = self.session.pending_settings
             self.session.pending_settings = None
         return settings
 
-    def commit_model_settings(self, settings) -> None:
+    def commit_runtime_settings(self, settings) -> None:
         with self.session.lock:
             self.session.settings.update(settings)
 

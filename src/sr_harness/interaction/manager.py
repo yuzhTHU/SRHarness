@@ -27,15 +27,19 @@ class InteractionManager(ABC):
         """Wait at a safe boundary and return queued human guidance."""
         return []
 
+    def take_search_transition(self) -> str | None:
+        """Return a queued ``next_c`` or ``next_r`` transition."""
+        return None
+
     def wait_until_running(self) -> None:
         """Wait at a tool boundary while the frontend has paused the run."""
 
-    def take_model_settings(self) -> dict[str, Any] | None:
-        """Return and consume model settings queued by the frontend."""
+    def take_runtime_settings(self) -> dict[str, Any] | None:
+        """Return and consume runtime settings queued by the frontend."""
         return None
 
-    def commit_model_settings(self, settings: dict[str, Any]) -> None:
-        """Tell the frontend that queued model settings were applied."""
+    def commit_runtime_settings(self, settings: dict[str, Any]) -> None:
+        """Tell the frontend that queued runtime settings were applied."""
 
     def ask_human(self, message: str) -> str:
         """Ask the connected user for guidance."""

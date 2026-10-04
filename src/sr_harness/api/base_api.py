@@ -7,7 +7,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import Any, Dict, Generator, List, Literal
+from typing import Any, Callable, Dict, Generator, List, Literal
 
 from ..core import APICallResult, ToolCall
 from ..parser import BaseParser
@@ -18,12 +18,14 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 ToolParserName = Literal["text", "json", "xml", "openai"]
 ToolList = list[BaseTool | type[BaseTool]]
+StreamCallback = Callable[[dict[str, Any]], None]
 
 
 class BaseAPI(ABC, FactoryMixin):
     """Common request, parser, and tool-call behavior for LLM providers."""
 
     supported_models: list[str] = []
+    supports_streaming = False
 
     def __init__(
         self,
@@ -39,10 +41,17 @@ class BaseAPI(ABC, FactoryMixin):
         self.tool_parser_name = tool_parser_name
         self.tool_parser = self.build_parser(tool_parser_name)
 
-    def __call__(self, messages: List | str, **kwargs) -> APICallResult:
+    def __call__(
+        self,
+        messages: List | str,
+        stream_callback: StreamCallback | None = None,
+        **kwargs,
+    ) -> APICallResult:
         """Request the provider and wrap its result generator."""
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
+        if stream_callback is not None and self.supports_streaming:
+            kwargs["stream_callback"] = stream_callback
         generator = self._request(messages, **kwargs)
         return APICallResult(generator, self.tool_parser)
 

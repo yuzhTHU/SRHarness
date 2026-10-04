@@ -11,7 +11,6 @@ from pathlib import Path
 from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
-from joblib import Parallel, delayed
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 from ..api import BaseAPI
@@ -19,19 +18,15 @@ from ..tools import BaseTool
 from ..parser import BaseParser
 from ..skills import SkillManager
 from ..runtime import ModelRouter
-from ..utils import FactoryMixin, ParallelTimer, NamedTimer, Timer
+from ..utils import ParallelTimer, NamedTimer, Timer
 from ..utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
-from ..core import CandidateRecord, ParentLink, SearchRunState, ToolCall, ToolCallResult
+from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, ToolCall, ToolCallResult
+from .agent import Agent
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
 
-def _execute_tool_call_in_subprocess(tool: BaseTool, tool_call: ToolCall) -> ToolCallResult:
-    """Execute one tool call in a worker process."""
-    return tool(**tool_call.params)
-
-
-class SRAgent(FactoryMixin):
+class SRAgent(Agent):
     """符号回归 Agent。
 
     提供完整的符号回归流程框架，包括数据预处理、Prompt 生成、LLM 请求、
@@ -48,6 +43,7 @@ class SRAgent(FactoryMixin):
         llm_provider: str,
         llm_model: str,
         tools: List[BaseTool] | None = None,
+        skills: List[str] | None = None,
         verbose: bool = False,
         tool_parser: str | BaseParser = 'openai',
         save_path: Optional[str] = None,
@@ -68,6 +64,7 @@ class SRAgent(FactoryMixin):
         auto_routing: bool = True,
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
+        context: AgentContext | None = None,
     ):
         """初始化 Agent。
 
@@ -75,6 +72,7 @@ class SRAgent(FactoryMixin):
             llm_provider: LLM 提供商名称（如 "openai", "siliconflow"）。
             llm_model: 模型名称（如 "gpt-4o-mini"）。
             tools: 可用工具列表。None 表示使用全部工具。
+            skills: 可供 Agent 读取的 skill 名称。None 表示使用全部 skill。
             verbose: 是否启用详细日志（DEBUG 级别）。
             tool_parser: 工具解析器，可以是字符串（'text', 'json'）或 BaseParser 实例。
             save_path: 日志文件保存路径。None 表示不保存到文件。
@@ -97,6 +95,7 @@ class SRAgent(FactoryMixin):
             auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
+            context: 与其它 Agent 共享的数据和工作区上下文。None 表示新建独立上下文。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         log_path = Path(save_path) / "info.log" if save_path is not None else None
@@ -109,10 +108,10 @@ class SRAgent(FactoryMixin):
         if not hasattr(self, "excluded_tools"):
             # ask_human and workspace_code_executor require interaction or
             # workspace permissions, so the non-interactive agent excludes them.
-            self.excluded_tools = {"ask_human", "workspace_code_executor"}
+            self.excluded_tools = {"ask_human", "workspace_code_executor", "commit_data"}
 
         tool_cls_list = []
-        for tool_cls in BaseTool.load_tool_classes(tools):
+        for tool_cls in BaseTool.load_tool_classes():
             # Custom tools are rediscovered and reloaded from this Agent's
             # SkillManager below. Exclude stale process-global class objects.
             if getattr(tool_cls, "source_path", None) is not None:
@@ -159,10 +158,47 @@ class SRAgent(FactoryMixin):
         self._last_model_route = None
 
         # 关键组件
-        self.tool_cls_list = tool_cls_list
         self.skill_manager = SkillManager()
-        self.skill_manager.register_tool_docs(self.tool_cls_list)
-        self.tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
+        requested_tool_names = set(tools) if tools is not None else None
+        initially_selected = [
+            tool_cls for tool_cls in tool_cls_list
+            if requested_tool_names is None or tool_cls.metadata.name in requested_tool_names
+        ]
+        self.skill_manager.register_tool_docs(initially_selected)
+        tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
+        self.available_tool_classes = {
+            tool_cls.metadata.name: tool_cls for tool_cls in tool_cls_list
+        }
+        requested_tools = (
+            set(self.available_tool_classes)
+            if requested_tool_names is None
+            else requested_tool_names
+        )
+        if unknown_tools := requested_tools - self.available_tool_classes.keys():
+            raise ValueError(f"Unknown tools: {', '.join(sorted(unknown_tools))}")
+        self.tool_cls_list = [
+            tool_cls for name, tool_cls in self.available_tool_classes.items()
+            if name in requested_tools
+        ]
+        registered_skills = self.skill_manager.load_skills()
+        self.skill_manager.register_tool_docs([
+            tool_cls for tool_cls in self.tool_cls_list
+            if (doc := tool_cls.get_doc()) is not None and doc["name"] not in registered_skills
+        ])
+        available_skills = self.skill_manager.load_skills()
+        tool_skill_names = {
+            doc["name"]
+            for tool_cls in self.tool_cls_list
+            if (doc := tool_cls.get_doc()) is not None
+        }
+        requested_skills = (
+            set(skills) | tool_skill_names
+            if skills is not None
+            else set(available_skills)
+        )
+        if unknown_skills := requested_skills - available_skills.keys():
+            raise ValueError(f"Unknown skills: {', '.join(sorted(unknown_skills))}")
+        self.enabled_skills = requested_skills
         if self.force_initial_diagnostics:
             required_tools = {"statistics_analysis", "relationship_analysis", "read_skill"}
             enabled_tools = {tool_cls.metadata.name for tool_cls in self.tool_cls_list}
@@ -171,7 +207,7 @@ class SRAgent(FactoryMixin):
                     "force_initial_diagnostics requires these enabled tools: "
                     + ", ".join(sorted(missing_tools))
                 )
-            if "discover-symbolic-laws" not in self.skill_manager.load_skills():
+            if "discover-symbolic-laws" not in self.enabled_skills:
                 raise ValueError(
                     "force_initial_diagnostics requires the 'discover-symbolic-laws' skill."
                 )
@@ -186,6 +222,7 @@ class SRAgent(FactoryMixin):
         self.money_counter = ParallelTimer(unit='$') # 费用统计
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
+        self.context = context if context is not None else AgentContext()
         self.run_state = SearchRunState(
             save_path=save_path,
             ranking_metric=ranking_metric,
@@ -224,26 +261,39 @@ class SRAgent(FactoryMixin):
         if not isinstance(y, dict):
             y = {"target": y}
 
+        target = next(iter(y))
+        supplied_data = X | y
+        if (
+            not self.context.data
+            or self.context.target != target
+            or list(self.context.features) != list(X)
+            or any(
+                name not in self.context.data
+                or not np.array_equal(self.context.data[name], value)
+                for name, value in supplied_data.items()
+            )
+        ):
+            self.context.commit_data(
+                supplied_data,
+                target=target,
+                features=list(X),
+                variable_descriptions=self.context.variable_descriptions,
+                provenance=self.context.provenance,
+            )
         train_data, validation_data = self._split_data(X, y)
-
-        tool_context = {
-            "data": train_data,
-            "target": next(iter(y)),
-            "evaluation_data": validation_data,
+        self.context.bind_split(train_data, validation_data)
+        self._active_X = X
+        self._active_y = y
+        self._data_revision = self.context.data_revision
+        self.context.update({
             "llm_provider": self.llm_provider,
             "llm_model": self.llm_model,
             "llm_max_tokens": self.llm_max_tokens,
             "skill_manager": self.skill_manager,
-        }
-        with self.prepare_tool_context(tool_context) as tool_context:
-            self.tools = [tool_cls(**tool_context) for tool_cls in self.tool_cls_list]
-            self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
-            self.api = BaseAPI.create(
-                self.llm_provider,
-                model=self.llm_model,
-                tool_list=self.tools,
-                tool_parser_name=self.tool_parser,
-            )
+            "enabled_skills": sorted(self.enabled_skills),
+        })
+        with self.prepare_tool_context(self.context) as tool_context:
+            self.initialize_tools(tool_context)
             if self.tool_parser == 'openai':
                 description = json.dumps(self.api.tool_description_json, indent=2)
             else:
@@ -274,7 +324,7 @@ class SRAgent(FactoryMixin):
                 raise
 
     @contextmanager
-    def prepare_tool_context(self, tool_context: Dict[str, Any]):
+    def prepare_tool_context(self, tool_context: AgentContext):
         """Prepare resources and context shared by initialized tools."""
         yield tool_context
 
@@ -288,7 +338,8 @@ class SRAgent(FactoryMixin):
         ## 开始迭代
         self.total_timer.clear(reset_last_add_time=True)
         self.named_timer.clear(reset_last_add_time=True)
-        for R in range(1, self.max_restart_loop + 1):  # R 次 best-solution restart
+        R = 1
+        while R <= self.max_restart_loop:  # R 次 best-solution restart
             _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
             # 用平凡结果或者历史最佳结果构建新的 initial prompt
@@ -296,7 +347,9 @@ class SRAgent(FactoryMixin):
             initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
             initial_node_parents = {record.node_id: "restart_seed" for record in restart_records}
             self.named_timer.add("build_initial_prompt")
-            for C in range(1, self.global_width + 1):  # C 次独立重复对话
+            C = 1
+            next_restart = False
+            while C <= self.global_width:  # C 次独立重复对话
                 _logger.info(
                     f"(R={R}/{self.max_restart_loop}) × "
                     f"Global Branch (C={C}/{self.global_width})"
@@ -307,7 +360,8 @@ class SRAgent(FactoryMixin):
                 node_parents = deepcopy(initial_node_parents)
                 self.named_timer.add("init_buffer")
 
-                for L in range(1, self.max_refinement_depth + 1):  # L 轮对话迭代
+                L = 1
+                while L <= self.max_refinement_depth:  # L 轮对话迭代
                     _logger.info(
                         f"(R={R}/{self.max_restart_loop}) × "
                         f"(C={C}/{self.global_width}) × "
@@ -315,10 +369,14 @@ class SRAgent(FactoryMixin):
                     )
 
                     # Step 1: 根据 Buffer 创建 Prompt
-                    self.before_iteration(buffer, R=R, L=L, C=C)
+                    transition = self.before_iteration(buffer, R=R, L=L, C=C)
+                    if transition == "next_r":
+                        next_restart = True
+                        break
+                    if transition == "next_c":
+                        break
                     prompt = self.build_prompt(buffer, R=R, L=L, C=C)
-                    for tool in self.tools:
-                        tool.context["messages"] = deepcopy(prompt)
+                    self.set_messages(prompt)
                     self.named_timer.add("build_prompt")
 
                     # Step 2: 请求 LLM 得到 Content、Tool Calls 和 Message
@@ -355,6 +413,11 @@ class SRAgent(FactoryMixin):
                     if status is not None:
                         _logger.note("Early stopping triggered. Returning best result.")
                         return self.search_result(status, R=R, L=L, C=C)
+                    L += 1
+                if next_restart:
+                    break
+                C += 1
+            R += 1
 
         _logger.note("Finished all iterations. Returning best result.")
         coordinate = self.run_state.latest_coordinate
@@ -532,9 +595,39 @@ class SRAgent(FactoryMixin):
         _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
         return prompt
 
-    def before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> None:
+    def before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
         """Apply mode-specific control changes before constructing this iteration's prompt."""
-        pass
+        return None
+
+    def refresh_data(self, buffer: List[Dict[str, Any]]) -> bool:
+        """Apply a newly committed shared-data revision at an iteration boundary."""
+        if not hasattr(self, "context") or not hasattr(self, "_data_revision"):
+            return False
+        if self.context.data_revision == self._data_revision:
+            return False
+        if self.context.target is None or not self.context.features:
+            raise ValueError("The updated context does not define a target and features")
+        X = {name: self.context.data[name] for name in self.context.features}
+        y = {self.context.target: self.context.data[self.context.target]}
+        train_data, validation_data = self._split_data(X, y)
+        self.context.bind_split(train_data, validation_data)
+        self._active_X.clear()
+        self._active_X.update(X)
+        self._active_y.clear()
+        self._active_y.update(y)
+        previous_revision = self._data_revision
+        self._data_revision = self.context.data_revision
+        buffer.append({
+            "role": "user",
+            "content": (
+                "[Structured data updated by the data-preparation agent]\n"
+                f"Data revision changed from {previous_revision} to {self._data_revision}. "
+                f"The target is {self.context.target!r}; available features are "
+                f"{self.context.features}. Reassess earlier evidence against the updated variables "
+                "and continue the investigation."
+            ),
+        })
+        return True
 
     def handle_iteration_complete(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
         """Return a terminal status when the current search should stop."""
@@ -577,7 +670,7 @@ class SRAgent(FactoryMixin):
             ),
         }
     
-    def request_llm(self, prompt: List[Dict[str, Any]], R, L, C):
+    def request_llm(self, prompt: List[Dict[str, Any]], R, L, C, stream_callback=None):
         """请求 LLM 得到 Content 和 Tool Calls。"""
         response_list = []
         route = self.model_router.route(
@@ -600,7 +693,12 @@ class SRAgent(FactoryMixin):
             f"Model route: tier={route.tier}, backend={route.provider}/{route.model}, "
             f"score={route.score}, reason={route.reason}"
         )
-        llm_result = api(prompt, n=self.local_sample_size, max_tokens=self.llm_max_tokens)
+        llm_result = api(
+            prompt,
+            n=self.local_sample_size,
+            max_tokens=self.llm_max_tokens,
+            stream_callback=stream_callback,
+        )
         for K, (content, tool_calls, message) in enumerate(llm_result, 1): # K 次重复采样
             response_list.append((content, tool_calls, message))
             content_for_log = render_markdown(content or "(empty)").strip()
@@ -895,50 +993,6 @@ class SRAgent(FactoryMixin):
             parents.append(self.run_state.parent_link(parent_node_id, relation))
 
         self.run_state.register_iteration(response_list, results_list, tuple(parents), prompt, usage, R, L, C)
-
-    def execute_action(self, actions: List[ToolCall]) -> List[ToolCallResult|None]:
-        """执行 Action。"""
-        results = []
-        tool_map = {tool.metadata.name: tool for tool in self.tools}
-        for tool_call in actions:
-            if (tool := tool_map.get(tool_call.name)) is None:
-                _logger.trace(f'Unknown tool call: {tool_call.name}. Skipping execution.')
-                result = ToolCallResult(
-                    ok=False,
-                    result={},
-                    result_str=f'Unknown tool calling for "{tool_call.name}"',
-                    meta_data={"tool": tool_call.name},
-                )
-            else:
-                result = tool(**tool_call.params)
-                self.tools_counter.add(tool_call.name)
-            results.append(result)
-        return results
-
-    def execute_action_parallel(self, actions: List[ToolCall], max_workers: int) -> List[ToolCallResult]:
-        """使用多进程并行执行 Action。"""
-        tasks = []
-        results = [None] * len(actions)
-        tool_map = {tool.metadata.name: tool for tool in self.tools}
-        for idx, tool_call in enumerate(actions):
-            if (tool := tool_map.get(tool_call.name)) is None:
-                _logger.trace(f'Unknown tool call: {tool_call.name}. Skipping execution.')
-                results[idx] = ToolCallResult(
-                    ok=False,
-                    result={},
-                    result_str=f'Unknown tool calling for "{tool_call.name}"',
-                    meta_data={"tool": tool_call.name},
-                )
-            else:
-                tasks.append((idx, delayed(_execute_tool_call_in_subprocess)(tool, tool_call)))
-                self.tools_counter.add(tool_call.name)
-
-        if tasks:
-            workers = Parallel(n_jobs=max_workers, backend='loky')
-            task_results = workers(task for _, task in tasks)
-            for (idx, _), result in zip(tasks, task_results):
-                results[idx] = result
-        return results
 
     def format_progress(self, R, L, C):
         return (

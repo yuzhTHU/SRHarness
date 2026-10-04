@@ -54,9 +54,27 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         """创建一个路径受限的 open() 函数。"""
         original_open = builtins.open
 
-        def restricted_open(file, mode='r', buffering=-1, encoding=None, errors=None, newline=None):
+        def restricted_open(
+            file,
+            mode='r',
+            buffering=-1,
+            encoding=None,
+            errors=None,
+            newline=None,
+            closefd=True,
+            opener=None,
+        ):
             checked = cls.check_workspace_path(file, workspace_dir)
-            return original_open(checked, mode, buffering, encoding, errors, newline)
+            return original_open(
+                checked,
+                mode,
+                buffering,
+                encoding,
+                errors,
+                newline,
+                closefd,
+                opener,
+            )
 
         def install():
             # Patch process-wide file entry points so library code (e.g. pandas/pathlib) also goes through path checks.
@@ -274,11 +292,13 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
         """
         # 准备 stdin (已被弃用)
-        if not hasattr(self, 'stdin_text'):
+        data_revision = getattr(self.context, "data_revision", None)
+        if not hasattr(self, 'stdin_text') or getattr(self, "_stdin_data_revision", None) != data_revision:
             assert 'data' in self.context
             data = self.context['data']
             data_dict = self.serialization(data)
             stdin_text = self.stdin_text = json.dumps(data_dict, ensure_ascii=False)
+            self._stdin_data_revision = data_revision
         else:
             stdin_text = self.stdin_text
 

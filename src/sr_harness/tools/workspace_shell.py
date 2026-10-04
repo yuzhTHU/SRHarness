@@ -58,10 +58,18 @@ class Workspace:
     提供路径解析和安全校验，严格防止路径逃逸。
     """
 
-    def __init__(self, workspace_files: List[str] | None = None, temp_dir: str | None = None):
-        self.retain = False
-        self._path = Path(tempfile.mkdtemp(prefix="sr_workspace_", dir=temp_dir))
-        _logger.info(f"Created workspace at {self._path}")
+    def __init__(
+        self,
+        workspace_files: List[str] | None = None,
+        temp_dir: str | None = None,
+        path: str | Path | None = None,
+    ):
+        self.retain = path is not None
+        self._path = Path(path).resolve() if path is not None else Path(
+            tempfile.mkdtemp(prefix="sr_workspace_", dir=temp_dir)
+        )
+        self._path.mkdir(parents=True, exist_ok=True)
+        _logger.info(f"Initialized workspace at {self._path}")
         for src in (workspace_files or []):
             self.link_item(Path(src))
 

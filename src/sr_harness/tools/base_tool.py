@@ -18,6 +18,7 @@ from types import NoneType, UnionType
 from inspect import Parameter, signature
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, get_args, get_origin, get_type_hints
 from ..utils import FactoryMixin, log_exception
+from ..core import AgentContext
 from ..core.tool import ToolCallResult, ToolMetadata
 if TYPE_CHECKING:
     from ..skills import SkillManager
@@ -54,9 +55,11 @@ class BaseTool(ABC, FactoryMixin):
         if cls.metadata.parameters is None:
             cls.metadata.parameters = cls.infer_tool_parameters()
 
-    def __init__(self, **context):
+    def __init__(self, context: AgentContext | None = None, **values):
         """ context 中传入一些工具执行时需要的上下文信息，如数据、模型等，这些信息不适合放在 execute 的参数列表中让 LLM 生成 """
-        self.context = context
+        self.context = context if context is not None else values
+        if context is not None and values:
+            self.context.update(values)
 
     @classmethod
     def get_doc(cls) -> dict[str, str] | None:

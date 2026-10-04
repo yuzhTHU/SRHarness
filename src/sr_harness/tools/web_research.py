@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 from html import unescape
+import ipaddress
+import socket
 from typing import Any, Dict
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -73,6 +75,70 @@ class WebSearchTool(BaseTool):
             "results": parser.results[:max_results],
             "provider": "duckduckgo-html",
         }
+
+
+class _TextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.parts: list[str] = []
+        self.ignored = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in {"script", "style", "svg", "noscript"}:
+            self.ignored += 1
+
+    def handle_endtag(self, tag):
+        if tag in {"script", "style", "svg", "noscript"} and self.ignored:
+            self.ignored -= 1
+
+    def handle_data(self, data):
+        if not self.ignored and data.strip():
+            self.parts.append(data.strip())
+
+
+@BaseTool.register("web_fetch")
+class WebFetchTool(BaseTool):
+    metadata = ToolMetadata(name="web_fetch")
+
+    def execute(self, url: str, max_characters: int = 30000) -> Dict[str, Any]:
+        """Fetch readable text from a public HTTP or HTTPS page.
+
+        Args:
+            url: Absolute public webpage URL returned by web_search.
+            max_characters: Maximum number of extracted text characters, between 1000 and 50000.
+        """
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("url must be an absolute HTTP or HTTPS URL")
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+        }
+        if any(not ipaddress.ip_address(address).is_global for address in addresses):
+            raise ValueError("url must resolve only to public network addresses")
+        limit = max(1000, min(int(max_characters), 50000))
+        response = requests.get(
+            url,
+            timeout=20,
+            headers={"User-Agent": "SRHarness/1.0"},
+            allow_redirects=False,
+            stream=True,
+        )
+        if response.is_redirect:
+            raise ValueError("redirects are not followed; fetch the public destination URL directly")
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if "html" not in content_type and "text" not in content_type and "json" not in content_type:
+            raise ValueError(f"unsupported content type: {content_type}")
+        body = bytearray()
+        for chunk in response.iter_content(64 * 1024):
+            body.extend(chunk)
+            if len(body) >= 1_000_000:
+                break
+        parser = _TextParser()
+        parser.feed(bytes(body[:1_000_000]).decode(response.encoding or "utf-8", errors="replace"))
+        text = "\n".join(parser.parts)
+        return {"url": url, "text": text[:limit], "truncated": len(text) > limit}
 
 
 """

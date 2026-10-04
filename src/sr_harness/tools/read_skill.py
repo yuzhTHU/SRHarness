@@ -37,7 +37,12 @@ class ReadSkill(BaseTool):
     def __init__(self, **context):
         super().__init__(**context)
         self.skill_manager = context.get("skill_manager") or self.default_skill_manager
-        description = _format_description(self.skill_manager.load_skills())
+        enabled = context.get("enabled_skills")
+        skills = self.skill_manager.load_skills()
+        self.enabled_skills = set(enabled) if enabled is not None else set(skills)
+        description = _format_description({
+            name: skill for name, skill in skills.items() if name in self.enabled_skills
+        })
         self.metadata = replace(type(self).metadata, description=description)
 
     def execute(
@@ -59,13 +64,22 @@ class ReadSkill(BaseTool):
         if not name.strip():
             if not query.strip():
                 raise ValueError("Provide either an exact skill name or a search query.")
-            matches = self.skill_manager.search_skills(query)
+            matches = [
+                skill for skill in self.skill_manager.search_skills(
+                    query, limit=max(5, len(self.skill_manager.load_skills()))
+                )
+                if skill.name in self.enabled_skills
+            ][:5]
             return {
                 "content": "Recommended skills:\n" + "\n".join(
                     f"- {skill.name}: {skill.description}" for skill in matches
                 ),
                 "matches": [skill.name for skill in matches],
             }
+        if name not in self.skill_manager.load_skills():
+            self.skill_manager.get_skill(name)
+        if name not in self.enabled_skills:
+            raise ValueError(f"Skill '{name}' is not enabled for this Agent.")
         skill = self.skill_manager.get_skill(name)
         result: dict[str, Any] = {}
         if file_path.strip():

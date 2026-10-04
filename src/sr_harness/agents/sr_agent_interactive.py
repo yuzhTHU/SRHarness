@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, List, Optional
 
 from ..api import BaseAPI
+from ..core import AgentContext
 from ..interaction import InteractionManager, TerminalInteractionManager
 from ..tools import BaseTool
 from .sr_agent import SRAgent
@@ -31,6 +32,7 @@ class SRAgentInteractive(SRAgent):
         llm_provider: str,
         llm_model: str,
         tools: List[BaseTool] | None = None,
+        skills: List[str] | None = None,
         verbose: bool = False,
         tool_parser: str | BaseParser = 'openai',
         save_path: Optional[str] = None,
@@ -40,6 +42,7 @@ class SRAgentInteractive(SRAgent):
         global_width: int = 1,
         max_restart_loop: int = 1,
         restart_top_k: int = 1,
+        llm_max_tokens: int = 4096,
         max_workers: int = 0,
         validation_fraction: float = 0.2,
         split_by: str = "ood",
@@ -54,6 +57,7 @@ class SRAgentInteractive(SRAgent):
         auto_routing: bool = True,
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
+        context: AgentContext | None = None,
     ):
         """初始化 SRAgentInteractive。
 
@@ -61,6 +65,7 @@ class SRAgentInteractive(SRAgent):
             llm_provider: LLM 提供商名称。
             llm_model: 模型名称。
             tools: 可用工具名列表。None 表示使用默认工具集（全部工具减去 code_executor）。
+            skills: 可供 Agent 读取的 skill 名称。None 表示使用全部 skill。
             verbose: 是否启用详细日志。
             tool_parser: 工具解析器类型。
             save_path: 日志保存路径。
@@ -70,6 +75,7 @@ class SRAgentInteractive(SRAgent):
             global_width: 独立分支数量（C）。
             max_restart_loop: 重启次数（R）。
             restart_top_k: 重启时注入历史最佳结果数量。
+            llm_max_tokens: 每次模型响应允许生成的最大 token 数。
             max_workers: 并行工作进程数（0 表示不并行）。
             validation_fraction: 验证集比例。
             split_by: 验证集划分方式，可选 "random" 或 "ood"。
@@ -84,17 +90,19 @@ class SRAgentInteractive(SRAgent):
             auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
+            context: 与数据准备 Agent 共享的数据和工作区上下文。
         """
         if use_workspace:
-            excluded_tools = {"code_executor"}
+            excluded_tools = {"code_executor", "commit_data"}
         else:
-            excluded_tools = {"workspace_code_executor", "workspace_shell"}
+            excluded_tools = {"workspace_code_executor", "workspace_shell", "commit_data"}
         self.excluded_tools = excluded_tools
 
         super().__init__(
             llm_provider=llm_provider,
             llm_model=llm_model,
             tools=tools,
+            skills=skills,
             verbose=verbose,
             tool_parser=tool_parser,
             save_path=save_path,
@@ -104,6 +112,7 @@ class SRAgentInteractive(SRAgent):
             global_width=global_width,
             max_restart_loop=max_restart_loop,
             restart_top_k=restart_top_k,
+            llm_max_tokens=llm_max_tokens,
             max_workers=max_workers,
             validation_fraction=validation_fraction,
             split_by=split_by,
@@ -114,6 +123,7 @@ class SRAgentInteractive(SRAgent):
             auto_routing=auto_routing,
             strong_llm_provider=strong_llm_provider,
             strong_llm_model=strong_llm_model,
+            context=context,
         )
 
         # 工作区
@@ -126,11 +136,15 @@ class SRAgentInteractive(SRAgent):
         self.human_input_callback = human_input_callback or self.interaction_manager.ask_human
 
     @contextmanager
-    def prepare_tool_context(self, tool_context: dict[str, Any]):
+    def prepare_tool_context(self, tool_context: AgentContext):
         """Add interaction resources to the tool context for the duration of a run."""
-        tool_context = dict(tool_context)
         tool_context["human_input_callback"] = self.human_input_callback
         if not self.use_workspace:
+            yield tool_context
+            return
+
+        if tool_context.workspace is not None:
+            self.interaction_manager.bind_workspace(tool_context.workspace)
             yield tool_context
             return
 
@@ -138,13 +152,10 @@ class SRAgentInteractive(SRAgent):
 
         with Workspace(self.workspace_files, self.save_path) as workspace:
             _logger.note(f"Workspace initialized at: {workspace.path}")
-            tool_context.update(
-                workspace=workspace,
-                workspace_dir=str(workspace.path),
-            )
+            tool_context.workspace = workspace
             yield tool_context
 
-    def before_iteration(self, buffer, R: int, L: int, C: int) -> None:
+    def before_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
         """Apply queued human guidance before the prompt is constructed."""
         if R == C == L == 1:
             self._perfect_candidate_announced = False
@@ -154,27 +165,98 @@ class SRAgentInteractive(SRAgent):
                 "role": "user",
                 "content": f"[Human guidance injected during the run]\n{message}",
             })
-        if settings := self.interaction_manager.take_model_settings():
-            self._apply_model_settings(settings)
+        if self.refresh_data(buffer):
+            self.emit("data_revision", self.context.schema())
+        if settings := self.interaction_manager.take_runtime_settings():
+            self._apply_runtime_settings(settings)
+        return self.interaction_manager.take_search_transition()
 
-    def _apply_model_settings(self, settings: dict[str, Any]) -> None:
-        """Apply a frontend-requested model change at a safe iteration boundary."""
+    def _apply_runtime_settings(self, settings: dict[str, Any]) -> None:
+        """Apply frontend-requested model and capability changes at a safe boundary."""
         try:
-            self.api = BaseAPI.create(
-                settings["llm_provider"],
-                model=settings["llm_model"],
-                tool_list=self.tools,
-                tool_parser_name=self.tool_parser,
+            tool_names = settings.get("tools")
+            requested_tools = (
+                set(self.available_tool_classes) if tool_names is None else set(tool_names)
             )
+            if unknown_tools := requested_tools - self.available_tool_classes.keys():
+                raise ValueError(f"Unknown tools: {', '.join(sorted(unknown_tools))}")
+            self.tool_cls_list = [
+                tool_cls for name, tool_cls in self.available_tool_classes.items()
+                if name in requested_tools
+            ]
+            registered_skills = self.skill_manager.load_skills()
+            self.skill_manager.register_tool_docs([
+                tool_cls for tool_cls in self.tool_cls_list
+                if (doc := tool_cls.get_doc()) is not None
+                and doc["name"] not in registered_skills
+            ])
+            available_skills = self.skill_manager.load_skills()
+            skill_names = settings.get("skills")
+            requested_skills = (
+                set(available_skills) if skill_names is None else set(skill_names)
+            )
+            if unknown_skills := requested_skills - available_skills.keys():
+                raise ValueError(f"Unknown skills: {', '.join(sorted(unknown_skills))}")
+            requested_skills.update(
+                doc["name"]
+                for tool_cls in self.tool_cls_list
+                if (doc := tool_cls.get_doc()) is not None
+            )
+            self.enabled_skills = requested_skills
             self.llm_provider = settings["llm_provider"]
             self.llm_model = settings["llm_model"]
+            for name in (
+                "local_sample_size",
+                "max_refinement_depth",
+                "global_width",
+                "max_restart_loop",
+                "restart_top_k",
+                "llm_max_tokens",
+                "max_workers",
+                "validation_fraction",
+                "split_by",
+                "split_random_state",
+                "ranking_metric",
+                "larger_is_better",
+                "force_initial_diagnostics",
+                "auto_routing",
+                "tool_parser",
+            ):
+                if name in settings:
+                    setattr(self, name, settings[name])
+            self.strong_llm_provider = (
+                settings.get("strong_llm_provider") or self.llm_provider
+            )
+            self.strong_llm_model = settings.get("strong_llm_model") or None
+            if self.force_initial_diagnostics:
+                required_tools = {"statistics_analysis", "relationship_analysis", "read_skill"}
+                if missing := required_tools - requested_tools:
+                    raise ValueError(
+                        "force_initial_diagnostics requires enabled tools: "
+                        + ", ".join(sorted(missing))
+                    )
+                if "discover-symbolic-laws" not in self.enabled_skills:
+                    raise ValueError(
+                        "force_initial_diagnostics requires the discover-symbolic-laws skill"
+                    )
+            train_data, validation_data = self._split_data(self._active_X, self._active_y)
+            self.context.bind_split(train_data, validation_data)
+            self.context.update({
+                "llm_provider": self.llm_provider,
+                "llm_model": self.llm_model,
+                "llm_max_tokens": self.llm_max_tokens,
+                "enabled_skills": sorted(self.enabled_skills),
+            })
+            self.initialize_tools(self.context)
             self.model_router.base_provider = self.llm_provider
             self.model_router.base_model = self.llm_model
-            self.model_router.enabled = False
+            self.model_router.enabled = self.auto_routing
+            self.model_router.strong_provider = self.strong_llm_provider
+            self.model_router.strong_model = self.strong_llm_model
+            self.run_state.ranking_metric = self.ranking_metric
+            self.run_state.larger_is_better = self.larger_is_better
             self._strong_api = None
-            for tool in self.tools:
-                tool.context.update(settings)
-            self.interaction_manager.commit_model_settings(settings)
+            self.interaction_manager.commit_runtime_settings(settings)
             self.emit("settings_applied", settings)
         except Exception as exc:
             self.emit("settings_error", {"error": str(exc)})
@@ -221,12 +303,17 @@ class SRAgentInteractive(SRAgent):
             mse_goal = "The previous round already achieved MSE = 0. Try to find a simpler formula."
 
         # 构建工作区信息
+        available_tools = {tool.metadata.name for tool in self.tools}
         workspace_info = (
-            "\n\nYou have access to a workspace directory containing data files. "
-            "Use the workspace_shell tool to explore files (ls, cat, head, etc.) "
-            "and run Python scripts. Use ask_human to pause and ask for guidance "
-            "when you are uncertain about the direction."
+            "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
+            "there rather than reconstructing them from workspace files. The workspace contains "
+            "supplemental files and reproducible artifacts. Use workspace_shell for bounded file "
+            "operations and workspace_code_executor when Python analysis is necessary."
         ) if self.use_workspace else ""
+        human_guidance = (
+            "- Use ask_human when you need guidance, are stuck, or want to report progress.\n"
+            if "ask_human" in available_tools else ""
+        )
 
         # 构建 system prompt
         initial_prompt.append({
@@ -238,7 +325,7 @@ class SRAgentInteractive(SRAgent):
                 "Guidelines:\n"
                 "- Explore data thoroughly before proposing formulas.\n"
                 "- Prefer simple, interpretable expressions over complex ones.\n"
-                "- Use ask_human when you need guidance, are stuck, or want to report progress.\n"
+                f"{human_guidance}"
                 f"- {mse_goal}"
                 f"{workspace_info}"
             ),
@@ -304,19 +391,69 @@ class SRAgentInteractive(SRAgent):
             "provider": route.provider,
             "model": route.model,
         })
-        responses, usage = super().request_llm(prompt, R=R, L=L, C=C)
-        self.emit("activity", {"phase": "processing", "coord": coord})
-        cumulative_usage = {
-            "token": self.token_counter.named_count,
-            "price": self.money_counter.named_count,
-        }
         tool_schemas = {
             tool.metadata.name: self.tool_schema(tool.metadata.name)
             for tool in self.tools
             if getattr(tool, "metadata", None) is not None
         }
+        response_ids = {
+            K: f"{self.run_state.run_id}:{R}:{C}:{L}:{K}"
+            for K in range(1, self.local_sample_size + 1)
+        }
+        for K, response_id in response_ids.items():
+            self.emit("assistant_start", {
+                "response_id": response_id,
+                "coord": coord | {"K": K},
+                "tool_schemas": tool_schemas,
+                "provider": route.provider,
+                "model": route.model,
+            })
+        last_stream_emit: dict[int, float] = {}
+
+        def stream_callback(update: dict[str, Any]) -> None:
+            K = max(1, min(int(update.get("sample", 1)), self.local_sample_size))
+            now = time.monotonic()
+            if (
+                update.get("type") == "delta"
+                and now - last_stream_emit.get(K, 0.0) < 0.08
+            ):
+                return
+            last_stream_emit[K] = now
+            self.emit("assistant_delta", {
+                **update,
+                "response_id": response_ids[K],
+                "coord": coord | {"K": K},
+                "tool_schemas": tool_schemas,
+                "provider": route.provider,
+                "model": route.model,
+            })
+
+        try:
+            responses, usage = super().request_llm(
+                prompt,
+                R=R,
+                L=L,
+                C=C,
+                stream_callback=stream_callback,
+            )
+        except Exception as exc:
+            for K, response_id in response_ids.items():
+                self.emit("assistant_error", {
+                    "response_id": response_id,
+                    "coord": coord | {"K": K},
+                    "provider": route.provider,
+                    "model": route.model,
+                    "error": str(exc),
+                })
+            raise
+        self.emit("activity", {"phase": "processing", "coord": coord})
+        cumulative_usage = {
+            "token": self.token_counter.named_count,
+            "price": self.money_counter.named_count,
+        }
         for K, (content, calls, message) in enumerate(responses, 1):
             self.emit("assistant", {
+                "response_id": response_ids[K],
                 "content": content,
                 "message": message,
                 "tool_calls": calls,
@@ -324,6 +461,8 @@ class SRAgentInteractive(SRAgent):
                 "coord": coord | {"K": K},
                 "usage": usage,
                 "cumulative_usage": cumulative_usage,
+                "provider": route.provider,
+                "model": route.model,
             })
         return responses, usage
 

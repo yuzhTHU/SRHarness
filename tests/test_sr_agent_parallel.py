@@ -53,7 +53,8 @@ def test_interactive_guidance_is_added_before_prompt_construction():
     agent.interaction_manager = SimpleNamespace(
         checkpoint=lambda: ["compare against a power law"],
         publish=lambda *args: None,
-        take_model_settings=lambda: None,
+        take_runtime_settings=lambda: None,
+        take_search_transition=lambda: None,
     )
     buffer = [{"role": "user", "content": "Find a formula."}]
 

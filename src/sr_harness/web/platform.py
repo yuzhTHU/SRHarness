@@ -9,6 +9,7 @@ import pandas as pd
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from ..core import json_value
 from .session import InteractiveSession
 
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -21,12 +22,63 @@ def mount_platform(app, session: InteractiveSession):
     def status():
         return session.snapshot()
 
+    @app.get('/api/session/capabilities')
+    def capabilities(agent: str = "search"):
+        try:
+            return session.capabilities(agent)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get('/api/session/provider-credential')
+    def provider_credential(provider: str):
+        try:
+            return session.provider_credential(provider)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.put('/api/session/provider-credential')
+    def set_provider_credential(payload: dict = Body(...)):
+        try:
+            return session.set_provider_credential(
+                str(payload.get("provider", "")),
+                payload.get("api_key"),
+            )
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.post('/api/session/start')
     def start(payload: dict = Body(...)):
         try:
             return session.start(payload)
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/data/agent')
+    def prepare_data(payload: dict = Body(...)):
+        try:
+            return session.prepare_data(str(payload.get("message", "")))
+        except (ValueError, OSError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.put('/api/data/agent/settings')
+    def configure_data_agent(payload: dict = Body(...)):
+        try:
+            return session.configure_data_agent(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get('/api/data/context')
+    def data_context(rows: int = 300):
+        rows = max(1, min(rows, 1000))
+        with session.lock:
+            schema = session.context.schema()
+            names = list(session.context.data)
+            count = min(schema["rows"], rows)
+            records = [
+                {name: json_value(session.context.data[name][index]) for name in names}
+                for index in range(count)
+            ]
+        return {**json_value(schema), "data": records, "truncated": schema["rows"] > count}
 
     @app.post('/api/session/settings')
     def settings(payload: dict = Body(...)):
@@ -82,7 +134,9 @@ def mount_platform(app, session: InteractiveSession):
             files = [
                 str(path.relative_to(session.workspace))
                 for path in session.workspace.rglob('*')
-                if path.is_file() and not path.is_symlink() and path.suffix.lower() == '.csv'
+                if path.is_file()
+                and not path.is_symlink()
+                and path.suffix.lower() in {'.csv', '.xlsx'}
             ]
             return {'files': sorted(files)}
 
@@ -91,12 +145,16 @@ def mount_platform(app, session: InteractiveSession):
         rows = max(5, min(rows, 1000))
         with session.lock:
             file = resolve(path)
-            if file.suffix.lower() != '.csv' or not file.is_file():
-                raise HTTPException(400, 'Select an existing CSV file')
+            if file.suffix.lower() not in {'.csv', '.xlsx'} or not file.is_file():
+                raise HTTPException(400, 'Select an existing CSV or Excel file')
             try:
-                frame = pd.read_csv(file, nrows=rows + 1)
+                frame = (
+                    pd.read_excel(file, nrows=rows + 1)
+                    if file.suffix.lower() == '.xlsx'
+                    else pd.read_csv(file, nrows=rows + 1)
+                )
             except Exception as exc:
-                raise HTTPException(400, f'Unable to read CSV: {exc}') from exc
+                raise HTTPException(400, f'Unable to read table: {exc}') from exc
         if frame.empty or len(frame.columns) < 2:
             raise HTTPException(400, 'CSV needs at least two columns and one row')
         columns = [str(column) for column in frame.columns]

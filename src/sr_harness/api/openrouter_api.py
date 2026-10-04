@@ -4,8 +4,8 @@ import time
 import logging
 from openai import OpenAI
 from dotenv import load_dotenv
-from typing import Generator, List, Dict
-from .base_api import BaseAPI
+from typing import Any, Generator, List, Dict
+from .base_api import BaseAPI, StreamCallback
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
@@ -13,6 +13,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("openrouter")
 class OpenRouterAPI(BaseAPI):
+    supports_streaming = True
     supported_models = [
         "qwen/qwen3.6-flash",
         "moonshotai/kimi-k2",
@@ -42,6 +43,7 @@ class OpenRouterAPI(BaseAPI):
         max_tokens=4096,
         temperature=1.0,
         top_p=1.0,
+        stream_callback: StreamCallback | None = None,
     ) -> Generator[str, None, Dict]:
         yield from []
         load_dotenv()
@@ -104,10 +106,18 @@ class OpenRouterAPI(BaseAPI):
             max_retry = 3
             for attempt in range(1, max_retry + 1):
                 try:
-                    completion = client.chat.completions.create(**payload)
-                    response_dict = completion.to_dict()
-                    message = completion.choices[0].message.to_dict()
-                    content = message['content'] or ""
+                    if stream_callback is None:
+                        completion = client.chat.completions.create(**payload)
+                        response_dict = completion.to_dict()
+                        message = completion.choices[0].message.to_dict()
+                        content = message['content'] or ""
+                    else:
+                        completion, response_dict, message, content = self._stream_completion(
+                            client,
+                            payload,
+                            sample=idx,
+                            callback=stream_callback,
+                        )
                 except Exception as e:
                     tool_call = []
                     retry_error = e
@@ -121,6 +131,13 @@ class OpenRouterAPI(BaseAPI):
                     token_usage, price_usage = get_usage(completion)
                     break
                 elif attempt < max_retry:
+                    if stream_callback is not None:
+                        stream_callback({
+                            "type": "retry",
+                            "sample": idx,
+                            "attempt": attempt,
+                            "error": str(retry_error),
+                        })
                     _logger.error(f"Error requesting OpenRouterAPI({self.model}) since {log_exception(retry_error, with_traceback=False)}")
                     delay = self._retry_delay(retry_error, attempt)
                     _logger.info(f"Retrying OpenRouterAPI({self.model}) in {delay:g}s (attempt {attempt}/{max_retry}).")
@@ -153,6 +170,97 @@ class OpenRouterAPI(BaseAPI):
             "tool_calls": details[0]["tool_call"] if len(details) == 1 else [detail["tool_call"] for detail in details],
             "responses": [detail["response"] for detail in details],
         }
+
+    def _stream_completion(
+        self,
+        client,
+        payload: dict[str, Any],
+        *,
+        sample: int,
+        callback: StreamCallback,
+    ):
+        """Consume one OpenAI-compatible stream and expose provider-neutral snapshots."""
+        stream = client.chat.completions.create(
+            **payload,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        reasoning_details: list[Any] = []
+        raw_chunks: list[dict[str, Any]] = []
+        raw_tool_calls: dict[int, dict[str, Any]] = {}
+        usage = None
+        callback({"type": "start", "sample": sample})
+        for chunk in stream:
+            chunk_dict = chunk.to_dict() if hasattr(chunk, "to_dict") else {}
+            raw_chunks.append(chunk_dict)
+            if getattr(chunk, "usage", None) is not None:
+                usage = chunk.usage
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = choices[0].delta
+            if text := getattr(delta, "content", None):
+                content_parts.append(text)
+            reasoning_delta = (
+                getattr(delta, "reasoning", None)
+                or getattr(delta, "reasoning_content", None)
+                or ""
+            )
+            new_details = getattr(delta, "reasoning_details", None) or []
+            if new_details:
+                reasoning_details.extend(
+                    item.to_dict() if hasattr(item, "to_dict") else item
+                    for item in new_details
+                )
+                if not reasoning_delta:
+                    reasoning_delta = "".join(
+                        (item.get("text") or "") if isinstance(item, dict) else ""
+                        for item in reasoning_details[-len(new_details):]
+                    )
+            if reasoning_delta:
+                reasoning_parts.append(reasoning_delta)
+            for tool_delta in getattr(delta, "tool_calls", None) or []:
+                index = int(getattr(tool_delta, "index", 0) or 0)
+                current = raw_tool_calls.setdefault(index, {
+                    "id": None,
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                })
+                if getattr(tool_delta, "id", None):
+                    current["id"] = tool_delta.id
+                function = getattr(tool_delta, "function", None)
+                if function is not None:
+                    if getattr(function, "name", None):
+                        current["function"]["name"] += function.name
+                    if getattr(function, "arguments", None):
+                        current["function"]["arguments"] += function.arguments
+            snapshot_tool_calls = [raw_tool_calls[key] for key in sorted(raw_tool_calls)]
+            callback({
+                "type": "delta",
+                "sample": sample,
+                "content": "".join(content_parts),
+                "reasoning": "".join(reasoning_parts),
+                "tool_calls": snapshot_tool_calls,
+            })
+        content = "".join(content_parts)
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if reasoning := "".join(reasoning_parts):
+            message["reasoning"] = reasoning
+        if reasoning_details:
+            message["reasoning_details"] = reasoning_details
+        if raw_tool_calls:
+            message["tool_calls"] = [raw_tool_calls[key] for key in sorted(raw_tool_calls)]
+        callback({
+            "type": "complete",
+            "sample": sample,
+            "content": content,
+            "reasoning": reasoning,
+            "tool_calls": message.get("tool_calls", []),
+        })
+        completion = type("StreamCompletion", (), {"usage": usage})()
+        return completion, {"chunks": raw_chunks}, message, content
 
     @staticmethod
     def _retry_delay(error: Exception, attempt: int) -> float:

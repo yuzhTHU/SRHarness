@@ -17,7 +17,7 @@ from sr_harness.tools.eic import EICTool
 from sr_harness.tools.nd2 import ND2Tool
 from sr_harness.tools.sr4mdl import SR4MDLTool
 from sr_harness.tools.subagent import SubagentTool
-from sr_harness.tools.web_research import WebSearchTool
+from sr_harness.tools.web_research import WebFetchTool, WebSearchTool
 
 
 def test_eic_is_reproducible_and_finite():
@@ -103,6 +103,15 @@ def test_web_search_callback_is_bounded():
     ])
     result = tool.execute("symbolic regression", max_results=3)
     assert len(result["results"]) == 3
+
+
+def test_web_fetch_rejects_private_network_addresses(monkeypatch):
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 80))],
+    )
+    with pytest.raises(ValueError, match="public network"):
+        WebFetchTool().execute("http://example.test/private")
 
 
 def test_eic_doc_is_registered_as_runtime_skill(tmp_path):

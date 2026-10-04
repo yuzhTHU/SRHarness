@@ -1,5 +1,6 @@
 """Dependency-light domain types and runtime state for SRHarness."""
 from .api import APICallResult
+from .context import AgentContext
 from .search import (
     CandidateRecord,
     ParentLink,

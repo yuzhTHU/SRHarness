@@ -202,9 +202,13 @@ in-memory `SearchRunState`; they do not depend on persisted run files.
 
 ![SRHarness Web search-tree viewer](assets/web.png)
 
-The workbench opens on **Data & Problem**. Select or upload a CSV, assign one target and one or
-more features, edit variable descriptions, and drag variables into the X/Y/Hue/Size slots for a
-quick relationship preview. SRHarness generates the initial system and user prompts from that
+The workbench opens on **Data & Problem**. Select or upload a CSV or Excel workbook, assign one
+target and one or more features, edit variable descriptions, and drag variables into the
+X/Y/Hue/Size slots for a quick relationship preview. The data-preparation Agent can inspect the
+persistent workspace, clean or join tables, search and read public Web sources, and atomically
+publish a numeric target and aligned features into the shared `AgentContext`. Its conversation and
+workspace survive later requests. The direct structured-data workflow remains available without
+using this Agent. SRHarness generates the initial system and user prompts from the resulting
 configuration; either prompt remains editable before the run starts. The included `demo.csv`
 contains three input columns (including one categorical column) and one numeric target.
 
@@ -214,6 +218,15 @@ tree and candidate panel stay linked to those nodes and can switch between all r
 and the Pareto front. Guidance, model changes, pause/resume, stop, and inline `ask_human` replies
 take effect at safe operation boundaries. The interface supports Chinese/English text, light/dark
 themes, and resizable or collapsible side panels.
+
+The data-preparation Agent and `SRAgentInteractive` keep separate message histories while sharing
+one `AgentContext`. To add features during search, pause symbolic regression, ask the preparation
+Agent to create and commit the aligned columns, then resume. At the next safe iteration boundary,
+the SR Agent detects the new data revision, rebuilds its train/validation split, tells the existing
+conversation which variables were added, and continues with its prior evidence and candidates.
+While a search is active, data commits may add features but cannot alter the target, row alignment,
+or previously used values; those changes require a new run because old candidate metrics would no
+longer be comparable.
 
 ### Research backends, subagents, and live control
 
@@ -226,6 +239,11 @@ reading. Configure heavyweight external projects with `SR4MDL_HOME` and `ND2_HOM
 enabled, each newly generated scalar candidate receives a lightweight structural audit whose
 diagnostics are retained in candidate state. Documentation for EIC, SR4MDL, and ND2 is exposed as
 runtime read-only skills by each tool's `get_doc()` method.
+
+`Agent` contains the common API, parser, and tool-execution mechanics used by
+`DataPreparationAgent` and `SRAgent`; `SRAgentInteractive` specializes the shared `SRAgent` search
+loop with human control and frontend events. `AgentContext` owns the structured data, active split,
+workspace, variable descriptions, provenance, and data revision shared by cooperating agents.
 
 `SRAgentInteractive` accepts an `InteractionManager` that connects its shared search loop to a
 frontend. Its default `TerminalInteractionManager` handles `ask_human` in a terminal. The Web
