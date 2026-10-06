@@ -57,6 +57,7 @@ class Expression:
         parameters: Mapping[str, Any] | None = None,
         time: Any = None,
         delay_resolver: Any = None,
+        num_nodes: int | None = None,
     ) -> Any:
         """Evaluate this expression with NumPy values.
 
@@ -65,6 +66,7 @@ class Expression:
             parameters: Fitted parameter values keyed by parameter name.
             time: Optional sample times.
             delay_resolver: Optional callback that resolves delayed values.
+            num_nodes: Explicit node count for indexed expressions.
 
         Returns:
             The evaluated scalar or array.
@@ -77,6 +79,7 @@ class Expression:
             parameters=parameters,
             time=time,
             delay_resolver=delay_resolver,
+            num_nodes=num_nodes,
         )
 
     eval = evaluate
@@ -186,6 +189,7 @@ class Expression:
         initial: Mapping[str, Any] | None = None,
         method: str = "BFGS",
         options: Mapping[str, Any] | None = None,
+        num_nodes: int | None = None,
     ):
         """Fit named and grouped parameters against a target array.
 
@@ -195,13 +199,17 @@ class Expression:
             initial: Optional initial parameter values.
             method: Optimization method name.
             options: Optional optimizer settings.
+            num_nodes: Explicit node count for indexed expressions.
 
         Returns:
             The fitted expression, parameter values, predictions, and loss.
         """
         from .optimize import fit
 
-        return fit(self, values, target, initial=initial, method=method, options=options)
+        return fit(
+            self, values, target, initial=initial, method=method,
+            options=options, num_nodes=num_nodes,
+        )
 
     def fold_constants(self) -> Expression:
         """Return a copy with closed numerical subexpressions evaluated.
@@ -311,6 +319,13 @@ class Reduction(Expression):
     indices: tuple[Index, ...]
     operand: Expression
     relation: Expression | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Gather(Expression):
+    """Weighted collection of a structural expression on relation entries."""
+    relation: Expression
+    operand: Expression
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +447,19 @@ def reduction(
         as_expression(operand),
         None if relation is None else as_expression(relation),
     )
+
+
+def gather(relation: Any, operand: Any) -> Gather:
+    """Collect structural values at the nonzero entries of a relation.
+
+    Args:
+        relation: Indexed relation or relation-valued expression.
+        operand: Structural expression evaluated at relation coordinates.
+
+    Returns:
+        A relation-aligned symbolic field.
+    """
+    return Gather(as_expression(relation), as_expression(operand))
 
 
 def aggr(relation: Any, operand: Any = None) -> Expression:

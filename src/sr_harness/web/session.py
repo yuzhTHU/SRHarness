@@ -357,7 +357,14 @@ class InteractiveSession:
 
     @contextmanager
     def temporary_proxy(self, proxy: str):
-        """Temporarily expose a proxy to provider clients during a model test."""
+        """Temporarily expose a proxy to provider clients during a model test.
+
+        Args:
+            proxy: Validated proxy URL, or an empty string to disable proxying.
+
+        Yields:
+            Control while the temporary environment is active.
+        """
         names = ("MY_PROXY", "my_proxy", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY")
         previous = {name: os.environ.get(name) for name in names}
         try:
@@ -659,21 +666,9 @@ class InteractiveSession:
         if missing:
             raise ValueError(f"Selected variables or axes do not exist: {missing}")
         arrays = {name: np.asarray(value) for name, value in selected.items()}
-        if any(value.ndim != 1 for value in arrays.values()):
-            raise ValueError("Selected variables and axes must be one-dimensional")
-        if len({len(value) for value in arrays.values()}) != 1:
-            raise ValueError("Selected variables and axes must have the same length")
-        try:
-            numeric = {
-                name: value.astype(float, copy=False) for name, value in arrays.items()
-            }
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Selected target and features must be numeric") from exc
-        if any(not np.isfinite(value).all() for value in numeric.values()):
-            raise ValueError("Selected target and features must contain finite values")
         return (
-            {name: numeric[name] for name in features},
-            {target: numeric[target]},
+            {name: arrays[name] for name in features},
+            {target: arrays[target]},
         )
 
     @staticmethod

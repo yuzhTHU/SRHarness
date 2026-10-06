@@ -391,6 +391,14 @@ Execute independent tool calls in worker processes.
 
 Turn workspace and web evidence into the shared structured dataset.
 
+#### `DataPreparationAgent.reset_stop(self) -> None`
+
+Clear a previous stop request before starting another user turn.
+
+#### `DataPreparationAgent.request_stop(self) -> None`
+
+Request cooperative cancellation at the next safe boundary.
+
 #### `DataPreparationAgent.initialize_tools(self, context: AgentContext) -> None`
 
 Bind configured skills before constructing context-aware tools.
@@ -1633,6 +1641,24 @@ Add aligned feature columns and create a new data revision.
 
     A description of the committed revision and column changes.
 
+#### `AgentContext.commit_context_data(self, data: ContextData) -> dict[str, Any]`
+
+Replace structured variables with a validated manifest-backed collection.
+
+Existing target and feature selections are retained only while their
+variables still exist. Axis metadata remains attached to ``data`` and is
+also exposed directly on the context for tools that need it.
+
+
+**Args**
+
+- `data`: Validated variables and axes loaded by ``ContextDataStore``.
+
+
+**Returns**
+
+    A description of the committed revision and variable changes.
+
 #### `AgentContext.bind_split(self, training_data: dict[str, Any], evaluation_data: dict[str, Any]) -> None`
 
 Bind the split consumed by symbolic-regression tools.
@@ -1643,6 +1669,22 @@ Bind the split consumed by symbolic-regression tools.
 - `training_data`: Data exposed to fitting tools.
 - `evaluation_data`: Held-out data exposed to evaluation tools.
 
+#### `AgentContext.update_selection(self, *, target: str, features: list[str], variable_descriptions: dict[str, str] | None=None) -> dict[str, Any]`
+
+Update the variables consumed by symbolic regression.
+
+
+**Args**
+
+- `target`: Name of the selected target variable or axis.
+- `features`: Ordered names of selected feature variables or axes.
+- `variable_descriptions`: Updated human-readable descriptions.
+
+
+**Returns**
+
+    A description of the resulting data revision.
+
 #### `AgentContext.schema(self) -> dict[str, Any]`
 
 Return the current structured-data schema.
@@ -1651,6 +1693,55 @@ Return the current structured-data schema.
 **Returns**
 
     Column names, roles, row count, revision, descriptions, and provenance.
+
+## `sr_harness.core.context_data`
+
+### `sr_harness.core.context_data.ContextManifestError`
+
+Raised when a context-data manifest cannot be validated.
+
+### `sr_harness.core.context_data.ContextAxis`
+
+One named axis shared by one or more structured variables.
+
+
+**Args**
+
+- `name`: Logical axis name used by variable declarations.
+- `values`: Coordinate values, including generated positional coordinates.
+- `description`: Human-readable meaning and units.
+- `storage`: Manifest representation: ``values``, ``file``, or ``size``.
+
+### `sr_harness.core.context_data.ContextData`
+
+Array mapping enriched with variable descriptions and named axes.
+
+### `sr_harness.core.context_data.ContextDataStore`
+
+Validate and load a flat NPY collection described by ``manifest.json``.
+
+#### `ContextDataStore.inspect(self) -> dict[str, Any]`
+
+Validate the store and return diagnostics without raising.
+
+
+**Returns**
+
+    A serializable report containing errors, warnings, and array summaries.
+
+#### `ContextDataStore.load(self) -> ContextData`
+
+Validate and load all variables and axes.
+
+
+**Returns**
+
+    A mapping of variable names to arrays with attached axis metadata.
+
+
+**Raises**
+
+- `ContextManifestError`: If the manifest or referenced arrays are invalid.
 
 ## `sr_harness.core.search`
 
@@ -3996,6 +4087,45 @@ Format a tool result for the language model.
 
 - `str`: The operation result.
 
+## `sr_harness.tools.load_context_data`
+
+### `sr_harness.tools.load_context_data.LoadContextDataTool`
+
+Implementation of the context-data validation and loading boundary.
+
+#### `LoadContextDataTool.execute(self, path: str='context.data') -> dict[str, Any]`
+
+Validate a context-data manifest and load it when valid.
+
+The directory must contain ``manifest.json`` and a flat collection of
+NPY files. This tool reports every detected manifest, filename, dtype,
+dimension, and axis-length problem in one call. A valid collection is
+atomically published as ``context.data`` for subsequent tools and agents.
+
+
+**Args**
+
+- `path`: Workspace-relative directory containing ``manifest.json``.
+
+
+**Returns**
+
+    Validation diagnostics and the committed context revision when valid.
+
+#### `LoadContextDataTool.format_result_dict(cls, result: dict[str, Any]) -> str`
+
+Format validation diagnostics for the language model.
+
+
+**Args**
+
+- `result`: Structured validation and commit result.
+
+
+**Returns**
+
+    Concise diagnostics or a loaded-variable summary.
+
 ## `sr_harness.tools.nd2`
 
 ### `sr_harness.tools.nd2.ND2Tool`
@@ -4689,6 +4819,54 @@ Return read-only workspace entries and their source paths.
 
     A copy of the logical-to-source mount mapping.
 
+#### `Workspace.is_readonly_mount(self, path: Path) -> bool`
+
+Return whether a path belongs to a startup read-only mount.
+
+
+**Args**
+
+- `path`: Resolved logical path inside the workspace.
+
+
+**Returns**
+
+    Whether the path is a mount root or one of its descendants.
+
+#### `Workspace.is_locked(path: Path) -> bool`
+
+Return whether the owner write bit is disabled for a workspace item.
+
+
+**Args**
+
+- `path`: Existing file or directory.
+
+
+**Returns**
+
+    Whether the item is marked read-only with filesystem permissions.
+
+#### `Workspace.set_locked(self, relative_path: str, locked: bool) -> Path`
+
+Set a file or directory tree's advisory filesystem lock.
+
+
+**Args**
+
+- `relative_path`: Workspace-relative file or directory path.
+- `locked`: Remove write bits when true; restore owner write access when false.
+
+
+**Returns**
+
+    The affected workspace path.
+
+
+**Raises**
+
+- `ValueError`: If the path is invalid, missing, or belongs to a startup mount.
+
 #### `Workspace.resolve(self, relative_path: str, *, write: bool=False) -> Path | None`
 
 Resolve a relative path inside the workspace.
@@ -4873,6 +5051,43 @@ Atomically update the project dotenv file and this server process.
 - `provider`: The provider value.
 - `api_key`: The api key value.
 
+#### `InteractiveSession.set_proxy(self, proxy: str) -> None`
+
+Persist the optional model proxy and update this server process.
+
+
+**Args**
+
+- `proxy`: Proxy URL, or an empty string to clear the configured proxy.
+
+#### `InteractiveSession.validate_proxy(proxy: str) -> str`
+
+Validate and normalize an optional HTTP or SOCKS proxy URL.
+
+
+**Args**
+
+- `proxy`: Proxy URL supplied by the Web UI.
+
+
+**Returns**
+
+    The stripped URL, or an empty string when proxying is disabled.
+
+#### `InteractiveSession.temporary_proxy(self, proxy: str)`
+
+Temporarily expose a proxy to provider clients during a model test.
+
+
+**Args**
+
+- `proxy`: Validated proxy URL, or an empty string to disable proxying.
+
+
+**Yields**
+
+    Control while the temporary environment is active.
+
 #### `InteractiveSession.validate_setting_dependencies(settings)`
 
 Validate setting dependencies.
@@ -4900,6 +5115,15 @@ Continue the persistent data-agent conversation in the background.
 
 - `instruction`: Natural-language instruction for the agent.
 
+#### `InteractiveSession.stop_data_preparation(self)`
+
+Request cancellation of the active data-preparation turn.
+
+
+**Returns**
+
+    Updated session state showing that cancellation is pending.
+
 #### `InteractiveSession.preview_initial_prompts(self, payload)`
 
 Run the ``preview initial prompts`` operation.
@@ -4920,7 +5144,17 @@ Validate variable descriptions.
 
 #### `InteractiveSession.create_demo(self)`
 
-Create demo.
+Create and load a manifest-backed sample dataset.
+
+
+**Returns**
+
+    Path to the newly created ``context.data`` directory.
+
+
+**Raises**
+
+- `FileExistsError`: If ``context.data`` already exists and is not empty.
 
 #### `InteractiveSession.validate_settings(payload, initial=False)`
 
@@ -4949,6 +5183,20 @@ Run the ``configure data agent`` operation.
 **Args**
 
 - `payload`: Serializable event payload.
+
+#### `InteractiveSession.test_data_agent_model(self, payload)`
+
+Test plain completion and tool-call support without changing agent history.
+
+
+**Args**
+
+- `payload`: Data-agent settings currently entered in the Web UI.
+
+
+**Returns**
+
+    Connectivity and parsed tool-call diagnostics.
 
 #### `InteractiveSession.configure(self, payload)`
 

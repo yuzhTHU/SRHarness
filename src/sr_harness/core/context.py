@@ -301,17 +301,6 @@ class AgentContext(MutableMapping[str, Any]):
         missing = [name for name, array in selected.items() if array is None]
         if missing:
             raise ValueError(f"selected variables or axes do not exist: {missing}")
-        arrays = {name: array for name, array in selected.items() if array is not None}
-        if any(array.ndim != 1 for array in arrays.values()):
-            raise ValueError("selected variables and axes must be one-dimensional")
-        if len({len(array) for array in arrays.values()}) != 1:
-            raise ValueError("selected variables and axes must have the same length")
-        try:
-            numeric = [array.astype(float, copy=False) for array in arrays.values()]
-        except (TypeError, ValueError) as exc:
-            raise ValueError("selected target and features must be numeric") from exc
-        if any(not np.isfinite(array).all() for array in numeric):
-            raise ValueError("selected target and features must contain finite values")
 
         descriptions = dict(variable_descriptions or {})
         available = set(self.data) | set(self.axes)

@@ -5,6 +5,7 @@ from .expression import (
     Binary,
     Expression,
     Function,
+    Gather,
     GroupedParameter,
     Index,
     Indexed,
@@ -16,6 +17,7 @@ from .expression import (
     Variable,
     aggr,
     function,
+    gather,
     grouped_param,
     param,
     reduction,
@@ -25,6 +27,7 @@ from .expression import (
 from .analysis import count_parameters, fold_constants
 from .desugar import desugar
 from .optimize import FitResult, fit
+from .indexed_evaluation import RelationField
 from .parser import parse
 from .render import render
 
@@ -70,11 +73,13 @@ def delay(value, delta):
 
 
 __all__ = [
-    "Aggregate", "Binary", "Expression", "FitResult", "Function", "GroupedParameter",
-    "Index", "Indexed", "Number", "Parameter", "Reduction", "RelationLift", "Symbol",
+    "Aggregate", "Binary", "Expression", "FitResult", "Function", "Gather",
+    "GroupedParameter",
+    "Index", "Indexed", "Number", "Parameter", "Reduction", "RelationField",
+    "RelationLift", "Symbol",
     "Variable", "abs", "aggr", "arccos", "arcsin", "arctan", "cos", "cosh",
     "cot", "count_parameters", "csc", "delay", "desugar", "exp", "fit",
-    "fold_constants", "function", "grouped_param", "inv", "log", "log10",
+    "fold_constants", "function", "gather", "grouped_param", "inv", "log", "log10",
     "param", "parse", "reduction", "render", "sec", "sech", "sigmoid", "sign", "sin",
     "sinh", "sour", "sqrt", "tan", "tanh", "targ",
 ]

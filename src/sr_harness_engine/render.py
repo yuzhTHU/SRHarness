@@ -7,6 +7,7 @@ from .expression import (
     Binary,
     Expression,
     Function,
+    Gather,
     GroupedParameter,
     Indexed,
     Number,
@@ -109,6 +110,12 @@ def render(
         if latex:
             return f"\\sum_{{{indices}; {relation}}} {operand}"
         return f"sum[{indices}]({relation}, {operand})"
+    if isinstance(expression, Gather):
+        relation = render(expression.relation, latex=latex, number_format=number_format)
+        operand = render(expression.operand, latex=latex, number_format=number_format)
+        if latex:
+            return f"\\operatorname{{gather}}\\left({relation}, {operand}\\right)"
+        return f"gather({relation}, {operand})"
     if isinstance(expression, Aggregate):
         from .desugar import desugar
 

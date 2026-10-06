@@ -13,6 +13,7 @@ from .expression import (
     Binary,
     Expression,
     Function,
+    Gather,
     GroupedParameter,
     Index,
     Indexed,
@@ -168,6 +169,10 @@ class ExpressionParser(ast.NodeVisitor):
             if node.keywords or len(node.args) != 2:
                 raise ValueError("delay(value, delta) expects exactly two arguments.")
             return Function(name, tuple(self.visit(argument) for argument in node.args))
+        if name == "gather":
+            if node.keywords or len(node.args) != 2:
+                raise ValueError("gather(relation, expression) expects exactly two arguments.")
+            return Gather(self.visit(node.args[0]), self.visit(node.args[1]))
         if name == "Number":
             if node.keywords or len(node.args) != 1:
                 raise ValueError("Number(...) expects exactly one numerical literal.")

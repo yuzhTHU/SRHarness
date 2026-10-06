@@ -126,34 +126,39 @@ def mount_platform(app, session: InteractiveSession):
             ] + [
                 name for name in matching_axes if name not in referenced_axes
             ]
-            columns = [*axis_names, *names]
+            preview_columns = [*axis_names, *names]
+            columns = [
+                *session.context.axes,
+                *(name for name in session.context.data if name not in session.context.axes),
+            ]
             arrays = {
                 **{name: session.context.axes[name].values for name in axis_names},
                 **{name: session.context.data[name] for name in names},
             }
             count = min(total, rows)
             records = [
-                {name: json_value(arrays[name][index]) for name in columns}
+                {name: json_value(arrays[name][index]) for name in preview_columns}
                 for index in range(count)
             ]
             descriptions = {
                 **{
                     name: session.context.variable_descriptions.get(
-                        name, session.context.axes[name].description,
+                        name, axis.description,
                     )
-                    for name in axis_names
+                    for name, axis in session.context.axes.items()
                 },
                 **{
                     name: session.context.variable_descriptions.get(name, "")
-                    for name in names
+                    for name in session.context.data
                 },
             }
         return {
             **json_value(schema),
             "columns": columns,
+            "preview_columns": preview_columns,
             "column_kinds": {
-                **{name: "axis" for name in axis_names},
-                **{name: "variable" for name in names},
+                **{name: "axis" for name in session.context.axes},
+                **{name: "variable" for name in session.context.data},
             },
             "rows": total,
             "variable_descriptions": descriptions,

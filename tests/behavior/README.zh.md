@@ -14,6 +14,7 @@ pytest -q tests/behavior
 - `test_basic_expressions.py`：表达式构造、解析、渲染、广播和常见函数；
 - `test_parameters.py`：命名参数、共享参数、参数拟合和类别参数；
 - `test_relations.py`：全局指标求和、网络、超图及 `aggr/targ/sour`；
+- `test_gather.py`：多自由指标稠密结果和关系条目 `gather`；
 - `test_delay.py`：默认时延插值和自定义历史查询；
 - `test_language_boundaries.py`：安全解析、缺失值错误和表达式树查看。
 

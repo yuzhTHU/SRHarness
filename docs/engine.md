@@ -83,13 +83,44 @@ sum[j](A[i, j], x[i] * x[j])
 
 `A[i, j]` 把第 0 列绑定到目标指标 `i`，第 1 列绑定到源指标 `j`。`sum[j]` 消去源指标，并按仍自由的 `i` 聚合。
 
+求值时必须显式指定 `num_nodes`，因此关系表没有覆盖的孤立节点不会丢失：
+
+```python
+prediction = expression.evaluate(data, num_nodes=10)
+```
+
+指标表达式总把最后一维作为结构维：节点变量是 `(..., N)`，边字段是 `(..., E)`，超边字段是 `(..., H)`，前导维遵循 NumPy 广播。非单例结构变量必须显式索引。
+
+最终表达式保留的自由指标依次成为稠密结构轴。例如 `x[i] + x[j]` 返回 `(..., N, N)`，三个自由指标返回 `(..., N, N, N)`。
+
 超图使用同一套语言：
 
 ```text
 sum[j, k](T[i, j, k], x[i] * x[j] * x[k])
 ```
 
-求和域和被求和的消息是两个独立参数。关系表只绑定指标，不作为数值 1 乘入表达式树，因此求值器无需从任意乘法树中猜测关系。
+双参数求和在数学上满足 `sum[j](relation, expression) == sum[j](relation * expression)`。前一种形式明确指出稀疏关系，使求值器只计算关系所需的表达式分量。
+
+关系参数支持代数运算。`A1[i, j] + A2[i, j]` 在重叠坐标处取值 2；`A1[i, j] * A2[i, j]` 在交集外取值 0。`A[i, j] + 1`、`exp(A[i, j])` 等具有非零背景值的结果使用 `fill_value` 加稀疏例外坐标表示，不会构造稠密 `N × N` 数组。关系表中的重复坐标按二元关系集合语义去重；重边强度应作为关系字段提供。
+
+### `gather` 关系收集
+
+`gather` 在关系的非零坐标上求值，并将关系值乘入结果：
+
+```text
+gather(A[i, j], x[i] + x[j])
+gather(T[i, j, k], x[i] * x[j] * x[k])
+```
+
+它们分别返回 `(..., E)` 和 `(..., H)`。操作数的自由指标可以是关系指标的子集，例如 `gather(A[i, j], x[i])` 沿另一指标广播。结果支持普通算术与函数，也能通过完整指标重新提升到结构域：
+
+```text
+2 * gather(A[i, j], x[i] + x[j])
+sin(gather(A[i, j], x[i] + x[j]))
+sum[i](A[i, j], gather(A[i, j], x[i] + x[j])[i, j] * x[i] * x[j])
+```
+
+直接关系的输出与关系表行顺序一致；复合关系按坐标字典序输出非零元素。具有非零 `fill_value` 的关系可能产生 `N^r` 个非零条目。
 
 ### 边权与关系字段
 
@@ -100,10 +131,10 @@ sum[j](A[i, j], w[i, j] * x[i] * x[j])
 `w[i, j]` 表示按 `A` 的行顺序对齐的关系字段：
 
 - `w.shape == (E,)`：每条边一个权重；
-- `w.shape == (N, E)`：每个样本或通道、每条边一个权重；
+- `w.shape == (..., E)`：每个前导样本或通道、每条边一个权重；
 - 最后一维必须等于关系行数 `E`。
 
-这种表示保留稀疏 edge list，无需构造节点数平方大小的稠密权重矩阵。
+这种表示保留稀疏 edge list，无需构造节点数平方大小的稠密权重矩阵。存在多个可能的关系时，可用 `RelationField(w, relation="A")` 明确边字段对应的坐标表。
 
 ### 全局求和
 
@@ -113,6 +144,8 @@ sum[j](A[i, j], w[i, j] * x[i] * x[j])
 sum[k](x[k])
 x[i] + sum[j](A[i, j], x[i] * sum[k](x[k]) * x[j])
 ```
+
+显式嵌套的 `sum` 不允许重新绑定仍在外层作用域中的同名指标；应将 `sum[j](... sum[j](...) ...)` 的内层指标改为 `k`。嵌套 `aggr` 在展开语法糖时会自动产生新指标。
 
 ### `aggr/targ/sour` 语法糖
 
@@ -328,7 +361,7 @@ Iterate over an expression tree in preorder.
 
     Expression nodes in parent-before-children order.
 
-### `sr_harness_engine.evaluation.evaluate(expression: Expression, values: Mapping[str, Any] | None=None, *, parameters: Mapping[str, Any] | None=None, time: Any=None, delay_resolver: Callable[..., Any] | None=None) -> Any`
+### `sr_harness_engine.evaluation.evaluate(expression: Expression, values: Mapping[str, Any] | None=None, *, parameters: Mapping[str, Any] | None=None, time: Any=None, delay_resolver: Callable[..., Any] | None=None, num_nodes: int | None=None) -> Any`
 
 Evaluate an expression without executing arbitrary Python code.
 
@@ -340,6 +373,7 @@ Evaluate an expression without executing arbitrary Python code.
 - `parameters`: Fitted parameter values keyed by parameter name.
 - `time`: Optional sample times.
 - `delay_resolver`: Optional callback that resolves delayed values.
+- `num_nodes`: Explicit node count for indexed expressions.
 
 
 **Returns**
@@ -352,7 +386,7 @@ Evaluate an expression without executing arbitrary Python code.
 
 Base class of every symbolic expression node.
 
-#### `Expression.evaluate(self, values: Mapping[str, Any] | None=None, *, parameters: Mapping[str, Any] | None=None, time: Any=None, delay_resolver: Any=None) -> Any`
+#### `Expression.evaluate(self, values: Mapping[str, Any] | None=None, *, parameters: Mapping[str, Any] | None=None, time: Any=None, delay_resolver: Any=None, num_nodes: int | None=None) -> Any`
 
 Evaluate this expression with NumPy values.
 
@@ -363,6 +397,7 @@ Evaluate this expression with NumPy values.
 - `parameters`: Fitted parameter values keyed by parameter name.
 - `time`: Optional sample times.
 - `delay_resolver`: Optional callback that resolves delayed values.
+- `num_nodes`: Explicit node count for indexed expressions.
 
 
 **Returns**
@@ -442,7 +477,7 @@ Render a compact preorder tree for diagnostics.
 
     A multiline representation of the expression tree.
 
-#### `Expression.fit(self, values: Mapping[str, Any], target: Any, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None)`
+#### `Expression.fit(self, values: Mapping[str, Any], target: Any, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None, num_nodes: int | None=None)`
 
 Fit named and grouped parameters against a target array.
 
@@ -454,6 +489,7 @@ Fit named and grouped parameters against a target array.
 - `initial`: Optional initial parameter values.
 - `method`: Optimization method name.
 - `options`: Optional optimizer settings.
+- `num_nodes`: Explicit node count for indexed expressions.
 
 
 **Returns**
@@ -523,6 +559,10 @@ Expression annotated with symbolic indices.
 ### `sr_harness_engine.expression.Reduction`
 
 Sum reduction with an optional relation binder.
+
+### `sr_harness_engine.expression.Gather`
+
+Weighted collection of a structural expression on relation entries.
 
 ### `sr_harness_engine.expression.Aggregate`
 
@@ -623,6 +663,21 @@ Create an indexed sum reduction.
 
     A symbolic reduction node.
 
+### `sr_harness_engine.expression.gather(relation: Any, operand: Any) -> Gather`
+
+Collect structural values at the nonzero entries of a relation.
+
+
+**Args**
+
+- `relation`: Indexed relation or relation-valued expression.
+- `operand`: Structural expression evaluated at relation coordinates.
+
+
+**Returns**
+
+    A relation-aligned symbolic field.
+
 ### `sr_harness_engine.expression.aggr(relation: Any, operand: Any=None) -> Expression`
 
 Build and lower target-wise graph aggregation syntax.
@@ -666,13 +721,57 @@ Project node values onto relation sources inside ``aggr``.
 
     A source projection used by aggregation desugaring.
 
+## `sr_harness_engine.indexed_evaluation`
+
+### `sr_harness_engine.indexed_evaluation.RelationField`
+
+Values stored on the entries of a named relation.
+
+
+**Args**
+
+- `values`: Array whose last dimension enumerates relation entries.
+- `relation`: Name of the coordinate-table symbol defining those entries.
+
+### `sr_harness_engine.indexed_evaluation.IndexedEvaluator`
+
+Evaluate indexed expressions against a fixed structural demand.
+
+#### `IndexedEvaluator.free_indices(self, node: Expression) -> tuple[str, ...]`
+
+Return free structural indices in stable expression order.
+
+
+**Args**
+
+- `node`: Expression subtree to inspect.
+
+
+**Returns**
+
+    Index names not bound by a reduction in this subtree.
+
+#### `IndexedEvaluator.relation_domain(self, node: Expression) -> Expression | None`
+
+Return the relation whose entry axis is carried by an expression.
+
+
+**Args**
+
+- `node`: Expression subtree to inspect.
+
+
+**Returns**
+
+    The relation expression defining the entry axis, if present.
+
 ## `sr_harness_engine.optimize`
 
 ### `sr_harness_engine.optimize.FitResult`
 
 Result of fitting an expression to target observations.
 
-#### `FitResult.evaluate(self, values: Mapping[str, Any], *, time: Any=None, delay_resolver: Any=None)`
+#### `FitResult.evaluate(self, values: Mapping[str, Any], *, time: Any=None, delay_resolver: Any=None, num_nodes: int | None=None)`
 
 Evaluate the supplied model or expression.
 
@@ -682,13 +781,14 @@ Evaluate the supplied model or expression.
 - `values`: Values keyed by symbol name.
 - `time`: Optional sample times.
 - `delay_resolver`: Optional callback that resolves delayed values.
+- `num_nodes`: Explicit node count for indexed expressions.
 
 
 **Returns**
 
     Predictions from the fitted expression.
 
-### `sr_harness_engine.optimize.fit(expression: Expression, values: Mapping[str, Any], target: Any, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None) -> FitResult`
+### `sr_harness_engine.optimize.fit(expression: Expression, values: Mapping[str, Any], target: Any, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None, num_nodes: int | None=None) -> FitResult`
 
 Minimize mean squared error and return fitted parameter values.
 
@@ -701,6 +801,7 @@ Minimize mean squared error and return fitted parameter values.
 - `initial`: Optional initial parameter values.
 - `method`: Optimization method name.
 - `options`: Optional optimizer settings.
+- `num_nodes`: Explicit node count for indexed expressions.
 
 
 **Returns**

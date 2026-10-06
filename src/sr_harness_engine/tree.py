@@ -9,6 +9,7 @@ from .expression import (
     Binary,
     Expression,
     Function,
+    Gather,
     GroupedParameter,
     Indexed,
     Reduction,
@@ -36,6 +37,8 @@ def children(node: Expression) -> tuple[Expression, ...]:
         return (node.base,)
     if isinstance(node, Reduction):
         return (node.operand,) if node.relation is None else (node.relation, node.operand)
+    if isinstance(node, Gather):
+        return (node.relation, node.operand)
     if isinstance(node, Aggregate):
         return (node.relation, node.operand)
     if isinstance(node, RelationLift):
@@ -68,6 +71,8 @@ def with_children(node: Expression, values: tuple[Expression, ...]) -> Expressio
     if isinstance(node, Reduction):
         if node.relation is None:
             return dataclass_replace(node, operand=values[0])
+        return dataclass_replace(node, relation=values[0], operand=values[1])
+    if isinstance(node, Gather):
         return dataclass_replace(node, relation=values[0], operand=values[1])
     if isinstance(node, Aggregate):
         return dataclass_replace(node, relation=values[0], operand=values[1])

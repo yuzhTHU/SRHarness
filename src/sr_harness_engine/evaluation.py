@@ -45,14 +45,27 @@ class Evaluator:
         time: Any,
         delay_resolver: Callable[..., Any] | None,
         expression: Expression,
+        num_nodes: int | None = None,
     ):
         self.values = dict(values or {})
         self.parameters = dict(parameters or {})
         self.time = None if time is None else np.asarray(time, dtype=float)
         self.delay_resolver = delay_resolver
         self.parameter_defaults = self._parameter_defaults(expression)
+        self.num_nodes = num_nodes
 
     def __call__(self, expression: Expression) -> Any:
+        if any(isinstance(node, Indexed) for node in walk(expression)):
+            from .indexed_evaluation import IndexedEvaluator
+
+            return IndexedEvaluator(
+                self.values,
+                self.parameters,
+                self.parameter_defaults,
+                self.num_nodes,
+                self.time,
+                self.delay_resolver,
+            )(expression)
         return self._eval(expression, None)
 
     def _eval(self, node: Expression, scope: _RelationScope | None) -> Any:
@@ -392,6 +405,7 @@ def evaluate(
     parameters: Mapping[str, Any] | None = None,
     time: Any = None,
     delay_resolver: Callable[..., Any] | None = None,
+    num_nodes: int | None = None,
 ) -> Any:
     """Evaluate an expression without executing arbitrary Python code.
 
@@ -401,8 +415,9 @@ def evaluate(
         parameters: Fitted parameter values keyed by parameter name.
         time: Optional sample times.
         delay_resolver: Optional callback that resolves delayed values.
+        num_nodes: Explicit node count for indexed expressions.
 
     Returns:
         The evaluated scalar or NumPy array.
     """
-    return Evaluator(values, parameters, time, delay_resolver, expression)(expression)
+    return Evaluator(values, parameters, time, delay_resolver, expression, num_nodes)(expression)

@@ -291,9 +291,11 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
     session.context.commit_context_data(ContextDataStore(directory).load())
 
     preview = client.get('/api/data/context').json()
-    assert preview['columns'] == ['sample', 'x', 'y']
+    assert preview['columns'] == ['sample', 'edge', 'endpoint', 'x', 'y', 'A']
+    assert preview['preview_columns'] == ['sample', 'x', 'y']
     assert preview['column_kinds'] == {
-        'sample': 'axis', 'x': 'variable', 'y': 'variable',
+        'sample': 'axis', 'edge': 'axis', 'endpoint': 'axis',
+        'x': 'variable', 'y': 'variable', 'A': 'variable',
     }
     assert preview['rows'] == 3
     assert preview['variables']['A']['shape'] == [2, 2]
@@ -309,6 +311,67 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
     })
     assert prompts.status_code == 200, prompts.text
     assert "Feature names: ['sample', 'x']" in prompts.json()['user_prompt']
+
+
+def test_context_data_roles_accept_multidimensional_network_variables(platform):
+    client, session = platform
+    directory = session.workspace / 'context.data'
+    directory.mkdir()
+    (directory / 'manifest.json').write_text(json.dumps({
+        'variables': {
+            'theta': {
+                'file': 'theta.npy', 'description': 'Node phases.',
+                'axes': ['time', 'node'],
+            },
+            'omega': {
+                'file': 'omega.npy', 'description': 'Natural frequencies.',
+                'axes': ['time', 'node'],
+            },
+            'A': {
+                'file': 'A.npy', 'description': 'Directed edge list.',
+                'axes': ['edge', 'endpoint'],
+            },
+            'dtheta_dt': {
+                'file': 'dtheta_dt.npy', 'description': 'Phase derivatives.',
+                'axes': ['time', 'node'],
+            },
+        },
+        'axes': {
+            'time': {'values': [0.0, 0.1, 0.2], 'description': 'Time.'},
+            'node': {'size': 2, 'description': 'Node index.'},
+            'edge': {'size': 2, 'description': 'Edge index.'},
+            'endpoint': {
+                'values': ['target', 'source'], 'description': 'Endpoint order.',
+            },
+        },
+    }))
+    np.save(directory / 'theta.npy', np.zeros((3, 2)))
+    np.save(directory / 'omega.npy', np.ones((3, 2)))
+    np.save(directory / 'A.npy', np.array([[0, 1], [1, 0]]))
+    np.save(directory / 'dtheta_dt.npy', np.full((3, 2), 2.0))
+    session.context.commit_context_data(ContextDataStore(directory).load())
+
+    preview = client.get('/api/data/context').json()
+    assert preview['columns'] == [
+        'time', 'node', 'edge', 'endpoint',
+        'theta', 'omega', 'A', 'dtheta_dt',
+    ]
+    assert preview['preview_columns'] == []
+    assert preview['data'] == []
+
+    response = client.put('/api/data/selection', json={
+        'target': 'dtheta_dt',
+        'features': ['theta', 'omega', 'A'],
+    })
+    assert response.status_code == 200, response.text
+    X, y = session._select_context_columns(
+        session.context.target, session.context.features,
+    )
+    assert {name: value.shape for name, value in X.items()} == {
+        'theta': (3, 2), 'omega': (3, 2), 'A': (2, 2),
+    }
+    assert y['dtheta_dt'].shape == (3, 2)
+    assert X['A'].dtype == np.dtype('int64')
 
 
 def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypatch):

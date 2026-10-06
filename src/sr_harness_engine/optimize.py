@@ -22,19 +22,24 @@ class FitResult:
     message: str
     n_iter: int
 
-    def evaluate(self, values: Mapping[str, Any], *, time: Any = None, delay_resolver: Any = None):
+    def evaluate(
+        self, values: Mapping[str, Any], *, time: Any = None,
+        delay_resolver: Any = None, num_nodes: int | None = None,
+    ):
         """Evaluate the supplied model or expression.
 
         Args:
             values: Values keyed by symbol name.
             time: Optional sample times.
             delay_resolver: Optional callback that resolves delayed values.
+            num_nodes: Explicit node count for indexed expressions.
 
         Returns:
             Predictions from the fitted expression.
         """
         return self.expression.evaluate(
-            values, parameters=self.parameters, time=time, delay_resolver=delay_resolver
+            values, parameters=self.parameters, time=time,
+            delay_resolver=delay_resolver, num_nodes=num_nodes,
         )
 
     predict = evaluate
@@ -48,6 +53,7 @@ def fit(
     initial: Mapping[str, Any] | None = None,
     method: str = "BFGS",
     options: Mapping[str, Any] | None = None,
+    num_nodes: int | None = None,
 ) -> FitResult:
     """Minimize mean squared error and return fitted parameter values.
 
@@ -58,6 +64,7 @@ def fit(
         initial: Optional initial parameter values.
         method: Optimization method name.
         options: Optional optimizer settings.
+        num_nodes: Explicit node count for indexed expressions.
 
     Returns:
         Fitted parameters, expression, predictions, and loss.
@@ -100,7 +107,7 @@ def fit(
             specs.append((key, label))
 
     if not specs:
-        prediction = np.asarray(expression.evaluate(values), dtype=float)
+        prediction = np.asarray(expression.evaluate(values, num_nodes=num_nodes), dtype=float)
         loss = float(np.mean((prediction - target) ** 2))
         return FitResult(expression, {}, loss, True, "No parameters to optimize.", 0)
 
@@ -116,7 +123,8 @@ def fit(
     def objective(raw: np.ndarray) -> float:
         try:
             prediction = np.asarray(
-                expression.evaluate(values, parameters=unpack(raw)), dtype=float
+                expression.evaluate(values, parameters=unpack(raw), num_nodes=num_nodes),
+                dtype=float,
             )
             if prediction.shape != target.shape:
                 prediction = np.broadcast_to(prediction, target.shape)
