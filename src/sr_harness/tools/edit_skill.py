@@ -5,6 +5,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("edit_skill")
 class EditSkill(BaseTool):
+    """Implementation of the edit skill."""
     metadata = ToolMetadata(name="edit_skill")
     SEARCH_MARKER = "<<<<<<< SEARCH"
     SEPARATOR_MARKER = "======="
@@ -54,6 +55,14 @@ class EditSkill(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = (
             f"Edited skill {result['skill']!r}: "
             f"Detected {result['requested_replacements']} requested replacements, "

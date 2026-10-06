@@ -37,6 +37,7 @@ class _RelationScope:
 
 
 class Evaluator:
+    """NumPy expression-tree evaluator."""
     def __init__(
         self,
         values: Mapping[str, Any] | None,
@@ -149,12 +150,22 @@ class Evaluator:
     def _indexed(self, node: Indexed, scope: _RelationScope | None) -> Any:
         value = np.asarray(self._eval(node.base, None))
         names = tuple(index.name for index in node.indices)
-        if scope is not None and isinstance(node.base, Symbol) and node.base.name == scope.name:
+        if scope is not None and len(names) > 1:
             if names != scope.indices:
                 raise ValueError(
-                    f"Relation {scope.name!r} is bound as {scope.indices}, not {names}."
+                    f"Relation fields must use bound indices {scope.indices}, not {names}."
                 )
-            return np.ones(len(scope.table), dtype=float)
+            if isinstance(node.base, Symbol) and node.base.name == scope.name:
+                return np.ones(len(scope.table), dtype=float)
+            edge_count = len(scope.table)
+            if value.ndim == 1 and value.shape[0] == edge_count:
+                return value
+            if value.ndim > 1 and value.shape[-1] == edge_count:
+                return np.moveaxis(value, -1, 0)
+            raise ValueError(
+                f"Relation field {node.base!s} must have an edge axis of length "
+                f"{edge_count} in its last dimension."
+            )
         if scope is not None and len(names) == 1 and names[0] in scope.bindings:
             return value[scope.bindings[names[0]]]
         if len(names) > value.ndim:
@@ -165,10 +176,15 @@ class Evaluator:
         return value
 
     def _reduction(self, node: Reduction) -> Any:
-        scope = self._find_relation_scope(node.operand)
+        scope = self._relation_scope(node.relation) if node.relation is not None else None
         value = np.asarray(self._eval(node.operand, scope))
         reduced = {index.name for index in node.indices}
         if scope is None:
+            if self._find_relation_scope(node.operand) is not None:
+                raise ValueError(
+                    "Pass the relation separately, for example "
+                    "sum[j](A[i, j], expression)."
+                )
             return np.sum(value, axis=tuple(range(min(len(reduced), value.ndim))))
 
         unknown = reduced - set(scope.indices)
@@ -187,6 +203,18 @@ class Evaluator:
         result = np.zeros(sizes + value.shape[1:], dtype=np.result_type(value, float))
         np.add.at(result, coordinates[0] if len(coordinates) == 1 else coordinates, value)
         return result
+
+    def _relation_scope(self, relation: Expression) -> _RelationScope:
+        if not isinstance(relation, Indexed) or not isinstance(relation.base, Symbol):
+            raise ValueError("A reduction relation must be indexed, such as A[i, j].")
+        name, table = self._relation(relation.base)
+        indices = tuple(index.name for index in relation.indices)
+        if table.shape[1] != len(indices):
+            raise ValueError(
+                f"Relation {name!r} has {table.shape[1]} columns but "
+                f"{len(indices)} indices were supplied."
+            )
+        return _RelationScope(name, table, indices)
 
     def _aggregate(self, node: Aggregate) -> Any:
         relation_name, table = self._relation(node.relation)
@@ -279,7 +307,7 @@ class Evaluator:
                 value = np.asarray(self.values[item.base.name])
                 # Every singly-indexed node field belongs to the same node domain
                 # inside one relation contraction, even when this particular free
-                # index does not occur on that field (for example A[i,j] * x[j]).
+                # index does not occur on that field (for example A[i,j] with x[j]).
                 if value.ndim:
                     sizes.append(value.shape[0])
         fallback = int(coordinate.max()) + 1 if coordinate.size else 0
@@ -330,6 +358,14 @@ def _unique(values: np.ndarray) -> list[Any]:
 
 
 def grouped_parameter_key(node: GroupedParameter) -> str:
+    """Return the storage key for a grouped parameter.
+
+    Args:
+        node: Grouped parameter to identify.
+
+    Returns:
+        Its explicit name or a stable name derived from the grouping symbol.
+    """
     if node.name:
         return node.name
     if isinstance(node.by, Symbol):
@@ -338,6 +374,14 @@ def grouped_parameter_key(node: GroupedParameter) -> str:
 
 
 def walk(node: Expression):
+    """Iterate over an expression tree in preorder.
+
+    Args:
+        node: Expression or syntax-tree node.
+
+    Yields:
+        Expression nodes in parent-before-children order.
+    """
     yield from iter_preorder(node)
 
 
@@ -349,5 +393,16 @@ def evaluate(
     time: Any = None,
     delay_resolver: Callable[..., Any] | None = None,
 ) -> Any:
-    """Evaluate an expression without executing arbitrary Python code."""
+    """Evaluate an expression without executing arbitrary Python code.
+
+    Args:
+        expression: Symbolic expression to process.
+        values: Values keyed by symbol name.
+        parameters: Fitted parameter values keyed by parameter name.
+        time: Optional sample times.
+        delay_resolver: Optional callback that resolves delayed values.
+
+    Returns:
+        The evaluated scalar or NumPy array.
+    """
     return Evaluator(values, parameters, time, delay_resolver, expression)(expression)

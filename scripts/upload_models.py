@@ -9,13 +9,21 @@ dotenv.load_dotenv()
 
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    """Configure the command-line argument parser.
+
+    Args:
+        parser: Argument parser to configure.
+
+    Returns:
+        argparse.ArgumentParser: The operation result.
+    """
     default_repo = get_default("repo")
     default_release_tag = get_default("release_tag")
     default_token = get_default("token")
 
     description = "Upload a model checkpoint to the SRHarness model store."
     if parser is None:
-        parser = argparse.ArgumentParser(prog="sr-harness upload-models", description=description)
+        parser = argparse.ArgumentParser(prog="python scripts/upload_models.py", description=description)
     else:
         parser.description = description
     parser.add_argument("--checkpoint", required=True, help="Local checkpoint path.")
@@ -27,6 +35,14 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
 
 
 def main(args: argparse.Namespace) -> int:
+    """Run the command and return its process exit code.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: The operation result.
+    """
     asset = upload_model(
         name=args.name,
         checkpoint=args.checkpoint,

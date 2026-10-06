@@ -7,12 +7,10 @@ __all__ = ["entrypoint"]
 
 
 COMMANDS = {
-    "run": ("run", "Run SRAgent on a synthetic symbolic-regression problem."),
-    "bench": ("bench", "Evaluate an algorithm with LLM-SRBench."),
+    "run": ("run", "Launch the SRHarness interactive workbench."),
+    "synthetic": ("synthetic", "Run SRHarness on a synthetic symbolic-regression problem."),
+    "benchmark": ("benchmark", "Evaluate SRHarness and baseline algorithms on LLM-SRBench."),
     "tool": ("tool", "Inspect or invoke an SRHarness tool."),
-    "web": ("web", "Serve the SRHarness interactive workbench."),
-    "download-models": ("download_models", "Download a model checkpoint."),
-    "upload-models": ("upload_models", "Upload a model checkpoint."),
 }
 
 
@@ -31,6 +29,14 @@ class _CommandParser(argparse.ArgumentParser):
 
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    """Configure the command-line argument parser.
+
+    Args:
+        parser: Argument parser to configure.
+
+    Returns:
+        argparse.ArgumentParser: The operation result.
+    """
     if parser is None:
         parser = argparse.ArgumentParser(prog="sr-harness", description="SRHarness command-line interface.")
 
@@ -45,12 +51,25 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
 
 
 def main(args: argparse.Namespace) -> int:
+    """Run the command and return its process exit code.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: The operation result.
+    """
     module_name = COMMANDS[args.command][0]
     module = importlib.import_module(f"{__package__}.{module_name}")
     return module.main(args)
 
 
 def entrypoint() -> int:
+    """Run the installed command-line entry point.
+
+    Returns:
+        int: The operation result.
+    """
     parser = setup_parser()
     args = parser.parse_args()
     if args.command is None:

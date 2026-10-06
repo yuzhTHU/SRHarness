@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ModelRoute:
+    """Selected provider/model route and its rationale."""
     tier: str
     provider: str
     model: str
@@ -42,6 +43,11 @@ class ModelRouter:
 
     @property
     def has_strong_backend(self) -> bool:
+        """Run the ``has strong backend`` operation.
+
+        Returns:
+            bool: The operation result.
+        """
         return bool(
             self.strong_model
             and (self.strong_provider, self.strong_model)
@@ -49,6 +55,15 @@ class ModelRouter:
         )
 
     def assess(self, task: str, feature_count: int) -> tuple[int, list[str]]:
+        """Run the ``assess`` operation.
+
+        Args:
+            task: The task value.
+            feature_count: The feature count value.
+
+        Returns:
+            tuple[int, list[str]]: The operation result.
+        """
         text = task.lower()
         score = max(0, feature_count - 3)
         reasons = [f"{feature_count} features"] if feature_count > 3 else []
@@ -65,6 +80,16 @@ class ModelRouter:
         task_reasons: list[str],
         refinement_step: int,
     ) -> ModelRoute:
+        """Run the ``route`` operation.
+
+        Args:
+            task_score: The task score value.
+            task_reasons: The task reasons value.
+            refinement_step: The refinement step value.
+
+        Returns:
+            ModelRoute: The operation result.
+        """
         if not self.enabled:
             return self._base(task_score, "automatic routing disabled")
         if not self.has_strong_backend:

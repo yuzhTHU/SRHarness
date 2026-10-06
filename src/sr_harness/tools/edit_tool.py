@@ -5,6 +5,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("edit_tool")
 class EditTool(BaseTool):
+    """Implementation of the edit tool."""
     metadata = ToolMetadata(
         name="edit_tool",
         description=(
@@ -99,6 +100,14 @@ class EditTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if not result.get("success"):
             return f"Custom tool edit failed for skill {result['skill']!r}: " + "; ".join(result["warnings"])
         return f"Edited and reloaded custom tool {result['tool_name']!r} in skill {result['skill']!r}."

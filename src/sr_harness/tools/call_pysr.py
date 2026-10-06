@@ -21,6 +21,7 @@ MAX_TIMEOUT = 120
 
 @BaseTool.register('call_pysr')
 class PySRTool(BaseTool):
+    """Implementation of the py s r tool."""
     metadata = ToolMetadata(name="call_pysr")
 
     def execute(
@@ -310,6 +311,14 @@ class PySRTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         parts = [
             f"Symbolic-regression backend used: {result['method']}.",
             cls.format_evaluation_result(result, title="Best formula found"),

@@ -7,6 +7,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 # @BaseTool.register('call_llm') # 不注册这个工具，因为它用处不大
 class LLMTool(BaseTool):
+    """Implementation of the l l m tool."""
     metadata = ToolMetadata(name="call_llm")
 
     def execute(

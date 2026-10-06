@@ -56,8 +56,12 @@ web = [
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
 ]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+]
 all = [
-    "sr-harness[nn,tools,dev,web]",
+    "sr-harness[nn,tools,dev,web,docs]",
 ]
 
 [tool.setuptools.packages.find]

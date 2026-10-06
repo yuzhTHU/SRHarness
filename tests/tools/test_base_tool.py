@@ -352,7 +352,7 @@ class TestBaseToolEvaluate:
         x = np.arange(1.0, 21.0)
         y_values = 2 * x + np.linspace(-0.2, 0.2, len(x))
         tool = UnitSampleTool(data={"x": x, "y": y_values}, target="y")
-        f = engine.parse("2*x")
+        f = engine.parse("param('slope', value=2)*x")
         y = engine.parse("y")
 
         metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["data_split_results"]["train"]["metrics"]

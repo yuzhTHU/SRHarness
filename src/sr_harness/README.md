@@ -1,5 +1,7 @@
 # SRHarness 框架说明
 
+> SRHarness 的长篇使用文档和 API Reference：[`docs/index.md`](../../docs/index.md)
+
 ## SRAgent 整体架构
 
 SRAgent 是一个基于 LLM 的符号回归 Agent。其核心是一个 **"请求 LLM → 解析工具调用 → 调用工具 → 格式化消息"** 的循环，循环的 pipeline 由四个参数控制：

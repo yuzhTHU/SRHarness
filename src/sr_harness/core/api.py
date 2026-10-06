@@ -38,20 +38,36 @@ class APICallResult: # 这个类已经经过人工审核，任何 Coding Agent �
 
     @property
     def usage(self) -> dict:
-        """Token & Price usage statistics."""
+        """Token & Price usage statistics.
+
+        Returns:
+            dict: The operation result.
+        """
         return self.returned['usage']
 
     @property
     def return_value(self) -> dict:
-        """Alias for the generator return value."""
+        """Alias for the generator return value.
+
+        Returns:
+            dict: The operation result.
+        """
         return self.returned
 
     @property
     def contents(self) -> dict:
-        """Raw API contents."""
+        """Raw API contents.
+
+        Returns:
+            dict: The operation result.
+        """
         return self.returned['contents']
 
     @property
     def tool_calls(self) -> list:
-        """Tool calls returned by the provider."""
+        """Tool calls returned by the provider.
+
+        Returns:
+            list: The operation result.
+        """
         return self.returned['tool_calls']

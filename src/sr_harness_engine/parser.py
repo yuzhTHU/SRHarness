@@ -6,6 +6,8 @@ import ast
 from collections.abc import Mapping
 from typing import Any
 
+from .analysis import fold_constants
+from .desugar import desugar
 from .expression import (
     Aggregate,
     Binary,
@@ -45,24 +47,61 @@ class ExpressionParser(ast.NodeVisitor):
                 self.symbols[name] = Number(value)
 
     def parse(self, source: str) -> Expression:
+        """Parse input into the canonical representation.
+
+        Args:
+            source: Source text to parse.
+
+        Returns:
+            The parsed, desugared, and constant-folded expression.
+        """
         try:
             tree = ast.parse(source, mode="eval")
         except SyntaxError as error:
             raise SyntaxError(f"Invalid symbolic expression: {error.msg}.") from error
-        return self.visit(tree.body)
+        return fold_constants(desugar(self.visit(tree.body)))
 
     def generic_visit(self, node: ast.AST):
+        """Reject syntax that is outside the symbolic language.
+
+        Args:
+            node: Expression or syntax-tree node.
+        """
         raise ValueError(f"Unsupported syntax: {type(node).__name__}.")
 
     def visit_Constant(self, node: ast.Constant) -> Expression:
+        """Convert a numeric literal into a number node.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            A numeric expression node.
+        """
         if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
             raise ValueError(f"Only numerical literals are expressions, got {node.value!r}.")
         return Number(node.value)
 
     def visit_Name(self, node: ast.Name) -> Expression:
+        """Resolve a name to a supplied or newly created symbol.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            The expression associated with the name.
+        """
         return self.symbols.setdefault(node.id, Symbol(node.id))
 
     def visit_UnaryOp(self, node: ast.UnaryOp) -> Expression:
+        """Convert a supported unary operator.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            The converted operand or unary expression.
+        """
         if isinstance(node.op, ast.USub):
             return Unary("-", self.visit(node.operand))
         if isinstance(node.op, ast.UAdd):
@@ -70,6 +109,14 @@ class ExpressionParser(ast.NodeVisitor):
         raise ValueError(f"Unsupported unary operator: {type(node.op).__name__}.")
 
     def visit_BinOp(self, node: ast.BinOp) -> Expression:
+        """Convert a supported binary arithmetic operator.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            A binary expression node.
+        """
         operators = {
             ast.Add: "+", ast.Sub: "-", ast.Mult: "*", ast.Div: "/", ast.Pow: "**"
         }
@@ -79,14 +126,34 @@ class ExpressionParser(ast.NodeVisitor):
         return Binary(operator, self.visit(node.left), self.visit(node.right))
 
     def visit_Subscript(self, node: ast.Subscript) -> Expression:
+        """Convert symbolic indexing such as ``x[i]``.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            An indexed expression node.
+        """
         base = self.visit(node.value)
         return Indexed(base, self._indices(node.slice))
 
     def visit_Call(self, node: ast.Call) -> Expression:
+        """Convert an approved symbolic function or reduction call.
+
+        Args:
+            node: Expression or syntax-tree node.
+
+        Returns:
+            The corresponding symbolic expression.
+        """
         if isinstance(node.func, ast.Subscript) and self._name(node.func.value) == "sum":
-            if node.keywords or len(node.args) != 1:
-                raise ValueError("sum[index](...) expects exactly one positional argument.")
-            return Reduction(self._indices(node.func.slice), self.visit(node.args[0]))
+            if node.keywords or len(node.args) not in {1, 2}:
+                raise ValueError(
+                    "sum[index](...) expects an operand, optionally preceded by a relation."
+                )
+            arguments = [self.visit(argument) for argument in node.args]
+            relation, operand = (None, arguments[0]) if len(arguments) == 1 else arguments
+            return Reduction(self._indices(node.func.slice), operand, relation)
 
         name = self._name(node.func)
         if name in FUNCTIONS:
@@ -110,9 +177,15 @@ class ExpressionParser(ast.NodeVisitor):
         if name == "grouped_param":
             return self._grouped_parameter(node)
         if name == "aggr":
-            if node.keywords or len(node.args) != 2:
-                raise ValueError("aggr(relation, expression) expects exactly two arguments.")
-            return Aggregate(self.visit(node.args[0]), self.visit(node.args[1]))
+            if node.keywords or len(node.args) not in {1, 2}:
+                raise ValueError(
+                    "aggr expects aggr(relation * expression) or "
+                    "aggr(relation, expression)."
+                )
+            if len(node.args) == 2:
+                return Aggregate(self.visit(node.args[0]), self.visit(node.args[1]))
+            relation, operand = _split_aggregation(self.visit(node.args[0]))
+            return Aggregate(relation, operand)
         if name in {"targ", "sour"}:
             if node.keywords or len(node.args) not in {1, 2}:
                 raise ValueError(f"{name} expects one value, optionally preceded by a relation.")
@@ -175,8 +248,35 @@ def parse(
     *,
     variables: Mapping[str, Any] | None = None,
 ) -> Expression:
-    """Parse *source* without using ``eval`` or executing user code."""
+    """Parse *source* without using ``eval`` or executing user code.
+
+    Args:
+        source: Source text to parse.
+        symbols: Optional predefined symbols or numeric constants.
+        variables: Deprecated-compatible alias for ``symbols``.
+
+    Returns:
+        The parsed canonical expression.
+    """
     if symbols is not None and variables is not None:
         raise TypeError("Use either symbols or variables, not both.")
     symbols = variables if variables is not None else symbols
     return ExpressionParser(symbols).parse(source)
+
+
+def _split_aggregation(expression: Expression) -> tuple[Expression, Expression]:
+    factors = _multiplication_factors(expression)
+    if len(factors) < 2 or not isinstance(factors[0], Symbol):
+        raise ValueError(
+            "aggr(relation * expression) requires the relation symbol as its first factor."
+        )
+    operand = factors[1]
+    for factor in factors[2:]:
+        operand = Binary("*", operand, factor)
+    return factors[0], operand
+
+
+def _multiplication_factors(expression: Expression) -> list[Expression]:
+    if isinstance(expression, Binary) and expression.operator == "*":
+        return _multiplication_factors(expression.left) + _multiplication_factors(expression.right)
+    return [expression]

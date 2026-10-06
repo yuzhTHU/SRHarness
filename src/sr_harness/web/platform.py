@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from fastapi import Body, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from ..core import json_value
 from .session import InteractiveSession
@@ -16,6 +20,12 @@ MAX_UPLOAD = 256 * 1024 * 1024
 
 
 def mount_platform(app, session: InteractiveSession):
+    """Run the ``mount platform`` operation.
+
+    Args:
+        app: The app value.
+        session: The session value.
+    """
     app.state.session = session
 
     @app.get('/api/session')
@@ -60,6 +70,13 @@ def mount_platform(app, session: InteractiveSession):
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post('/api/data/agent/stop')
+    def stop_data_preparation():
+        try:
+            return session.stop_data_preparation()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.put('/api/data/agent/settings')
     def configure_data_agent(payload: dict = Body(...)):
         try:
@@ -67,18 +84,136 @@ def mount_platform(app, session: InteractiveSession):
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post('/api/data/agent/test')
+    def test_data_agent_model(payload: dict = Body(...)):
+        try:
+            return session.test_data_agent_model(payload)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get('/api/data/context')
     def data_context(rows: int = 300):
         rows = max(1, min(rows, 1000))
         with session.lock:
             schema = session.context.schema()
-            names = list(session.context.data)
-            count = min(schema["rows"], rows)
+            groups = {}
+            for name, value in session.context.data.items():
+                if value.ndim != 1:
+                    continue
+                key = tuple(session.context.variable_axes.get(name, (f"length:{len(value)}",)))
+                groups.setdefault(key, []).append(name)
+            preferred = next((
+                names for names in groups.values()
+                if session.context.target in names
+            ), None)
+            names = preferred or max(groups.values(), key=lambda item: (len(item), item), default=[])
+            total = len(session.context.data[names[0]]) if names else 0
+            referenced_axes = list(dict.fromkeys(
+                axis
+                for name in names
+                for axis in session.context.variable_axes.get(name, ())
+            ))
+            matching_axes = [
+                name for name, axis in session.context.axes.items()
+                if (
+                    axis.values.ndim == 1
+                    and len(axis.values) == total
+                    and name not in session.context.data
+                )
+            ]
+            axis_names = [
+                name for name in referenced_axes if name in matching_axes
+            ] + [
+                name for name in matching_axes if name not in referenced_axes
+            ]
+            columns = [*axis_names, *names]
+            arrays = {
+                **{name: session.context.axes[name].values for name in axis_names},
+                **{name: session.context.data[name] for name in names},
+            }
+            count = min(total, rows)
             records = [
-                {name: json_value(session.context.data[name][index]) for name in names}
+                {name: json_value(arrays[name][index]) for name in columns}
                 for index in range(count)
             ]
-        return {**json_value(schema), "data": records, "truncated": schema["rows"] > count}
+            descriptions = {
+                **{
+                    name: session.context.variable_descriptions.get(
+                        name, session.context.axes[name].description,
+                    )
+                    for name in axis_names
+                },
+                **{
+                    name: session.context.variable_descriptions.get(name, "")
+                    for name in names
+                },
+            }
+        return {
+            **json_value(schema),
+            "columns": columns,
+            "column_kinds": {
+                **{name: "axis" for name in axis_names},
+                **{name: "variable" for name in names},
+            },
+            "rows": total,
+            "variable_descriptions": descriptions,
+            "data": records,
+            "truncated": total > count,
+        }
+
+    @app.put('/api/data/selection')
+    def update_data_selection(payload: dict = Body(...)):
+        with session.lock:
+            if session.data_state in {"running", "stopping"}:
+                raise HTTPException(
+                    409,
+                    "Wait for the data-preparation agent to finish before changing variable roles",
+                )
+            if session.state not in {"idle", "running"}:
+                raise HTTPException(409, "Variable roles cannot be changed in the current run state")
+            if session.state == "running":
+                control_status = session.controller.status()
+                if not (
+                    control_status["paused"]
+                    and control_status["waiting_at_boundary"]
+                ):
+                    raise HTTPException(
+                        409,
+                        "Pause symbolic regression and wait for the safe-boundary acknowledgement "
+                        "before changing variable roles",
+                    )
+            target = str(payload.get("target", "")).strip()
+            features = payload.get("features")
+            if not isinstance(features, list) or any(
+                not isinstance(name, str) for name in features
+            ):
+                raise HTTPException(400, "features must be a list of variable names")
+            try:
+                descriptions = payload.get("variable_descriptions", {})
+                if not isinstance(descriptions, dict) or any(
+                    not isinstance(name, str) or not isinstance(value, str)
+                    for name, value in descriptions.items()
+                ):
+                    raise ValueError(
+                        "variable_descriptions must map variable names to text"
+                    )
+                descriptions = {
+                    name: value.strip() for name, value in descriptions.items()
+                }
+                change = session.context.update_selection(
+                    target=target,
+                    features=features,
+                    variable_descriptions=descriptions,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            session.variable_descriptions = dict(
+                session.context.variable_descriptions
+            )
+            return {
+                **change,
+                "context": session.context.schema(),
+            }
 
     @app.post('/api/session/settings')
     def settings(payload: dict = Body(...)):
@@ -87,36 +222,122 @@ def mount_platform(app, session: InteractiveSession):
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    def resolve(path):
+    def resolve(path, *, write=False):
         try:
-            return session.resolve(path)
+            return session.resolve(path, write=write)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
     @app.get('/api/workspace')
-    def files(path: str = ''):
+    def files(path: str = '', recursive: bool = False):
         with session.lock:
             directory = resolve(path)
             if not directory.is_dir():
                 raise HTTPException(404, 'Directory not found')
-            entries = []
-            for item in directory.iterdir():
-                if item.is_symlink():
-                    continue
+            readonly_roots = {
+                logical.name for logical in session.workspace_manager.readonly_mounts
+            }
+
+            def list_entries(logical_directory, resolved_directory, ancestors=frozenset()):
                 try:
-                    entries.append({'name': item.name, 'path': str(item.relative_to(session.workspace)),
-                                    'directory': item.is_dir(), 'size': item.stat().st_size})
+                    identity = (resolved_directory.stat().st_dev, resolved_directory.stat().st_ino)
                 except FileNotFoundError:
-                    continue
-            return {'path': path, 'entries': sorted(entries, key=lambda e: (not e['directory'], e['name']))}
+                    return []
+                if identity in ancestors:
+                    return []
+                descendants = ancestors | {identity}
+                entries = []
+                for item in resolved_directory.iterdir():
+                    logical = logical_directory / item.name
+                    try:
+                        resolved = resolve(str(logical))
+                        is_directory = resolved.is_dir()
+                        mounted = bool(
+                            logical.parts and logical.parts[0] in readonly_roots
+                        )
+                        locked = not mounted and session.workspace_manager.is_locked(resolved)
+                        entry = {'name': item.name, 'path': str(logical),
+                                 'directory': is_directory,
+                                 'read_only': mounted or locked,
+                                 'mounted': mounted,
+                                 'locked': locked}
+                        if is_directory:
+                            children = list_entries(logical, resolved, descendants)
+                            entry['size'] = None
+                            if recursive:
+                                entry['children'] = children
+                        else:
+                            entry['size'] = resolved.stat().st_size
+                        entries.append(entry)
+                    except (FileNotFoundError, HTTPException):
+                        continue
+                return sorted(entries, key=lambda entry: (
+                    not entry['directory'], entry['name'].lower(), entry['name'],
+                ))
+
+            entries = list_entries(Path(path), directory)
+            return {'path': path, 'entries': entries}
+
+    @app.get('/api/workspace/size')
+    def workspace_item_size(path: str):
+        with session.lock:
+            item = resolve(path)
+            if item.is_file():
+                return {'path': path, 'size': item.stat().st_size}
+            if not item.is_dir():
+                raise HTTPException(404, 'File or directory not found')
+            total = 0
+            for current, _, filenames in os.walk(item):
+                relative_directory = Path(current).relative_to(item)
+                for filename in filenames:
+                    relative = relative_directory / filename
+                    try:
+                        source = resolve(str(Path(path) / relative))
+                    except HTTPException:
+                        continue
+                    if source.is_file():
+                        total += source.stat().st_size
+            return {'path': path, 'size': total}
 
     @app.get('/api/workspace/download')
     def download(path: str):
         with session.lock:
-            file = resolve(path)
-            if not file.is_file():
-                raise HTTPException(404, 'File not found')
-            return FileResponse(file, filename=file.name, media_type='application/octet-stream')
+            item = resolve(path)
+            if item.is_file():
+                return FileResponse(
+                    item, filename=item.name, media_type='application/octet-stream',
+                )
+            if not item.is_dir():
+                raise HTTPException(404, 'File or directory not found')
+            descriptor, archive_name = tempfile.mkstemp(suffix='.zip')
+            os.close(descriptor)
+            archive = Path(archive_name)
+            try:
+                with zipfile.ZipFile(
+                    archive, mode='w', compression=zipfile.ZIP_DEFLATED,
+                ) as output:
+                    for current, directories, filenames in os.walk(item):
+                        current_path = Path(current)
+                        relative_directory = current_path.relative_to(item)
+                        if not directories and not filenames:
+                            output.writestr(
+                                str(Path(item.name) / relative_directory) + '/', '',
+                            )
+                        for filename in filenames:
+                            relative = relative_directory / filename
+                            try:
+                                source = resolve(str(Path(path) / relative))
+                            except HTTPException:
+                                continue
+                            if source.is_file():
+                                output.write(source, Path(item.name) / relative)
+            except Exception:
+                archive.unlink(missing_ok=True)
+                raise
+            return FileResponse(
+                archive, filename=f'{item.name}.zip', media_type='application/zip',
+                background=BackgroundTask(archive.unlink, missing_ok=True),
+            )
 
     @app.get('/api/workspace/preview')
     def preview(path: str):
@@ -124,20 +345,123 @@ def mount_platform(app, session: InteractiveSession):
             file = resolve(path)
             if not file.is_file():
                 raise HTTPException(404, 'File not found')
+            if file.suffix.lower() == '.npy':
+                try:
+                    try:
+                        array = np.load(file, mmap_mode='r', allow_pickle=False)
+                    except ValueError as exc:
+                        if 'shape is empty' not in str(exc):
+                            raise
+                        array = np.load(file, allow_pickle=False)
+                    text = np.array2string(
+                        array,
+                        threshold=1000,
+                        edgeitems=4,
+                        max_line_width=120,
+                    )
+                except (OSError, TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        400,
+                        f'Unable to preview NPY file safely: {exc}',
+                    ) from exc
+                truncated = array.size > 1000 or len(text) > 65536
+                return {
+                    'kind': 'npy',
+                    'shape': list(array.shape),
+                    'dtype': str(array.dtype),
+                    'size': int(array.size),
+                    'text': text[:65536],
+                    'truncated': truncated,
+                }
             with file.open('rb') as stream:
                 data = stream.read(65537)
-            return {'text': data[:65536].decode('utf-8', errors='replace'), 'truncated': len(data) > 65536}
+            return {
+                'kind': 'text',
+                'text': data[:65536].decode('utf-8', errors='replace'),
+                'truncated': len(data) > 65536,
+            }
+
+    @app.post('/api/workspace/directory')
+    def create_directory(payload: dict = Body(...)):
+        path = str(payload.get('path', '')).strip()
+        if not path:
+            raise HTTPException(400, 'Directory path is required')
+        with session.lock:
+            try:
+                directory = resolve(path, write=True)
+                if directory.exists():
+                    raise HTTPException(409, 'A file or directory already exists at this path')
+                directory.mkdir(parents=False)
+            except HTTPException:
+                raise
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+        return {'path': path}
+
+    @app.put('/api/workspace/lock')
+    def set_workspace_item_lock(payload: dict = Body(...)):
+        path = str(payload.get('path', '')).strip()
+        locked = payload.get('locked')
+        if not path:
+            raise HTTPException(400, 'The workspace root cannot be locked')
+        if not isinstance(locked, bool):
+            raise HTTPException(400, 'locked must be a boolean')
+        with session.lock:
+            try:
+                session.workspace_manager.set_locked(path, locked)
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+        return {'path': path, 'locked': locked}
+
+    @app.patch('/api/workspace')
+    def move_workspace_item(payload: dict = Body(...)):
+        source_path = str(payload.get('source', '')).strip()
+        destination_path = str(payload.get('destination', '')).strip()
+        if not source_path or not destination_path:
+            raise HTTPException(400, 'Source and destination paths are required')
+        with session.lock:
+            try:
+                source = resolve(source_path, write=True)
+                destination = resolve(destination_path, write=True)
+                if not source.exists():
+                    raise HTTPException(404, 'Source file or directory not found')
+                if destination.exists():
+                    raise HTTPException(409, 'A file or directory already exists at the destination')
+                if source.is_dir() and destination.is_relative_to(source):
+                    raise HTTPException(400, 'A directory cannot be moved inside itself')
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                source.rename(destination)
+            except HTTPException:
+                raise
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+        return {'source': source_path, 'destination': destination_path}
+
+    @app.delete('/api/workspace')
+    def delete_workspace_item(path: str):
+        path = path.strip()
+        if not path:
+            raise HTTPException(400, 'The workspace root cannot be deleted')
+        with session.lock:
+            try:
+                item = resolve(path, write=True)
+                if not item.exists():
+                    raise HTTPException(404, 'File or directory not found')
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            except HTTPException:
+                raise
+            except (OSError, ValueError) as exc:
+                raise HTTPException(400, str(exc)) from exc
+        return {'path': path}
 
     @app.get('/api/data/csv-files')
     def csv_files():
         with session.lock:
-            files = [
-                str(path.relative_to(session.workspace))
-                for path in session.workspace.rglob('*')
-                if path.is_file()
-                and not path.is_symlink()
-                and path.suffix.lower() in {'.csv', '.xlsx'}
-            ]
+            files = [str(relative) for relative, path in session.workspace_manager.iter_files()
+                     if path.suffix.lower() in {'.csv', '.xlsx'}]
             return {'files': sorted(files)}
 
     @app.get('/api/data/preview')
@@ -175,9 +499,13 @@ def mount_platform(app, session: InteractiveSession):
 
     @app.post('/api/data/demo')
     def create_demo():
-        path = session.create_demo()
+        try:
+            path = session.create_demo()
+        except FileExistsError as exc:
+            raise HTTPException(409, str(exc)) from exc
         relative = str(path.relative_to(session.workspace))
-        session.controller.publish('file_uploaded', {'path': relative, 'size': path.stat().st_size})
+        size = sum(file.stat().st_size for file in path.iterdir() if file.is_file())
+        session.controller.publish('file_uploaded', {'path': relative, 'size': size})
         return {'path': relative}
 
     @app.post('/api/data/prompts')
@@ -189,11 +517,21 @@ def mount_platform(app, session: InteractiveSession):
 
     @app.put('/api/workspace/upload')
     async def upload(request: Request, path: str):
-        # Stream into a staging file, then atomically place it in the *current*
-        # workspace (which can move when fit initializes its tools).
-        fd, temp = tempfile.mkstemp(prefix='.upload-', dir=session.run_dir)
+        # Keep the staging file beside its destination so the final atomic
+        # replace also works when the run directory and workspace are on
+        # different filesystems.
+        temp = None
         size = 0
         try:
+            with session.lock:
+                destination = resolve(path, write=True)
+                if destination.exists():
+                    raise HTTPException(409, 'File already exists; rename it before uploading')
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(
+                    prefix='.sr-harness-upload-', dir=destination.parent,
+                )
+                temp = Path(temp_name)
             with os.fdopen(fd, 'wb') as output:
                 async for chunk in request.stream():
                     size += len(chunk)
@@ -201,12 +539,18 @@ def mount_platform(app, session: InteractiveSession):
                         raise HTTPException(413, 'Maximum file size is 256 MiB')
                     output.write(chunk)
             with session.lock:
-                destination = resolve(path)
+                current_destination = resolve(path, write=True)
+                if current_destination != destination:
+                    raise HTTPException(409, 'Workspace changed while the file was uploading')
                 if destination.exists():
                     raise HTTPException(409, 'File already exists; rename it before uploading')
-                destination.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(temp, destination)
             session.controller.publish('file_uploaded', {'path': path, 'size': size})
             return {'path': path, 'size': size}
+        except HTTPException:
+            raise
+        except OSError as exc:
+            raise HTTPException(400, f'Unable to upload file: {exc}') from exc
         finally:
-            Path(temp).unlink(missing_ok=True)
+            if temp is not None:
+                temp.unlink(missing_ok=True)

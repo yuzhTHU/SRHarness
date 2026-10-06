@@ -8,6 +8,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register('statistics_analysis')
 class StatisticsTool(BaseTool):
+    """Implementation of the statistics tool."""
     metadata = ToolMetadata('statistics_analysis')
 
     def execute(
@@ -57,9 +58,17 @@ class StatisticsTool(BaseTool):
             'config': get_stats_args,
             'exceptions': exceptions
         }
-    
+
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         def number(value):
             if value == 0:
                 return "0"

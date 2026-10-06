@@ -11,6 +11,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register('polynomial_fit')
 class PolynomialFitTool(BaseTool):
+    """Implementation of the polynomial fit tool."""
     metadata = ToolMetadata(name="polynomial_fit")
 
     def execute(
@@ -178,8 +179,8 @@ class PolynomialFitTool(BaseTool):
         polynomial = reduce(lambda a, b: a + b, polynomial_parts) if polynomial_parts else engine.parse("0")
 
         evaluation = self.evaluate(
-            f=polynomial, 
-            y=eq_y, 
+            f=polynomial,
+            y=eq_y,
             show_diagnostics=show_diagnostics,
         )
 
@@ -198,6 +199,14 @@ class PolynomialFitTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = cls.format_evaluation_result(result, title="Best fitted polynomial")
         if result["exceptions"]:
             text += "\nFit warnings: " + "; ".join(result["exceptions"])
@@ -316,7 +325,16 @@ class PolynomialFitTool(BaseTool):
         allowed_interactions: Set[Tuple[str, str]],
         include_bias: bool,
     ) -> List[engine.Expression]:
-        """Generate symbolic terms whose total degree is no more than max_degree."""
+        """Generate symbolic terms up to a total degree.
+
+        Args:
+            features: Input feature expressions.
+            max_degree: Maximum total polynomial degree.
+            allowed_interactions: Optional interaction combinations to retain.
+            include_bias: Whether to include the constant term.
+
+        Returns:
+            Generated polynomial terms."""
         n_vars = len(features)
         terms = []
         for powers in sorted(product(range(max_degree + 1), repeat=n_vars), key=lambda p: (sum(p), p)):

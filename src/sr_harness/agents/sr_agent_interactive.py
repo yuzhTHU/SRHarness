@@ -21,11 +21,7 @@ _logger = logging.getLogger(f'sr_harness.{__name__}')
 
 
 class SRAgentInteractive(SRAgent):
-    """人机协同符号回归 Agent。
-
-    以 L（对话轮次）为搜索主体，默认 R=C=K=1，退化为纯对话式 Agent。
-    支持工作区文件操作和人类实时反馈。
-    """
+    """Interactive symbolic-regression agent controlled by an interaction manager."""
 
     def __init__(
         self,
@@ -137,7 +133,11 @@ class SRAgentInteractive(SRAgent):
 
     @contextmanager
     def prepare_tool_context(self, tool_context: AgentContext):
-        """Add interaction resources to the tool context for the duration of a run."""
+        """Add interaction resources to the tool context for the duration of a run.
+
+        Args:
+            tool_context: Shared context used to initialize tools.
+        """
         tool_context["human_input_callback"] = self.human_input_callback
         if not self.use_workspace:
             yield tool_context
@@ -156,7 +156,17 @@ class SRAgentInteractive(SRAgent):
             yield tool_context
 
     def before_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
-        """Apply queued human guidance before the prompt is constructed."""
+        """Apply queued human guidance before the prompt is constructed.
+
+        Args:
+            buffer: Conversation history buffer.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            str | None: The operation result.
+        """
         if R == C == L == 1:
             self._perfect_candidate_announced = False
         self.emit("activity", {"phase": "checkpoint", "coord": {"R": R, "C": C, "L": L}})
@@ -262,7 +272,17 @@ class SRAgentInteractive(SRAgent):
             self.emit("settings_error", {"error": str(exc)})
 
     def handle_iteration_complete(self, buffer, R: int, L: int, C: int) -> str | None:
-        """Keep interactive runs open after finding an exact candidate."""
+        """Keep interactive runs open after finding an exact candidate.
+
+        Args:
+            buffer: Conversation history buffer.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            str | None: The operation result.
+        """
         best_candidate = self.best_candidate()
         if (
             best_candidate is not None
@@ -281,11 +301,13 @@ class SRAgentInteractive(SRAgent):
         return None
 
     def build_initial_prompt(self, problem_description, X, y, restart_records):
-        """构建面向交互式探索的 initial prompt。
+        """Build initial prompt.
 
-        当 topk_record 非空时（即 R > 1 的重启轮次），会将之前探索过的最优公式
-        及其指标作为上下文注入 prompt，并设置一个更严格的 MSE 目标，引导 LLM
-        在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
+        Args:
+            problem_description: Natural-language description of the discovery task.
+            X: Input feature arrays keyed by variable name.
+            y: Target data or target expression.
+            restart_records: Ranked candidates used to seed a restart.
         """
         initial_prompt = []
         self._task_route_score, self._task_route_reasons = self.model_router.assess(
@@ -363,7 +385,7 @@ class SRAgentInteractive(SRAgent):
             user_content += "Please start by analyzing the data to understand the relationship between features and target."
 
         initial_prompt.append({
-            "role": "user", 
+            "role": "user",
             "content": user_content
         })
         for tool in self.tools:
@@ -377,7 +399,14 @@ class SRAgentInteractive(SRAgent):
         )
 
     def request_llm(self, prompt, R: int, L: int, C: int):
-        """Request the model while publishing frontend-neutral progress events."""
+        """Request the model while publishing frontend-neutral progress events.
+
+        Args:
+            prompt: Prompt messages sent to the model.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         coord = {"R": R, "C": C, "L": L}
         self.emit("context", {"messages": prompt, "coord": coord})
         route = self.model_router.route(
@@ -467,7 +496,14 @@ class SRAgentInteractive(SRAgent):
         return responses, usage
 
     def tool_schema(self, name: str) -> dict[str, Any]:
-        """Return the schema exposed by one initialized tool."""
+        """Return the schema exposed by one initialized tool.
+
+        Args:
+            name: Registered name.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         return next(
             (
                 {
@@ -481,7 +517,11 @@ class SRAgentInteractive(SRAgent):
         )
 
     def execute_action(self, actions):
-        """Execute tools serially with safe control boundaries and UI events."""
+        """Execute tools serially with safe control boundaries and UI events.
+
+        Args:
+            actions: Tool calls to execute.
+        """
         results = []
         for action in actions:
             tool_schema = self.tool_schema(action.name)
@@ -511,14 +551,28 @@ class SRAgentInteractive(SRAgent):
         return results
 
     def collect_candidates(self, *args, **kwargs):
-        """Update scientific state and publish its current ranked view."""
+        """Update scientific state and publish its current ranked view.
+
+        Args:
+            *args: Parsed command-line arguments.
+            **kwargs: The kwargs value.
+        """
         self.emit("activity", {"phase": "ranking"})
         records = super().collect_candidates(*args, **kwargs)
         self.emit("topk", {"records": [record.display_dict() for record in records]})
         return records
 
     def record_tool_calls(self, tool_calls, results, R, L, C, forced=False):
-        """Persist tool calls and expose framework-enforced calls to the UI."""
+        """Persist tool calls and expose framework-enforced calls to the UI.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+            results: Result records to process.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+            forced: The forced value.
+        """
         super().record_tool_calls(tool_calls, results, R=R, L=L, C=C, forced=forced)
         if forced:
             for call, result in zip(tool_calls, results):
@@ -530,10 +584,21 @@ class SRAgentInteractive(SRAgent):
                 })
 
     def emit(self, kind: str, payload: Any) -> None:
-        """Publish an event through the configured interaction manager."""
+        """Publish an event through the configured interaction manager.
+
+        Args:
+            kind: Event or resource kind.
+            payload: Serializable event payload.
+        """
         self.interaction_manager.publish(kind, payload)
 
     def execute_action_parallel(self, actions, max_workers: int):
+        """Execute action parallel.
+
+        Args:
+            actions: Tool calls to execute.
+            max_workers: Maximum number of parallel workers.
+        """
         raise NotImplementedError(
             "Parallel execution is not supported in interactive mode, "
             "since tools like ask_human and workspace_shell cannot guarantee read-only access. "

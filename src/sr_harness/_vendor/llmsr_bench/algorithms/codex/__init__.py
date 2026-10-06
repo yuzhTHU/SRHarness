@@ -59,7 +59,7 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_progress_interval", default=int(os.environ.get("CODEX_PROGRESS_INTERVAL", "30")), type=int, help=(
         "Seconds between Codex progress log lines. Use 0 to disable."
     ))
-    parser.add_argument("--codex_echo_events", action='store_true', default=True, help=(
+    parser.add_argument("--codex_echo_events", action=argparse.BooleanOptionalAction, default=True, help=(
         "Print raw Codex JSONL events while saving them."
     ))
     parser.add_argument("--codex_sandbox", default=os.environ.get("CODEX_SANDBOX", "workspace-write"), help=(
@@ -71,14 +71,14 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("--codex_extra_args", default=os.environ.get("CODEX_EXTRA_ARGS", ""), type=str, help=(
         "Extra arguments inserted before the prompt."
     ))
-    parser.add_argument("--codex_overwrite", action='store_true', default=False, help=(
+    parser.add_argument("--codex_overwrite", action=argparse.BooleanOptionalAction, default=False, help=(
         "Overwrite per-problem Codex public files and result JSON."
     ))
     parser.add_argument("--codex_finalize_timeout_seconds", default=int(os.environ.get("CODEX_FINALIZE_TIMEOUT_SECONDS", "60")), type=int, help=(
         "Wall-clock timeout for the finalization pass (second Codex call). 60s only allows a fast memory-based submission; reading logs / re-analysis times out and counts as missing."
     ))
-    parser.add_argument("--no_codex_finalize", action='store_true', default=False, help=(
-        "Disable the finalization pass: a second Codex call that extracts the best formula from the main pass's exploration log when result.json was not completed."
+    parser.add_argument("--codex_finalize", action=argparse.BooleanOptionalAction, default=True, help=(
+        "Run a second Codex call to extract the best formula from the main pass's exploration log when result.json was not completed."
     ))
     parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help=(
         "Optional list of tools to use. Default is all built-in tools."
@@ -118,7 +118,7 @@ def run(args: argparse.Namespace, task: SEDTask) -> SRResult:
     # 例如：DeepSeek 过度思考导致超时
     result = load_result_json(artifacts["result_path"])
     main_submitted = result.get("status") == "completed" and (result.get("discovered_expression") or result.get("formula"))
-    if not main_submitted and not args.no_codex_finalize:
+    if not main_submitted and args.codex_finalize:
         _logger.note(tag2ansi(
             f"[blue bold][CODEX FINALIZE][reset] main pass did not complete a submission "
             f"(status=[blue]{result.get('status', 'unknown')}[reset]); "

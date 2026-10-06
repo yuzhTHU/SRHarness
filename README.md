@@ -1,6 +1,6 @@
 # SRHarness: A Harness for Agentic Symbolic Regression
 
-[English](README.md) | [简体中文](README.zh.md)
+[English](README.md) | [简体中文](README.zh.md) | [Complete SRHarness documentation](docs/index.md) | [SRHarness-Engine documentation](docs/engine.md)
 
 SRHarness is a domain-specific runtime for **agentic symbolic regression**. It lets a large language model inspect numerical observations, choose scientific operations, evaluate competing hypotheses, and refine a symbolic expression over a long search trajectory.
 
@@ -84,13 +84,13 @@ Run a small synthetic problem:
 ```bash
 conda activate ./venv
 
-sr-harness run \
+sr-harness synthetic \
   --equation "y = sin(x1 - x2)" \
-  --x-low -10 \
-  --x-high 10 \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
-  --force-initial-diagnostics \
+  --x_low -10 \
+  --x_high 10 \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
+  --force_initial_diagnostics \
   -R 1 -C 1 -L 3 -K 1
 ```
 
@@ -116,7 +116,7 @@ x2 = np.linspace(3.0, -3.0, 100)
 
 agent = SRAgent(
     llm_provider="openrouter",
-    llm_model="deepseek/deepseek-v4-flash",
+    llm_model="deepseek/deepseek-v4-flash-0731",
     max_restart_loop=1,
     global_width=1,
     max_refinement_depth=3,
@@ -146,31 +146,31 @@ git clone https://huggingface.co/datasets/nnheui/llm-srbench \
 Run one LSR-Transform problem before scaling up:
 
 ```bash
-sr-harness bench \
-  --algorithm my_sr_agent \
+sr-harness benchmark \
+  --algorithm sr_harness \
   --datasets lsrtransform \
-  --problem-names II.6.15b_1_0 \
-  --exp-name smoke_lsrtransform \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
+  --problem_names II.6.15b_1_0 \
+  --exp_name smoke_lsrtransform \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
   -R 1 -C 1 -L 3 -K 1
 ```
 
 Add `--anonymize` to replace variable names and scientific descriptions with generic input/output labels while leaving the numerical observations unchanged:
 
 ```bash
-sr-harness bench \
-  --algorithm my_sr_agent \
+sr-harness benchmark \
+  --algorithm sr_harness \
   --datasets lsrtransform \
-  --problem-names II.6.15b_1_0 \
-  --exp-name smoke_lsrtransform_anon \
+  --problem_names II.6.15b_1_0 \
+  --exp_name smoke_lsrtransform_anon \
   --anonymize \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
   -R 1 -C 1 -L 3 -K 1
 ```
 
-The benchmark entry point also contains adapters for conventional and LLM-based baselines; `sr-harness bench --help` lists its general options, while each adapter defines its method-specific flags. Paper-scale reproduction requires the exact model, toolset, data split, token limit, seed, and `R-C-L-K` configuration reported with each experiment; the smoke commands above intentionally use a much smaller budget.
+The benchmark entry point also contains adapters for conventional and LLM-based baselines; `sr-harness benchmark --help` lists its general options, while each adapter defines its method-specific flags. Paper-scale reproduction requires the exact model, toolset, data split, token limit, seed, and `R-C-L-K` configuration reported with each experiment; the smoke commands above intentionally use a much smaller budget.
 
 ## Logs and Web Visualization
 
@@ -190,18 +190,33 @@ Install and launch the web viewer:
 
 ```bash
 pip install -e ".[web]"
-sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
+sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 ```
+
+By default, the workbench uses a temporary workspace. Select a persistent workspace and mount
+existing files or directories into it as read-only inputs when needed:
+
+```bash
+sr-harness run --workspace ./workspace --mount ./data.csv ./papers --port 8000
+```
+
+Mounted inputs must have unique basenames. They remain readable by the data-preparation Agent and
+preview APIs, while workspace uploads and tools cannot modify their source contents. Files already
+present in a selected workspace are writable and may be changed or deleted by AI-operated tools;
+the CLI prints a warning when the selected directory is not empty.
 
 Then open <http://127.0.0.1:8000/>. The Web API and search viewer read the active session's
 in-memory `SearchRunState`; they do not depend on persisted run files.
 
-![SRHarness Web search-tree viewer](assets/web.png)
+![SRHarness data workbench](docs/assets/web-data-workbench.png)
 
-The workbench opens on **Data & Problem**. Select or upload a CSV or Excel workbook, assign one
-target and one or more features, edit variable descriptions, and drag variables into the
-X/Y/Hue/Size slots for a quick relationship preview. The data-preparation Agent can inspect the
-persistent workspace, clean or join tables, search and read public Web sources, and atomically
+![SRHarness execution timeline](docs/assets/web-timeline.png)
+
+The workbench opens on **Data Preparation**, where files, demo data, and the data-preparation Agent
+share one view. **Data Analysis** selects a CSV or Excel workbook, assigns one target and one or
+more features, edits variable descriptions, and previews X/Y/Hue/Size relationships. The
+data-preparation Agent can inspect the persistent workspace, clean or join tables, search and read
+public Web sources, and atomically
 publish a numeric target and aligned features into the shared `AgentContext`. Its conversation and
 workspace survive later requests. The direct structured-data workflow remains available without
 using this Agent. SRHarness generates the initial system and user prompts from the resulting
@@ -254,7 +269,7 @@ base backend.
 ## Evaluation and Reproducibility Notes
 
 - Benchmark test observations are not exposed during search or candidate selection.
-- The agent can reserve part of the visible training data for random or OOD-style validation using `--validation-fraction` and `--split-by`.
+- The agent can reserve part of the visible training data for random or OOD-style validation using `--validation_fraction` and `--split_by`.
 - Numerical predictions are evaluated through the shared benchmark pipeline. Symbolic equivalence is implemented in [`src/sr_harness/utils/symbolic_acc.py`](src/sr_harness/utils/symbolic_acc.py).
 - Logs preserve prompts, model responses, tool calls, candidate provenance, token usage, and recorded cost so that a run can be audited after completion.
 - API behavior, model aliases, prices, and stochastic outputs can change over time. Record the exact provider model identifier, source revision, arguments, and environment for serious comparisons.

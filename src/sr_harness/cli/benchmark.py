@@ -9,13 +9,13 @@ LLM-SRBench 评估脚本 (浓缩版)
 
 Usage:
     # 测试单个问题
-    sr-harness bench --exp_name test_my_algorithm --datasets lsrtransform --problem_names II.6.15b_1_0
+    sr-harness benchmark --exp_name test_my_algorithm --datasets lsrtransform --problem_names II.6.15b_1_0
     # 测试单个数据集
-    sr-harness bench --exp_name test_my_algorithm --datasets bio_pop_growth
+    sr-harness benchmark --exp_name test_my_algorithm --datasets bio_pop_growth
     # 测试一系列问题
-    sr-harness bench --problem_names MatSci2 MatSci19 CRK28 BPG1 PO6
+    sr-harness benchmark --problem_names MatSci2 MatSci19 CRK28 BPG1 PO6
     # 测试特定算法
-    sr-harness bench --algorithm linear --exp_name test_linear_fitting
+    sr-harness benchmark --algorithm linear --exp_name test_linear_fitting
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ from scipy.optimize import least_squares
 from sklearn.metrics import mean_absolute_percentage_error
 from sr_harness.utils import (
     add_minus_flags,
-    add_negation_flags,
     get_symbolic_acc,
     log_exception,
     sanitize_filename,
@@ -62,22 +61,30 @@ DATASET_SPLITS = {
 }
 
 dotenv.load_dotenv()  # Load environment variables from .env file if present
-SCRIPT_NAME = "bench"
+SCRIPT_NAME = "benchmark"
 _logger = logging.getLogger(f"sr_harness.{SCRIPT_NAME}")
 
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    """Configure the command-line argument parser.
+
+    Args:
+        parser: Argument parser to configure.
+
+    Returns:
+        argparse.ArgumentParser: The operation result.
+    """
     if parser is None:
         parser = argparse.ArgumentParser(
-            prog="sr-harness bench",
+            prog="sr-harness benchmark",
             description="LLM-SRBench Evaluation Script.",
             formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         )
     else:
         parser.description = "LLM-SRBench Evaluation Script."
         parser.formatter_class = argparse.ArgumentDefaultsHelpFormatter
-    parser.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms(), help=(
-        "符号回归算法名称"
+    parser.add_argument("--algorithm", required=True, choices=list_algorithms(), help=(
+        "Symbolic-regression algorithm to evaluate."
     ))
     parser.add_argument("--name", default=f"{SCRIPT_NAME}", help=(
         "Experiment task name used when auto-generating exp_name."
@@ -94,8 +101,10 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--save_path", default=None, help=(
         "Path to save agent logs and artifacts. Default is auto-generated from --save_dir and --exp_name."
     ))
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose agent logging.")
-    parser.add_argument("--debug", action="store_true", default=False, help=(
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help=(
+        "Enable verbose agent logging."
+    ))
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help=(
         "Enable debug mode (verbose + raise caught exceptions)."
     ))
     parser.add_argument("--data_root", type=str, default=str(Path("data") / "llm-srbench-data"), help=(
@@ -107,37 +116,35 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--problem_names", type=str, default=None, nargs="+", help=(
         "仅评估指定问题（方程）ID, 默认评估全部问题"
     ))
-    parser.add_argument("--skip_existing", action="store_true", default=False, help=(
+    parser.add_argument("--skip_existing", action=argparse.BooleanOptionalAction, default=False, help=(
         "如果结果文件已存在则跳过评估"
     ))
-    parser.add_argument("--skip_successful", action="store_true", default=True, help=(
+    parser.add_argument("--skip_successful", action=argparse.BooleanOptionalAction, default=True, help=(
         "如果结果文件已存在且成功则跳过评估"
     ))
-    parser.add_argument("--anonymize", action="store_true", help=(
+    parser.add_argument("--anonymize", action=argparse.BooleanOptionalAction, default=False, help=(
         "Anonymize agent-facing variables as x1..xn and target as y."
     ))
-    # 解析 --alg 参数以获取对应的 update_parser
+    # 解析 --algorithm 参数以获取对应的 update_parser
     algorithm_probe = argparse.ArgumentParser(add_help=False)
-    algorithm_probe.add_argument("--algorithm", default="my_sr_agent", choices=list_algorithms())
+    algorithm_probe.add_argument("--algorithm", choices=list_algorithms())
     probe_args, _ = algorithm_probe.parse_known_args()
-    if (update_parser_fn := get_update_parser(probe_args.algorithm)):
+    if probe_args.algorithm and (update_parser_fn := get_update_parser(probe_args.algorithm)):
         parser = update_parser_fn(parser)
     add_minus_flags(parser)
-    add_negation_flags(parser)
     return parser
 
 
 def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-srbench") -> List[Problem]:
-    """
-    从 HuggingFace + HDF5 加载指定数据集的所有问题
+    """Load problems.
 
-    HDF5 键名:
-    - LSR-Transform: 'train', 'test'
-    - LSR-Synth: 'train', 'test', 'ood_test'
+    Args:
+        dataset_name: The dataset name value.
+        data_root: The data root value.
+        hf_repo_id: The hf repo id value.
 
-    注意: 原始 benchmark 代码 (datamodules.py) 中 SynProblem 类使用了
-    不同的属性名映射 (train_data, id_test_data, ood_test_data),
-    但 HDF5 文件中的实际键名已统一为 train, test, ood_test。
+    Returns:
+        List[Problem]: The operation result.
     """
     split_name = DATASET_SPLITS[dataset_name]
 
@@ -251,7 +258,14 @@ def load_problems(dataset_name: str, data_root: str, hf_repo_id = "nnheui/llm-sr
 
 
 def anonymize_problem(problem: Problem) -> Problem:
-    """Return an agent-facing anonymized copy of a benchmark problem."""
+    """Return an agent-facing anonymized copy of a benchmark problem.
+
+    Args:
+        problem: The problem value.
+
+    Returns:
+        Problem: The operation result.
+    """
 
     target = problem.symbols[0]
     features = problem.symbols[1:]
@@ -290,7 +304,15 @@ def anonymize_problem(problem: Problem) -> Problem:
 
 
 def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
-    """计算 ID/OOD 测试集上的评估指标"""
+    """Compute metrics.
+
+    Args:
+        y_pred: Predicted target values.
+        y_true: Observed target values.
+
+    Returns:
+        Dict[str, float]: The operation result.
+    """
     mask = ~np.isnan(y_pred) # 原始的 LLM-SRBench 就是这么做的，可能导致潜在的问题，但为了保持一致，我们也采用相同的过滤方式。
     y_pred, y_true = y_pred[mask], y_true[mask]
     if len(y_true) == 0:
@@ -313,7 +335,17 @@ def compute_metrics(y_pred: np.ndarray, y_true: np.ndarray) -> Dict[str, float]:
 
 
 def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) -> Dict:
-    """对单个问题运行 SR 方法并评估"""
+    """Run the ``evaluate problem`` operation.
+
+    Args:
+        args: Parsed command-line arguments.
+        problem: The problem value.
+        sr_fn: The sr fn value.
+        exp_path: The exp path value.
+
+    Returns:
+        Dict: The operation result.
+    """
     task = problem.create_task()
 
     start_time = time.time()
@@ -378,6 +410,11 @@ def evaluate_problem(args, problem: Problem, sr_fn: Callable, exp_path: Path) ->
 
 
 def log_result(result: Dict):
+    """Run the ``log result`` operation.
+
+    Args:
+        result: Result mapping to format or update.
+    """
     lines = []
     lines.append(f'[gray]{"=" * 50}')
     lines.append(f"[blue bold]Problem {result['equation_id']} @ {result.get('dataset_identifier', 'Unknown')} evaluated.[reset]")
@@ -414,7 +451,14 @@ def log_result(result: Dict):
 
 
 def aggregate_results(results: List[Dict]) -> Dict:
-    """汇总多次运行 / 多个问题的结果"""
+    """Run the ``aggregate results`` operation.
+
+    Args:
+        results: Result records to process.
+
+    Returns:
+        Dict: The operation result.
+    """
 
     def safe_mean(key, group):
         vals = [r[group][key] for r in results if r[group] is not None and not np.isnan(r[group][key])]
@@ -459,6 +503,13 @@ def aggregate_results(results: List[Dict]) -> Dict:
 
 def conclude_results(results: List[Dict], llmsr_datasets: List[str], save_path: str):
     # 汇总
+    """Run the ``conclude results`` operation.
+
+    Args:
+        results: Result records to process.
+        llmsr_datasets: The llmsr datasets value.
+        save_path: Optional output path.
+    """
     results = [r for r in results if r.get("dataset_identifier") in llmsr_datasets]
     summary = aggregate_results(results)
 
@@ -505,6 +556,14 @@ def conclude_results(results: List[Dict], llmsr_datasets: List[str], save_path: 
 
 def run_benchmark(args: argparse.Namespace) -> int:
     # 加载问题集
+    """Run the ``run benchmark`` operation.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: The operation result.
+    """
     args.datasets = args.datasets or list(DATASET_SPLITS.keys())
     problems = []
     for dataset in args.datasets:
@@ -600,7 +659,14 @@ def run_benchmark(args: argparse.Namespace) -> int:
 
 
 def main(args: argparse.Namespace) -> int:
-    """Run LLM-SRBench from CLI arguments."""
+    """Run LLM-SRBench from CLI arguments.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: The operation result.
+    """
     if args.exp_name is None:
         now = datetime.now()
         args.exp_name = sanitize_filename(
@@ -616,7 +682,7 @@ def main(args: argparse.Namespace) -> int:
     save_path = Path(args.save_path) if args.save_path else Path(args.save_dir) / args.exp_name
     save_path.mkdir(parents=True, exist_ok=True)
     args.save_path = str(save_path)
-    command = getattr(args, "invocation", ["sr-harness", "bench"])
+    command = getattr(args, "invocation", ["sr-harness", "benchmark"])
     args.invocation = " ".join(map(shlex.quote, command))
 
     setup_logging(

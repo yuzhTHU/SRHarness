@@ -12,6 +12,7 @@ from ..utils.constant_optimizer import fit_constants
 
 @BaseTool.register('evaluate_formula')
 class EvaluateTool(BaseTool):
+    """Implementation of the evaluate tool."""
     metadata = ToolMetadata(name="evaluate_formula")
 
     def execute(
@@ -46,7 +47,7 @@ class EvaluateTool(BaseTool):
             if var.name not in data:
                 eq_f = eq_f.replace(var, engine.Parameter(var.name, np.random.rand()))
                 fit = True # If there are unknown variables, we must fit the formula to data.
-        
+
         if fit:
             eq_f = fit_constants(eq_f, data, y_true)
 
@@ -63,6 +64,14 @@ class EvaluateTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = cls.format_evaluation_result(result, title="Evaluated formula")
         if result.get("parameters_optimized"):
             lines = text.splitlines()
@@ -75,6 +84,7 @@ class EvaluateTool(BaseTool):
 
 @BaseTool.register('submit_formula')
 class SubmitFormulaTool(EvaluateTool):
+    """Implementation of the submit formula tool."""
     metadata = ToolMetadata(
         name="submit_formula",
         description=(

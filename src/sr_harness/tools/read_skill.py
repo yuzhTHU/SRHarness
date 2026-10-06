@@ -28,6 +28,7 @@ def _format_description(skills: Dict[str, Skill]) -> str:
 
 @BaseTool.register("read_skill")
 class ReadSkill(BaseTool):
+    """Implementation of the read skill."""
     default_skill_manager = SkillManager()
     metadata = ToolMetadata(
         name="read_skill",
@@ -99,6 +100,14 @@ class ReadSkill(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = [result["content"]]
         if "tree" in result:
             text.extend(["", "Skill directory tree:", *[f"- {path}" for path in result["tree"]]])

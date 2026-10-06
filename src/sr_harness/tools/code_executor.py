@@ -25,11 +25,25 @@ from .base_tool import BaseTool, ToolMetadata
 
 
 def root_module_name(module_name: str) -> str:
+    """Run the ``root module name`` operation.
+
+    Args:
+        module_name: The module name value.
+
+    Returns:
+        str: The operation result.
+    """
     return module_name.split(".", 1)[0]
 
 
 def sandbox_module(name: str):
-    """Register a factory that creates a restricted module for sandbox imports."""
+    """Register a factory that supplies an approved sandbox module.
+
+    Args:
+        module_name: Import name exposed inside the sandbox.
+
+    Returns:
+        A decorator for the module factory."""
     def decorator(func):
         func._sandbox_resource_kind = "module"
         func._sandbox_resource_name = name
@@ -38,7 +52,13 @@ def sandbox_module(name: str):
 
 
 def sandbox_builtin(name: str):
-    """Register a factory that creates a restricted builtin for sandbox globals."""
+    """Register a factory that supplies an approved sandbox builtin.
+
+    Args:
+        name: Builtin name exposed inside the sandbox.
+
+    Returns:
+        A decorator for the builtin factory."""
     def decorator(func):
         func._sandbox_resource_kind = "builtin"
         func._sandbox_resource_name = name
@@ -57,6 +77,14 @@ class LimitedWriter(io.StringIO):
         self.truncated = False
 
     def write(self, text: str) -> int:
+        """Run the ``write`` operation.
+
+        Args:
+            text: Text to process.
+
+        Returns:
+            int: The operation result.
+        """
         if (remaining := self.limit - self.tell() - len(self.SUFFIX)) <= 0:
             self.truncated = True
             return len(text)
@@ -71,6 +99,7 @@ class LimitedWriter(io.StringIO):
 
 class SandBoxCodeExecutor:
     # 限制子进程的环境变量，避免外部库（如 numpy）尝试使用多线程导致资源争用和不稳定。
+    """Implementation of the sand box code executor."""
     SAFE_ENVIRONMENT = {
         "OPENBLAS_NUM_THREADS": "1",
         "OMP_NUM_THREADS": "1",
@@ -83,8 +112,8 @@ class SandBoxCodeExecutor:
     # 如果需要使用特定功能，建议通过 @sandbox_module 注册受限版本
     ALLOWED_MODULES = {
         "array", "bisect", "cmath", "collections", "copy", "datetime",
-        "decimal", "fractions", "functools", "heapq", "itertools", "json", 
-        "math", "numbers", "numpy", "operator", "queue", "random", 
+        "decimal", "fractions", "functools", "heapq", "itertools", "json",
+        "math", "numbers", "numpy", "operator", "queue", "random",
         "re", "scipy", "statistics", "time", "traceback", "typing",
     }
 
@@ -108,9 +137,9 @@ class SandBoxCodeExecutor:
 
     # 允许出现在 eval 表达式中的 AST 节点类型，必须通过严格的 AST 验证确保安全。
     MATH_EVAL_NODES = (
-        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call, 
-        ast.Name, ast.Load, ast.Constant, ast.Attribute, 
-        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, 
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Call,
+        ast.Name, ast.Load, ast.Constant, ast.Attribute,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.FloorDiv,
         ast.Mod, ast.Pow, ast.USub, ast.UAdd,
     )
 
@@ -119,7 +148,7 @@ class SandBoxCodeExecutor:
         "FloatingPointError", "IndexError", "KeyError", "KeyboardInterrupt",
         "LookupError", "NameError", "None", "NotImplemented", "OSError", "OverflowError",
         "RuntimeError", "StopIteration", "SyntaxError", "SystemExit", "True",
-        "TypeError", "ValueError", "ZeroDivisionError", "__build_class__", 
+        "TypeError", "ValueError", "ZeroDivisionError", "__build_class__",
         "abs", "all", "any", "bool", "bytes", "callable", "chr", "classmethod",
         "complex", "dict", "divmod", "enumerate", "filter", "float", "format",
         "frozenset", "hash", "hex", "hasattr", "int", "isinstance", "issubclass",
@@ -138,7 +167,13 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def validate_code(cls, code: str) -> Dict[str, bool | str]:
-        """Validate code before sending it to the sandbox process."""
+        """Validate code before sending it to the sandbox process.
+
+        Args:
+            code: Python source to validate.
+
+        Returns:
+            The parsed syntax tree."""
         try:
             tree = ast.parse(code)
         except SyntaxError as e:
@@ -200,7 +235,13 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def validate_eval(cls, node: ast.Call) -> Dict[str, bool | str]:
-        """验证 node 是否是一个安全的 eval 语句 (纯数学表达式)"""
+        """Validate that a node is a safe, pure mathematical expression.
+
+        Args:
+            node: Syntax-tree node to validate.
+
+        Returns:
+            ``True`` when validation succeeds."""
         if not node.args or len(node.args) > 3:
             return {"is_safe": False, "error_msg": "Illegal eval call: must have 1-3 positional arguments"}
         expr_arg = node.args[0]
@@ -214,7 +255,13 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def validate_math_expression(cls, expression: str) -> Dict[str, bool | str]:
-        """验证 expression 是否是一个安全的纯数学表达式"""
+        """Validate a pure mathematical expression.
+
+        Args:
+            expression: Expression source to validate.
+
+        Returns:
+            ``True`` when validation succeeds."""
         try:
             expr_tree = ast.parse(expression, mode="eval")
         except SyntaxError as e:
@@ -288,6 +335,14 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def validate_import(cls, module_name: str) -> Tuple[bool, str]:
+        """Validate import.
+
+        Args:
+            module_name: The module name value.
+
+        Returns:
+            Tuple[bool, str]: The operation result.
+        """
         root = root_module_name(module_name)
         if root in set(cls.iter_sandbox_resource_factories("module")):
             return {"is_safe": True, "error_msg": ""}
@@ -310,6 +365,16 @@ class SandBoxCodeExecutor:
         result_queue: mp.Queue,
     ) -> None:
         # 准备受限环境
+        """Run the ``sandbox worker`` operation.
+
+        Args:
+            program: The program value.
+            stdin_text: The stdin text value.
+            timeout_seconds: The timeout seconds value.
+            memory_limit_mb: The memory limit mb value.
+            output_limit_bytes: The output limit bytes value.
+            result_queue: The result queue value.
+        """
         cls.prepare_sandbox_runtime(
             stdin_text=stdin_text,
             timeout_seconds=timeout_seconds,
@@ -338,6 +403,11 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def prepare_sandbox_runtime(cls, **sandbox_context) -> None:
+        """Prepare sandbox runtime.
+
+        Args:
+            **sandbox_context: The sandbox context value.
+        """
         cls._SANDBOX_MODULES = {
             name: factory(**sandbox_context)
             for name, factory in cls.iter_sandbox_resource_factories("module").items()
@@ -353,6 +423,7 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def install_sandbox_resources(cls) -> None:
+        """Run the ``install sandbox resources`` operation."""
         for resource in [*cls._SANDBOX_MODULES.values(), *cls._SANDBOX_BUILTINS.values()]:
             installer = getattr(resource, "_sandbox_install", None)
             if installer is not None:
@@ -360,6 +431,12 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def apply_resource_limits(cls, timeout_seconds: int, memory_limit_mb: int) -> None:
+        """Run the ``apply resource limits`` operation.
+
+        Args:
+            timeout_seconds: The timeout seconds value.
+            memory_limit_mb: The memory limit mb value.
+        """
         try:
             with open("/proc/self/statm", "r", encoding="utf-8") as statm_file:
                 pages = int(statm_file.read().split()[0])
@@ -395,7 +472,17 @@ class SandBoxCodeExecutor:
         fromlist=(),
         level: int = 0,
     ) -> ModuleType:
-        """限制子进程的 import 行为，禁止导入未授权的模块。"""
+        """Restrict imports in the sandbox to approved modules.
+
+        Args:
+            name: Module name requested by sandboxed code.
+            globals: Import globals supplied by Python.
+            locals: Import locals supplied by Python.
+            fromlist: Requested imported attributes.
+            level: Relative-import level.
+
+        Returns:
+            The approved sandbox module."""
         # 禁止 from .xxx import yyy 这样的相对导入
         if level != 0:
             raise ImportError("relative imports are not allowed")
@@ -414,6 +501,16 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def restricted_module_for_import(cls, name: str, module: ModuleType, fromlist=()) -> ModuleType:
+        """Run the ``restricted module for import`` operation.
+
+        Args:
+            name: Registered name.
+            module: The module value.
+            fromlist: The fromlist value.
+
+        Returns:
+            ModuleType: The operation result.
+        """
         for attr in fromlist or ():
             if attr == "*":
                 continue
@@ -427,7 +524,13 @@ class SandBoxCodeExecutor:
 
     @classmethod
     def iter_sandbox_resource_factories(cls, kind: str):
-        """ 查找所有被 @sandbox_module 或 @sandbox_builtin 装饰的工厂函数，返回一个 name->factory 的字典 """
+        """Collect factories registered by ``sandbox_module`` and ``sandbox_builtin``.
+
+        Args:
+            kind: Resource kind to collect.
+
+        Returns:
+            Resource factories keyed by their sandbox-visible names."""
         factories = {}
         # reversed 是为了让子类定义的资源优先于父类同名资源
         for base in reversed(cls.__mro__):
@@ -441,7 +544,13 @@ class SandBoxCodeExecutor:
     @classmethod
     @sandbox_builtin("eval")
     def create_safe_eval(cls, **sandbox_context) -> Any:
-        """只能执行纯数学表达式的安全 eval 实现，必须通过 validate_math_expression 的 AST 验证才能调用"""
+        """Create an ``eval`` function restricted to validated mathematical expressions.
+
+        Args:
+            **sandbox_context: Runtime values available to sandbox resource factories.
+
+        Returns:
+            A safe expression evaluator."""
         def safe_eval(expression: str, globals=None, locals=None) -> Any:
             if not isinstance(expression, str):
                 raise TypeError("Expression for eval must be a string.")
@@ -462,7 +571,15 @@ class SandBoxCodeExecutor:
     @classmethod
     @sandbox_module("sys")
     def create_fake_sys_module(cls, stdin_text: str = "", **sandbox_context) -> ModuleType:
-        """只能访问有限属性的 sys 模块，stdin 可通过参数传入，stdout 和 stderr 定向到父进程的 stdout 和 stderr"""
+        """Create a restricted ``sys`` module for sandboxed code.
+
+        Only a limited set of attributes is exposed. Standard input can be supplied explicitly, while standard output and error are redirected to the parent process streams.
+
+        Args:
+            stdin_text: Text exposed through ``sys.stdin``.
+
+        Returns:
+            The restricted module."""
         fake_sys = ModuleType("sys")
         fake_sys.stdin = io.StringIO(stdin_text)
         fake_sys.stdout = sys.stdout
@@ -475,6 +592,7 @@ class SandBoxCodeExecutor:
 
 @BaseTool.register("code_executor")
 class CodeExecutorTool(BaseTool):
+    """Implementation of the code executor tool."""
     metadata = ToolMetadata(name="code_executor")
 
     # 计算资源限制
@@ -523,31 +641,31 @@ class CodeExecutorTool(BaseTool):
 
         # 准备子进程
         timeout_seconds = bounded_value(
-            timeout_seconds, 
-            min=1, 
-            max=self.MAX_TIMEOUT_SECONDS, 
-            default=self.DEFAULT_TIMEOUT_SECONDS, 
+            timeout_seconds,
+            min=1,
+            max=self.MAX_TIMEOUT_SECONDS,
+            default=self.DEFAULT_TIMEOUT_SECONDS,
             converter=int
         )
         memory_limit_mb = bounded_value(
-            memory_limit_mb, 
-            default=self.DEFAULT_MEMORY_LIMIT_MB, 
-            min=64, 
-            max=self.MAX_MEMORY_LIMIT_MB, 
+            memory_limit_mb,
+            default=self.DEFAULT_MEMORY_LIMIT_MB,
+            min=64,
+            max=self.MAX_MEMORY_LIMIT_MB,
             converter=int
         )
         output_limit_bytes = bounded_value(
-            output_limit_bytes, 
-            default=self.DEFAULT_OUTPUT_LIMIT_BYTES, 
-            min=1024, 
-            max=self.MAX_OUTPUT_LIMIT_BYTES, 
+            output_limit_bytes,
+            default=self.DEFAULT_OUTPUT_LIMIT_BYTES,
+            min=1024,
+            max=self.MAX_OUTPUT_LIMIT_BYTES,
             converter=int
         )
         mp_context = mp.get_context("spawn") if os.name == "nt" else mp.get_context("fork")  # Windows (nt) 不支持 fork, 必须用 spawn
         result_queue = mp_context.Queue(maxsize=1)
         worker_args = (program, stdin_text, timeout_seconds, memory_limit_mb, output_limit_bytes, result_queue)
         process = mp_context.Process(target=SandBoxCodeExecutor.sandbox_worker, args=worker_args)
-        
+
         # 启动子进程
         max_retry = 3
         for attempt in range(1, max_retry + 1):
@@ -573,7 +691,7 @@ class CodeExecutorTool(BaseTool):
             except queue.Empty:
                 if not process.is_alive():
                     break
-        
+
         # 处理结果
         if result is None:
             if process.is_alive(): # 超时
@@ -589,8 +707,8 @@ class CodeExecutorTool(BaseTool):
             process.join(1)
             self.terminate_process(process)
             return {
-                'stdout': result['stdout'], 
-                'stderr': result['stderr'], 
+                'stdout': result['stdout'],
+                'stderr': result['stderr'],
                 'duration': time.monotonic() - start_time,
                 "timeout_seconds": timeout_seconds,
                 "memory_limit_mb": memory_limit_mb,
@@ -599,6 +717,14 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         parts = []
         if result["stdout"]:
             parts.append(result["stdout"].rstrip())
@@ -611,6 +737,14 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def extract_code(cls, code: str) -> str:
+        """Run the ``extract code`` operation.
+
+        Args:
+            code: The code value.
+
+        Returns:
+            str: The operation result.
+        """
         raw_code = str(code).strip()
         if "```python" in raw_code:
             return raw_code.split("```python")[-1].split("```")[0].strip()
@@ -627,6 +761,14 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def serialization(cls, value: Any) -> Any:
+        """Run the ``serialization`` operation.
+
+        Args:
+            value: Input value.
+
+        Returns:
+            Any: The operation result.
+        """
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
         if isinstance(value, dict):
@@ -641,6 +783,11 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def terminate_process(cls, process: mp.Process) -> None:
+        """Run the ``terminate process`` operation.
+
+        Args:
+            process: The process value.
+        """
         if process.is_alive():
             process.terminate()
             process.join(1)
@@ -650,4 +797,15 @@ class CodeExecutorTool(BaseTool):
 
     @classmethod
     def bounded_int(cls, value: Any, default: int, minimum: int, maximum: int) -> int:
+        """Run the ``bounded int`` operation.
+
+        Args:
+            value: Input value.
+            default: Fallback value.
+            minimum: The minimum value.
+            maximum: The maximum value.
+
+        Returns:
+            int: The operation result.
+        """
         return bounded_value(value, min=minimum, max=maximum, default=default, converter=int)

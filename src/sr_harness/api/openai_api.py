@@ -15,6 +15,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("openai")
 class OpenAIAPI(BaseAPI):
+    """OpenAI-compatible provider adapter."""
     supported_models = [
         "gpt-4o-mini",
         "gpt-5-mini",
@@ -57,6 +58,14 @@ class OpenAIAPI(BaseAPI):
             return results
 
     def build_native_tool_description(self, use_chat_completions=False) -> List[Dict]:
+        """Build native tool description.
+
+        Args:
+            use_chat_completions: The use chat completions value.
+
+        Returns:
+            List[Dict]: The operation result.
+        """
         tools = self.tool_description_json
         if use_chat_completions:
             return tools
@@ -78,8 +87,17 @@ class OpenAIAPI(BaseAPI):
         temperature=1.0,
         top_p=1.0,
     ) -> Generator[str, None, Dict]:
-        """ OpenAI 的最新 API, 建议新项目使用这个接口 (https://platform.openai.com/docs/guides/migrate-to-responses)
-        但看起来它还缺了一些功能 (比如 n parameter), 而且也无法缓存 gpt-4o-mini 的 prompt token, 所以依然保留了 create_chat_completions 接口
+        """Create responses.
+
+        Args:
+            messages: Conversation messages in provider-compatible order.
+            n: The n value.
+            max_tokens: The max tokens value.
+            temperature: The temperature value.
+            top_p: The top p value.
+
+        Returns:
+            Generator[str, None, Dict]: The operation result.
         """
         ## Ensure this is a generator
         yield from []
@@ -198,7 +216,18 @@ class OpenAIAPI(BaseAPI):
         temperature=1.0,
         top_p=1.0,
     ) -> Generator[str, None, Dict]:
-        """ OpenAI 的旧版 API, 建议新项目使用 create_responses 接口 """
+        """Create chat completions.
+
+        Args:
+            messages: Conversation messages in provider-compatible order.
+            n: The n value.
+            max_tokens: The max tokens value.
+            temperature: The temperature value.
+            top_p: The top p value.
+
+        Returns:
+            Generator[str, None, Dict]: The operation result.
+        """
         ## Ensure this is a generator
         yield from []
         client = AzureOpenAI(
@@ -262,6 +291,14 @@ class OpenAIAPI(BaseAPI):
             return results
 
     def parse_usage(self, response: Response) -> Dict:
+        """Parse usage.
+
+        Args:
+            response: Provider response object.
+
+        Returns:
+            Dict: The operation result.
+        """
         usage = {'token': defaultdict(float), 'price': defaultdict(float)}
         if response.model.startswith('gpt-5-mini'):
             usage['token']['cached'] = (cached_tokens := response.usage.input_tokens_details.cached_tokens)
@@ -289,6 +326,14 @@ class OpenAIAPI(BaseAPI):
         return usage
 
     def parse_chat_completions_usage(self, response: ChatCompletion) -> Dict:
+        """Parse chat completions usage.
+
+        Args:
+            response: Provider response object.
+
+        Returns:
+            Dict: The operation result.
+        """
         usage = {'token': defaultdict(float), 'price': defaultdict(float)}
         if response.model.startswith('gpt-4o-mini'):
             usage['token']['prompt'] += (prompt_tokens := response.usage.prompt_tokens)

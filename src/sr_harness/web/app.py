@@ -25,6 +25,16 @@ def create_app(
     controller: InteractionController,
     session=None,
 ) -> FastAPI:
+    """Create app.
+
+    Args:
+        log_dir: The log dir value.
+        controller: The controller value.
+        session: The session value.
+
+    Returns:
+        FastAPI: The operation result.
+    """
     app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
     app.state.controller = controller
@@ -37,6 +47,10 @@ def create_app(
     @app.get("/viewer")
     def viewer():
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/data-agent-safety")
+    def data_agent_safety():
+        return FileResponse(STATIC_DIR / "data-agent-safety.html")
 
     if session is not None:
         from .platform import mount_platform

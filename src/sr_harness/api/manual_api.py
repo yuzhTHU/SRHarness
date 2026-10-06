@@ -10,6 +10,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("manual")
 class ManualAPI(BaseAPI): # 这个类已经经过人工审核，任何 Coding Agent 不得擅自改动其内容
+    """Interactive manual-response provider adapter."""
     supported_models = ["manual"]
 
     def __init__(self, model="manual", save_path=None, **kwargs):

@@ -15,11 +15,7 @@ _logger = getLogger(f'sr_harness.{__name__}')
 
 @BaseParser.register('text')
 class TextParser(BaseParser):
-    """基于文本格式的工具调用解析器。
-
-    期望 LLM 使用以下格式输出：
-    Action: tool_name(param1=value1, param2=value2)
-    """
+    """Parser for tagged text tool calls."""
 
     def format_tools(self) -> str:
         """Format tool list into a description string for LLM.
@@ -82,13 +78,13 @@ class TextParser(BaseParser):
         return "\n".join(lines)
 
     def parse_response(self, response: str) -> List[ToolCall]:
-        """从 LLM 响应中解析工具调用。
+        """Parse response.
 
         Args:
-            response: LLM 的原始响应文本。
+            response: Provider response object.
 
         Returns:
-            工具调用列表。
+            List[ToolCall]: The operation result.
         """
         tool_calls = []
         for line in response.strip().splitlines():
@@ -107,13 +103,13 @@ class TextParser(BaseParser):
         return tool_calls
 
     def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
-        """将工具调用列表格式化为字符串，供 LLM 参考。
+        """Format tool calls.
 
         Args:
-            tool_calls: 工具调用列表。
+            tool_calls: Tool calls returned by the model.
 
         Returns:
-            格式化后的工具调用字符串。
+            str: The operation result.
         """
         lines = []
         for tool_call in tool_calls:

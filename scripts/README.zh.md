@@ -1,3 +1,5 @@
-- 本目录提供开发者使用的入口脚本
-- 用户使用的入口脚本放到 SRAgent/src/sr_harness/cli 中
-- 仅供本机使用的实验性/调试性脚本放到 playground 中
+- 本目录提供开发者使用的入口脚本。
+- 使用 `python scripts/download_models.py --help` 下载模型检查点。
+- 使用 `python scripts/upload_models.py --help` 上传模型检查点。
+- 用户使用的 `sr-harness` 子命令位于 `src/sr_harness/cli` 中。
+- 仅供本机使用的实验性或调试性脚本位于 `playground` 中。

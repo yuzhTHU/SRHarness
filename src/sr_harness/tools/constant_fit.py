@@ -14,6 +14,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("constant_fit")
 class ConstantFitTool(BaseTool):
+    """Implementation of the constant fit tool."""
     metadata = ToolMetadata("constant_fit")
     NEAR_RELATIVE_TOLERANCE = 0.05
     MAX_SIMPLE_CANDIDATES_PER_NUMBER = 4
@@ -178,6 +179,14 @@ class ConstantFitTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if "exceptions" in result:
             return "Constant fitting not applicable: " + "; ".join(result["exceptions"])
 

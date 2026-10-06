@@ -266,6 +266,14 @@ class EICTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         return (
             f"Formula EIC (maximum over all subtrees): {result['eic']:.6g} "
             f"± {result['eic_std']:.3g}\n"
@@ -277,6 +285,11 @@ class EICTool(BaseTool):
 
     @classmethod
     def get_doc(cls) -> dict[str, str]:
+        """Return documentation exposed as a runtime skill.
+
+        Returns:
+            dict[str, str]: The operation result.
+        """
         return {
             "name": "eic-structural-stability",
             "description": (

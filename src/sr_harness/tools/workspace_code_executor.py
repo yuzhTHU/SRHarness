@@ -15,6 +15,7 @@ import builtins
 import traceback
 import contextlib
 import multiprocessing as mp
+import stat
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict
@@ -35,23 +36,73 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
     FORBIDDEN_CALLS = SandBoxCodeExecutor.FORBIDDEN_CALLS - {"open"}
 
     @classmethod
-    def check_workspace_path(cls, path, workspace_dir: str) -> str:
-        """校验路径是否在工作区内，返回规范化的绝对路径字符串。"""
+    def check_workspace_path(
+        cls,
+        path,
+        workspace_dir: str,
+        readonly_mounts: dict[str, str] | None = None,
+        *,
+        write: bool = False,
+    ) -> str:
+        """Validate a path and return its normalized location inside the workspace.
+
+        Args:
+            path: User-supplied path.
+            workspace_dir: Workspace root directory.
+            readonly_mounts: Read-only workspace names mapped to source paths.
+            write: Whether the caller intends to modify the path.
+
+        Returns:
+            The normalized absolute path."""
         workspace = Path(workspace_dir).resolve()
         target = Path(str(path))
         if not target.is_absolute():
             target = workspace / target
+        try:
+            relative = target.relative_to(workspace)
+        except ValueError:
+            raise PermissionError(f"禁止访问工作区外的路径：{path}")
+        if ".." in relative.parts:
+            raise PermissionError(f"禁止访问工作区外的路径：{path}")
+        mounts = {name: Path(source).resolve() for name, source in (readonly_mounts or {}).items()}
+        if relative.parts and relative.parts[0] in mounts:
+            if write:
+                raise PermissionError(f"禁止修改只读工作区输入：{path}")
+            source = mounts[relative.parts[0]]
+            if source.is_file() and len(relative.parts) > 1:
+                raise PermissionError(f"无效的只读工作区路径：{path}")
+            resolved = (source / Path(*relative.parts[1:])).resolve() if source.is_dir() else source
+            try:
+                resolved.relative_to(source if source.is_dir() else source.parent)
+            except ValueError:
+                raise PermissionError(f"禁止访问只读输入之外的路径：{path}")
+            return str(resolved)
         resolved = target.resolve()
         try:
             resolved.relative_to(workspace)
         except ValueError:
             raise PermissionError(f"禁止访问工作区外的路径：{path}")
+        if write:
+            probe = resolved
+            while not probe.exists() and probe != workspace:
+                probe = probe.parent
+            for item in (probe, *probe.parents):
+                if item.exists() and not (item.stat().st_mode & stat.S_IWUSR):
+                    raise PermissionError(f"禁止修改已锁定的工作区内容：{path}")
+                if item == workspace:
+                    break
         return str(resolved)
 
     @classmethod
     @sandbox_builtin("open")
     def make_restricted_open(cls, workspace_dir: str, **sandbox_context):
-        """创建一个路径受限的 open() 函数。"""
+        """Create an ``open`` function restricted to workspace paths.
+
+        Args:
+            workspace_dir: Workspace root directory.
+
+        Returns:
+            The restricted file-opening function."""
         original_open = builtins.open
 
         def restricted_open(
@@ -64,7 +115,13 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
             closefd=True,
             opener=None,
         ):
-            checked = cls.check_workspace_path(file, workspace_dir)
+            write = any(flag in mode for flag in "wax+")
+            checked = cls.check_workspace_path(
+                file,
+                workspace_dir,
+                sandbox_context.get("readonly_mounts"),
+                write=write,
+            )
             return original_open(
                 checked,
                 mode,
@@ -86,7 +143,13 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
 
     @classmethod
     def make_blocked_func(cls, name: str):
-        """创建一个调用时抛出 PermissionError 的占位函数。"""
+        """Create a placeholder that raises ``PermissionError`` when called.
+
+        Args:
+            name: Blocked operation name used in the error message.
+
+        Returns:
+            A function that always raises ``PermissionError``."""
         def blocked(*args, **kwargs):
             raise PermissionError(f"禁止调用 os.{name}()")
         blocked.__name__ = name
@@ -95,7 +158,14 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
     @classmethod
     @sandbox_module("os")
     def make_restricted_os(cls, workspace_dir: str, **sandbox_context) -> ModuleType:
-        """创建路径受限的 os 模块代理。"""
+        """Create an ``os`` proxy restricted to workspace paths.
+
+        Args:
+            workspace_dir: Workspace root directory.
+            **sandbox_context: Additional sandbox resources.
+
+        Returns:
+            The restricted module proxy."""
         proxy = ModuleType("os")
         proxy.__name__ = "os"
         proxy.__package__ = ""
@@ -108,8 +178,15 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         proxy.name = os.name
         proxy.cpu_count = os.cpu_count
 
-        def check(path):
-            return cls.check_workspace_path(path, workspace_dir)
+        readonly_mounts = sandbox_context.get("readonly_mounts")
+
+        def check(path, *, write=False):
+            return cls.check_workspace_path(
+                path,
+                workspace_dir,
+                readonly_mounts,
+                write=write,
+            )
 
         def getcwd():
             return os.getcwd()
@@ -127,33 +204,33 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
             return os.stat(path, **kwargs)
 
         def mkdir(path, mode=0o777, **kwargs):
-            check(path)
+            check(path, write=True)
             return os.mkdir(path, mode, **kwargs)
 
         def makedirs(name, mode=0o777, exist_ok=False):
-            check(name)
+            check(name, write=True)
             return os.makedirs(name, mode, exist_ok=exist_ok)
 
         def remove(path):
-            check(path)
+            check(path, write=True)
             return os.remove(path)
 
         def unlink(path):
-            check(path)
+            check(path, write=True)
             return os.unlink(path)
 
         def rename(src, dst):
-            check(src)
-            check(dst)
+            check(src, write=True)
+            check(dst, write=True)
             return os.rename(src, dst)
 
         def replace(src, dst):
-            check(src)
-            check(dst)
+            check(src, write=True)
+            check(dst, write=True)
             return os.replace(src, dst)
 
         def rmdir(path):
-            check(path)
+            check(path, write=True)
             return os.rmdir(path)
 
         def walk(top, topdown=True, onerror=None, followlinks=False):
@@ -191,18 +268,26 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
     @classmethod
     @sandbox_module("glob")
     def make_restricted_glob(cls, workspace_dir: str, **sandbox_context) -> ModuleType:
-        """创建路径受限的 glob 模块代理。"""
+        """Create a ``glob`` proxy restricted to workspace paths.
+
+        Args:
+            workspace_dir: Workspace root directory.
+            **sandbox_context: Additional sandbox resources.
+
+        Returns:
+            The restricted module proxy."""
         import glob as real_glob
 
         proxy = ModuleType("glob")
         proxy.__name__ = "glob"
+        readonly_mounts = sandbox_context.get("readonly_mounts")
 
         def glob(pathname, *, root_dir=None, dir_fd=None, recursive=False,
                  include_hidden=False):
             effective_root = root_dir or "."
-            cls.check_workspace_path(effective_root, workspace_dir)
+            cls.check_workspace_path(effective_root, workspace_dir, readonly_mounts)
             if Path(pathname).is_absolute():
-                cls.check_workspace_path(pathname, workspace_dir)
+                cls.check_workspace_path(pathname, workspace_dir, readonly_mounts)
             return real_glob.glob(
                 pathname, root_dir=root_dir, dir_fd=dir_fd,
                 recursive=recursive, include_hidden=include_hidden,
@@ -211,9 +296,9 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         def iglob(pathname, *, root_dir=None, dir_fd=None, recursive=False,
                   include_hidden=False):
             effective_root = root_dir or "."
-            cls.check_workspace_path(effective_root, workspace_dir)
+            cls.check_workspace_path(effective_root, workspace_dir, readonly_mounts)
             if Path(pathname).is_absolute():
-                cls.check_workspace_path(pathname, workspace_dir)
+                cls.check_workspace_path(pathname, workspace_dir, readonly_mounts)
             return real_glob.iglob(
                 pathname, root_dir=root_dir, dir_fd=dir_fd,
                 recursive=recursive, include_hidden=include_hidden,
@@ -233,14 +318,28 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         memory_limit_mb: int,
         output_limit_bytes: int,
         workspace_dir: str,
+        readonly_mounts: dict[str, str],
         result_queue: mp.Queue,
     ) -> None:
         # 准备受限环境
+        """Run the ``sandbox worker`` operation.
+
+        Args:
+            program: The program value.
+            stdin_text: The stdin text value.
+            timeout_seconds: The timeout seconds value.
+            memory_limit_mb: The memory limit mb value.
+            output_limit_bytes: The output limit bytes value.
+            workspace_dir: The workspace dir value.
+            readonly_mounts: Read-only workspace names mapped to source paths.
+            result_queue: The result queue value.
+        """
         cls.prepare_sandbox_runtime(
             stdin_text=stdin_text,
             timeout_seconds=timeout_seconds,
             memory_limit_mb=memory_limit_mb,
             workspace_dir=workspace_dir,
+            readonly_mounts=readonly_mounts,
         )
         os.chdir(workspace_dir)
 
@@ -268,6 +367,7 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
 
 @BaseTool.register("workspace_code_executor")
 class WorkspaceCodeExecutorTool(CodeExecutorTool):
+    """Implementation of the workspace code executor tool."""
     metadata = ToolMetadata(name="workspace_code_executor")
 
     def execute(
@@ -310,12 +410,20 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
         # 准备子进程
         assert 'workspace_dir' in self.context
         workspace_dir = self.context['workspace_dir']
+        workspace = self.context.get("workspace")
+        readonly_mounts = {
+            logical.name: str(source)
+            for logical, source in getattr(workspace, "readonly_mounts", {}).items()
+        }
         timeout_seconds = self.bounded_int(timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS)
         memory_limit_mb = self.bounded_int(memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB)
         output_limit_bytes = self.bounded_int(output_limit_bytes, self.DEFAULT_OUTPUT_LIMIT_BYTES, 1024, self.MAX_OUTPUT_LIMIT_BYTES)
         mp_context = mp.get_context("spawn") if os.name == "nt" else mp.get_context("fork")  # Windows (nt) 不支持 fork, 必须用 spawn
         result_queue = mp_context.Queue(maxsize=1)
-        worker_args = (program, stdin_text, timeout_seconds, memory_limit_mb, output_limit_bytes, workspace_dir, result_queue)
+        worker_args = (
+            program, stdin_text, timeout_seconds, memory_limit_mb,
+            output_limit_bytes, workspace_dir, readonly_mounts, result_queue,
+        )
         process = mp_context.Process(target=WorkspaceSandBoxCodeExecutor.sandbox_worker, args=worker_args)
 
         # 启动子进程
@@ -343,7 +451,7 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
             except queue.Empty:
                 if not process.is_alive():
                     break
-        
+
         # 处理结果
         if result is None:
             if process.is_alive(): # 超时

@@ -15,14 +15,7 @@ _logger = getLogger(f'sr_harness.{__name__}')
 
 
 class BaseParser(ABC, FactoryMixin):
-    """工具调用解析器基类。
-
-    提供两个核心功能：
-    1. format_tools: 将可用的工具列表格式化为 LLM 可读的描述，并通知 LLM 调用工具的格式
-    2. parse_response: 根据 format_tools 中确定的格式，鲁棒地从 LLM 响应中解析工具调用
-
-    子类可以为此接口实现不同风格的工具调用和解析格式（如 Text, JSON, XML, Args 等）。
-    """
+    """Base class for model tool-call parsers."""
 
     def __init__(self, tool_list: List[str] | List[Dict[str, Any]] | None = None):
         """初始化工具解析器。
@@ -58,34 +51,34 @@ class BaseParser(ABC, FactoryMixin):
 
     @abstractmethod
     def format_tools(self) -> str:
-        """将工具列表格式化为 LLM 可读的描述字符串。
+        """Format tools.
 
         Returns:
-            格式化后的工具描述字符串，包含每个工具的名称、描述、签名和使用示例。
+            str: The operation result.
         """
         pass
 
     @abstractmethod
     def parse_response(self, response: str) -> List[ToolCall]:
-        """从 LLM 响应中解析工具调用。
+        """Parse response.
 
         Args:
-            response: LLM 的原始响应文本。
+            response: Provider response object.
 
         Returns:
-            工具调用列表。
+            List[ToolCall]: The operation result.
         """
         pass
 
     @abstractmethod
     def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
-        """将工具调用列表格式化为字符串。
+        """Format tool calls.
 
         Args:
-            tool_calls: 工具调用列表。
+            tool_calls: Tool calls returned by the model.
 
         Returns:
-            格式化后的字符串。
+            str: The operation result.
         """
         pass
 
@@ -94,7 +87,15 @@ class BaseParser(ABC, FactoryMixin):
         tool_calls: List[ToolCall],
         results: List[ToolCallResult | None],
     ) -> List[Dict[str, Any]]:
-        """将工具调用结果格式化为可追加到 messages 的消息。"""
+        """Format tool result messages.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+            results: Result records to process.
+
+        Returns:
+            List[Dict[str, Any]]: The operation result.
+        """
         lines = []
         for tool_call, result in zip(tool_calls, results):
             lines.append(f"=== Results for `{tool_call.name}` with params `{tool_call.params}` ===")

@@ -29,6 +29,7 @@ from .workspace_shell import WorkspaceShellTool
 from .subagent import SubagentTool
 from .web_research import WebFetchTool, WebSearchTool
 from .commit_data import CommitDataTool
+from .load_context_data import LoadContextDataTool
 from .read_pdf import PDFReadTool
 from .eic import EICTool
 from .nd2 import ND2Tool

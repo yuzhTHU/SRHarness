@@ -17,6 +17,7 @@ _logger = logging.getLogger(f'sr_harness.{__name__}')
 
 @BaseTool.register('call_sindy')
 class SINDyTool(BaseTool):
+    """Implementation of the s i n dy tool."""
     metadata = ToolMetadata(name="call_sindy")
 
     def execute(
@@ -249,6 +250,14 @@ class SINDyTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if result["formula"] == "(None)":
             warnings = "; ".join(result.get("exceptions", [])) or "No further error detail was provided."
             return f"SINDy did not produce a valid formula. Details: {warnings}"

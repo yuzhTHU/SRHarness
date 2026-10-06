@@ -13,6 +13,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("openrouter")
 class OpenRouterAPI(BaseAPI):
+    """OpenRouter provider adapter."""
     supports_streaming = True
     supported_models = [
         "qwen/qwen3.6-flash",
@@ -27,6 +28,7 @@ class OpenRouterAPI(BaseAPI):
         "deepseek/deepseek-v4-pro",
         "deepseek/deepseek-v4-pro-0813",
         "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-flash-0731",
         "openai/gpt-oss-120b",
         "qwen/qwen3.6-max-preview",
         "qwen/qwen3.6-plus",

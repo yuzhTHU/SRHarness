@@ -37,10 +37,19 @@ class Agent(ABC, FactoryMixin):
 
     @abstractmethod
     def run(self, *args, **kwargs):
-        """Run the agent's task loop."""
+        """Run the agent's task loop.
+
+        Args:
+            *args: Positional inputs accepted by the concrete agent.
+            **kwargs: Keyword inputs accepted by the concrete agent.
+        """
 
     def initialize_tools(self, context: AgentContext) -> None:
-        """Bind one shared context to every tool, parser, and API adapter."""
+        """Bind one shared context to every tool, parser, and API adapter.
+
+        Args:
+            context: Shared agent and tool context.
+        """
         self.context = context
         self.tools = [tool_cls(context=context) for tool_cls in self.tool_cls_list]
         self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
@@ -52,11 +61,22 @@ class Agent(ABC, FactoryMixin):
         )
 
     def set_messages(self, messages: list[dict[str, Any]]) -> None:
-        """Expose the current prompt through the shared tool context."""
+        """Expose the current prompt through the shared tool context.
+
+        Args:
+            messages: Conversation messages in provider-compatible order.
+        """
         self.context["messages"] = deepcopy(messages)
 
     def execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult | None]:
-        """Execute tool calls serially."""
+        """Execute tool calls serially.
+
+        Args:
+            actions: Tool calls to execute.
+
+        Returns:
+            Results in the same order as ``actions``.
+        """
         results: list[ToolCallResult | None] = []
         for action in actions:
             tool = next((item for item in self.tools if item.metadata.name == action.name), None)
@@ -78,7 +98,15 @@ class Agent(ABC, FactoryMixin):
         actions: list[ToolCall],
         max_workers: int,
     ) -> list[ToolCallResult]:
-        """Execute independent tool calls in worker processes."""
+        """Execute independent tool calls in worker processes.
+
+        Args:
+            actions: Tool calls to execute.
+            max_workers: Maximum number of parallel workers.
+
+        Returns:
+            Results in the same order as ``actions``.
+        """
         results: list[ToolCallResult | None] = [None] * len(actions)
         tasks = []
         for index, action in enumerate(actions):
@@ -101,4 +129,3 @@ class Agent(ABC, FactoryMixin):
             for (index, _), result in zip(tasks, task_results):
                 results[index] = result
         return results
-

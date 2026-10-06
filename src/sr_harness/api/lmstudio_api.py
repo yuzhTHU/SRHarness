@@ -33,7 +33,14 @@ class LMStudioAPI(BaseAPI):
 
     @staticmethod
     def normalize_endpoint(endpoint: str) -> str:
-        """Return the OpenAI-compatible chat-completions URL."""
+        """Return the OpenAI-compatible chat-completions URL.
+
+        Args:
+            endpoint: The endpoint value.
+
+        Returns:
+            str: The operation result.
+        """
         endpoint = endpoint.strip()
         parts = urlsplit(endpoint)
         if parts.scheme not in {"http", "https"} or not parts.netloc:

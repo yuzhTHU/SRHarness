@@ -65,6 +65,14 @@ class BaseAPI(ABC, FactoryMixin):
         raise NotImplementedError
 
     def build_parser(self, parser: ToolParserName) -> BaseParser | None:
+        """Build parser.
+
+        Args:
+            parser: Argument parser to configure.
+
+        Returns:
+            BaseParser | None: The operation result.
+        """
         if not self.tool_list or parser == "openai":
             return None
         if parser in {"text", "json", "xml"}:
@@ -73,7 +81,11 @@ class BaseAPI(ABC, FactoryMixin):
 
     @cached_property
     def tool_description_text(self) -> str:
-        """Format available tools for a model using a text-based parser."""
+        """Format available tools for a model using a text-based parser.
+
+        Returns:
+            str: The operation result.
+        """
         return (
             "Use the following tools when a tool call is needed. "
             "Return tool calls in the specified format.\n\n"
@@ -82,7 +94,11 @@ class BaseAPI(ABC, FactoryMixin):
 
     @cached_property
     def tool_description_json(self) -> List[Dict]:
-        """Build OpenAI-compatible native function descriptions."""
+        """Build OpenAI-compatible native function descriptions.
+
+        Returns:
+            List[Dict]: The operation result.
+        """
         return [
             {
                 "type": "function",
@@ -99,7 +115,14 @@ class BaseAPI(ABC, FactoryMixin):
         self,
         messages: List[Dict[str, str]],
     ) -> List[Dict[str, str]]:
-        """Add text-formatted tool instructions to the leading system message."""
+        """Add text-formatted tool instructions to the leading system message.
+
+        Args:
+            messages: Conversation messages in provider-compatible order.
+
+        Returns:
+            List[Dict[str, str]]: The operation result.
+        """
         if (role := messages[0]["role"]) not in {"system", "developer"}:
             return [{"role": "system", "content": self.tool_description_text}] + messages
         if self.tool_description_text not in (content := messages[0]["content"]):
@@ -110,7 +133,14 @@ class BaseAPI(ABC, FactoryMixin):
         return messages
 
     def normalize_openai_tool_calls(self, tool_calls: List[Any]) -> List[ToolCall]:
-        """Normalize provider-native function calls into internal ToolCall objects."""
+        """Normalize provider-native function calls into internal ToolCall objects.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+
+        Returns:
+            List[ToolCall]: The operation result.
+        """
         normalized = []
         for tool_call in tool_calls:
             if isinstance(tool_call, dict):

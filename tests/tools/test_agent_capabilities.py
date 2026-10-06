@@ -114,6 +114,72 @@ def test_web_fetch_rejects_private_network_addresses(monkeypatch):
         WebFetchTool().execute("http://example.test/private")
 
 
+def test_web_fetch_accepts_mixed_proxy_dns_but_not_mixed_direct_dns(monkeypatch):
+    addresses = [
+        (2, 1, 6, "", ("93.184.216.34", 443)),
+        (10, 1, 6, "", ("2001::1", 443, 0, 0)),
+    ]
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.socket.getaddrinfo",
+        lambda *args, **kwargs: addresses,
+    )
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.requests.utils.get_environ_proxies",
+        lambda url: {},
+    )
+    with pytest.raises(ValueError, match="public network"):
+        WebFetchTool().execute("https://example.test/page")
+
+    class Response:
+        is_redirect = False
+        status_code = 200
+        headers = {"content-type": "text/html; charset=utf-8"}
+        encoding = "utf-8"
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, size):
+            yield b"<html><body>Public page</body></html>"
+
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.requests.utils.get_environ_proxies",
+        lambda url: {"https": "http://127.0.0.1:6789"},
+    )
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.requests.get",
+        lambda *args, **kwargs: Response(),
+    )
+    result = WebFetchTool().execute("https://example.test/page")
+    assert result["text"] == "Public page"
+
+
+def test_web_fetch_reports_automated_access_blocks(monkeypatch):
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+
+    class Response:
+        is_redirect = False
+        status_code = 403
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    monkeypatch.setattr(
+        "sr_harness.tools.web_research.requests.get",
+        lambda *args, **kwargs: response,
+    )
+    result = WebFetchTool().execute("https://example.test/protected")
+    assert result["blocked"] is True
+    assert result["status_code"] == 403
+    assert "authoritative source" in result["message"]
+    assert response.closed
+
+
 def test_eic_doc_is_registered_as_runtime_skill(tmp_path):
     manager = SkillManager(
         built_in_directory="src/sr_harness/skills",

@@ -58,7 +58,17 @@ class Expression:
         time: Any = None,
         delay_resolver: Any = None,
     ) -> Any:
-        """Evaluate this expression with NumPy values."""
+        """Evaluate this expression with NumPy values.
+
+        Args:
+            values: Values keyed by symbol name.
+            parameters: Fitted parameter values keyed by parameter name.
+            time: Optional sample times.
+            delay_resolver: Optional callback that resolves delayed values.
+
+        Returns:
+            The evaluated scalar or array.
+        """
         from .evaluation import evaluate
 
         return evaluate(
@@ -73,7 +83,11 @@ class Expression:
 
     @property
     def operands(self) -> tuple[Expression, ...]:
-        """Child expressions, exposed as an immutable tuple."""
+        """Child expressions, exposed as an immutable tuple.
+
+        Returns:
+            The direct child nodes in expression order.
+        """
         from .tree import children
 
         return children(self)
@@ -91,10 +105,24 @@ class Expression:
         yield from iter_postorder(self)
 
     def copy(self) -> Expression:
+        """Return an independent copy.
+
+        Returns:
+            A deep copy of this expression.
+        """
         return deepcopy(self)
 
     def replace(self, old: Expression, new: Expression, **_: Any) -> Expression:
-        """Return a tree in which the exact *old* node is replaced by *new*."""
+        """Return a tree in which the exact *old* node is replaced by *new*.
+
+        Args:
+            old: Existing expression node to replace.
+            new: Replacement expression node.
+            **_: Ignored compatibility options.
+
+        Returns:
+            A copied expression tree with matching nodes replaced.
+        """
         from .tree import replace
 
         return replace(self, old, new)
@@ -106,12 +134,30 @@ class Expression:
         number_format: str = "",
         **_: Any,
     ) -> str:
+        """Render the expression as plain text or LaTeX.
+
+        Args:
+            latex: Whether to render LaTeX notation.
+            number_format: Format specification for numeric literals.
+            **_: Ignored compatibility options.
+
+        Returns:
+            The rendered expression.
+        """
         from .render import render
 
         return render(self, latex=latex, number_format=number_format)
 
     def to_tree(self, *, number_format: str = "", **_: Any) -> str:
-        """Render a compact preorder tree for diagnostics."""
+        """Render a compact preorder tree for diagnostics.
+
+        Args:
+            number_format: Format specification for numeric literals.
+            **_: Ignored compatibility options.
+
+        Returns:
+            A multiline representation of the expression tree.
+        """
         from .tree import children
 
         lines = [self.to_str(number_format=number_format)]
@@ -141,10 +187,50 @@ class Expression:
         method: str = "BFGS",
         options: Mapping[str, Any] | None = None,
     ):
-        """Fit named and grouped parameters against a target array."""
+        """Fit named and grouped parameters against a target array.
+
+        Args:
+            values: Values keyed by symbol name.
+            target: Target name or target values.
+            initial: Optional initial parameter values.
+            method: Optimization method name.
+            options: Optional optimizer settings.
+
+        Returns:
+            The fitted expression, parameter values, predictions, and loss.
+        """
         from .optimize import fit
 
         return fit(self, values, target, initial=initial, method=method, options=options)
+
+    def fold_constants(self) -> Expression:
+        """Return a copy with closed numerical subexpressions evaluated.
+
+        Returns:
+            A simplified expression with closed numeric branches folded.
+        """
+        from .analysis import fold_constants
+
+        return fold_constants(self)
+
+    def count_parameters(
+        self,
+        values: Mapping[str, Any] | None = None,
+        *,
+        parameters: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Count independent fitted values represented by this expression.
+
+        Args:
+            values: Values keyed by symbol name.
+            parameters: Fitted parameter values keyed by parameter name.
+
+        Returns:
+            The number of independent scalar parameter values.
+        """
+        from .analysis import count_parameters
+
+        return count_parameters(self, values, parameters=parameters)
 
     def __str__(self) -> str:
         from .render import render
@@ -154,23 +240,27 @@ class Expression:
 
 @dataclass(frozen=True, slots=True)
 class Number(Expression):
+    """Fixed numeric literal."""
     value: int | float
 
 
 @dataclass(frozen=True, slots=True)
 class Symbol(Expression):
+    """Named input symbol with an optional bound value."""
     name: str
     value: Any = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class Parameter(Expression):
+    """Named scalar parameter optimized during fitting."""
     name: str
     value: float | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class GroupedParameter(Expression):
+    """Parameter with one fitted value per category."""
     by: Expression
     name: str | None = None
     value: Mapping[Any, float] | None = field(default=None, compare=False)
@@ -179,6 +269,7 @@ class GroupedParameter(Expression):
 
 @dataclass(frozen=True, slots=True)
 class Index:
+    """Symbolic relation index."""
     name: str
 
     def __str__(self) -> str:
@@ -187,12 +278,14 @@ class Index:
 
 @dataclass(frozen=True, slots=True)
 class Unary(Expression):
+    """Unary expression node."""
     operator: str
     operand: Expression
 
 
 @dataclass(frozen=True, slots=True)
 class Binary(Expression):
+    """Binary expression node."""
     operator: str
     left: Expression
     right: Expression
@@ -200,36 +293,50 @@ class Binary(Expression):
 
 @dataclass(frozen=True, slots=True)
 class Function(Expression):
+    """Named function-call expression node."""
     name: str
     arguments: tuple[Expression, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Indexed(Expression):
+    """Expression annotated with symbolic indices."""
     base: Expression
     indices: tuple[Index, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Reduction(Expression):
+    """Sum reduction with an optional relation binder."""
     indices: tuple[Index, ...]
     operand: Expression
+    relation: Expression | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class Aggregate(Expression):
+    """Convenience aggregation node lowered to indexed syntax."""
     relation: Expression
     operand: Expression
 
 
 @dataclass(frozen=True, slots=True)
 class RelationLift(Expression):
+    """Convenience source or target projection used inside an aggregation."""
     role: str
     operand: Expression
     relation: Expression | None = None
 
 
 def as_expression(value: Any) -> Expression:
+    """Convert a numeric literal or expression into an expression node.
+
+    Args:
+        value: Existing expression or numeric literal.
+
+    Returns:
+        The corresponding expression node.
+    """
     if isinstance(value, Expression):
         return value
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -241,6 +348,14 @@ Variable = Symbol
 
 
 def as_index(value: Index | str) -> Index:
+    """Convert an index name into an index node.
+
+    Args:
+        value: Existing index or valid Python identifier.
+
+    Returns:
+        The corresponding symbolic index.
+    """
     if isinstance(value, Index):
         return value
     if isinstance(value, str) and value.isidentifier():
@@ -249,6 +364,15 @@ def as_index(value: Index | str) -> Index:
 
 
 def param(name: str, value: float | None = None) -> Parameter:
+    """Create a named scalar parameter.
+
+    Args:
+        name: Parameter name shared by all matching occurrences.
+        value: Optional initial or fixed value.
+
+    Returns:
+        A symbolic scalar parameter.
+    """
     return Parameter(name, value)
 
 
@@ -259,24 +383,84 @@ def grouped_param(
     value: Mapping[Any, float] | None = None,
     default: float | None = None,
 ) -> GroupedParameter:
+    """Create a parameter with one fitted value per category.
+
+    Args:
+        by: Symbol or expression containing category labels.
+        name: Optional parameter-map name.
+        value: Optional initial values keyed by category.
+        default: Value used for categories absent from ``value``.
+
+    Returns:
+        A category-dependent parameter expression.
+    """
     return GroupedParameter(by, name=name, value=value, default=default)
 
 
 def function(name: str, *arguments: Any) -> Function:
+    """Create a supported symbolic function call.
+
+    Args:
+        name: Function name recognized by the evaluator.
+        *arguments: Function operands.
+
+    Returns:
+        A symbolic function node.
+    """
     return Function(name, tuple(as_expression(argument) for argument in arguments))
 
 
-def reduction(indices: Index | tuple[Index, ...], operand: Any) -> Reduction:
+def reduction(
+    indices: Index | tuple[Index, ...],
+    operand: Any,
+    relation: Any = None,
+) -> Reduction:
+    """Create an indexed sum reduction.
+
+    Args:
+        indices: Symbolic indices.
+        operand: Expression being reduced or transformed.
+        relation: Relation expression that binds symbolic indices.
+
+    Returns:
+        A symbolic reduction node.
+    """
     if not isinstance(indices, tuple):
         indices = (indices,)
-    return Reduction(tuple(as_index(index) for index in indices), as_expression(operand))
+    return Reduction(
+        tuple(as_index(index) for index in indices),
+        as_expression(operand),
+        None if relation is None else as_expression(relation),
+    )
 
 
-def aggr(relation: Any, operand: Any) -> Aggregate:
-    return Aggregate(as_expression(relation), as_expression(operand))
+def aggr(relation: Any, operand: Any = None) -> Expression:
+    """Build and lower target-wise graph aggregation syntax.
+
+    Args:
+        relation: Edge relation, or a product containing it when ``operand`` is omitted.
+        operand: Message expression to aggregate by target node.
+
+    Returns:
+        The equivalent canonical indexed reduction.
+    """
+    from .desugar import desugar
+    from .parser import _split_aggregation
+
+    if operand is None:
+        relation, operand = _split_aggregation(as_expression(relation))
+    return desugar(Aggregate(as_expression(relation), as_expression(operand)))
 
 
 def targ(*arguments: Any) -> RelationLift:
+    """Project node values onto relation targets inside ``aggr``.
+
+    Args:
+        *arguments: Either ``value`` or ``relation, value``.
+
+    Returns:
+        A target projection used by aggregation desugaring.
+    """
     if len(arguments) == 1:
         return RelationLift("target", as_expression(arguments[0]))
     if len(arguments) == 2:
@@ -285,6 +469,14 @@ def targ(*arguments: Any) -> RelationLift:
 
 
 def sour(*arguments: Any) -> RelationLift:
+    """Project node values onto relation sources inside ``aggr``.
+
+    Args:
+        *arguments: Either ``value`` or ``relation, value``.
+
+    Returns:
+        A source projection used by aggregation desugaring.
+    """
     if len(arguments) == 1:
         return RelationLift("source", as_expression(arguments[0]))
     if len(arguments) == 2:

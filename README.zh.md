@@ -1,6 +1,6 @@
 # SRHarness：面向智能体符号回归的 Harness
 
-[English](README.md) | [简体中文](README.zh.md)
+[English](README.md) | [简体中文](README.zh.md) | [SRHarness 完整文档](docs/index.md) | [SRHarness-Engine 文档](docs/engine.md)
 
 SRHarness 是一个面向**智能体符号回归（agentic symbolic regression）**的领域专用运行时。它支持大语言模型分析数值观测、选择科学操作、评估相互竞争的假设，并在长搜索轨迹中逐步改进符号公式。
 
@@ -82,13 +82,13 @@ OPENROUTER_API_KEY="sk-or-v1-..."
 ```bash
 conda activate ./venv
 
-sr-harness run \
+sr-harness synthetic \
   --equation "y = sin(x1 - x2)" \
-  --x-low -10 \
-  --x-high 10 \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
-  --force-initial-diagnostics \
+  --x_low -10 \
+  --x_high 10 \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
+  --force_initial_diagnostics \
   -R 1 -C 1 -L 3 -K 1
 ```
 
@@ -114,7 +114,7 @@ x2 = np.linspace(3.0, -3.0, 100)
 
 agent = SRAgent(
     llm_provider="openrouter",
-    llm_model="deepseek/deepseek-v4-flash",
+    llm_model="deepseek/deepseek-v4-flash-0731",
     max_restart_loop=1,
     global_width=1,
     max_refinement_depth=3,
@@ -144,31 +144,31 @@ git clone https://huggingface.co/datasets/nnheui/llm-srbench \
 建议先运行一个 LSR-Transform 问题：
 
 ```bash
-sr-harness bench \
-  --algorithm my_sr_agent \
+sr-harness benchmark \
+  --algorithm sr_harness \
   --datasets lsrtransform \
-  --problem-names II.6.15b_1_0 \
-  --exp-name smoke_lsrtransform \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
+  --problem_names II.6.15b_1_0 \
+  --exp_name smoke_lsrtransform \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
   -R 1 -C 1 -L 3 -K 1
 ```
 
 添加 `--anonymize` 后，变量名和科学描述会被替换为通用输入/输出标签，数值观测保持不变：
 
 ```bash
-sr-harness bench \
-  --algorithm my_sr_agent \
+sr-harness benchmark \
+  --algorithm sr_harness \
   --datasets lsrtransform \
-  --problem-names II.6.15b_1_0 \
-  --exp-name smoke_lsrtransform_anon \
+  --problem_names II.6.15b_1_0 \
+  --exp_name smoke_lsrtransform_anon \
   --anonymize \
-  --llm-provider openrouter \
-  --llm-model deepseek/deepseek-v4-flash \
+  --llm_provider openrouter \
+  --llm_model deepseek/deepseek-v4-flash-0731 \
   -R 1 -C 1 -L 3 -K 1
 ```
 
-Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harness bench --help` 会列出通用参数，各适配器则定义相应方法的专用参数。复现论文规模的实验需要使用对应实验记录中的准确模型、工具集、数据划分、token 上限、随机种子和 `R-C-L-K` 设置；以上 smoke test 有意使用较小预算。
+Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harness benchmark --help` 会列出通用参数，各适配器则定义相应方法的专用参数。复现论文规模的实验需要使用对应实验记录中的准确模型、工具集、数据划分、token 上限、随机种子和 `R-C-L-K` 设置；以上 smoke test 有意使用较小预算。
 
 ## 日志与 Web 可视化
 
@@ -188,16 +188,29 @@ Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harn
 
 ```bash
 pip install -e ".[web]"
-sr-harness web --log-dir logs --host 127.0.0.1 --port 8000
+sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 ```
+
+默认使用临时工作区。如需保留工作区并使用已有资料，可以指定工作区目录，并将多个文件或目录只读挂载到其根目录：
+
+```bash
+sr-harness run --workspace ./workspace --mount ./data.csv ./papers --port 8000
+```
+
+挂载输入的 basename 必须唯一。数据准备 Agent 和预览接口可以读取这些内容，但上传接口与
+工作区工具不能修改其源文件。已存在于指定工作区中的文件可被 AI 工具修改或删除；
+当该目录非空时，CLI 会显示警告。
 
 随后打开 <http://127.0.0.1:8000/>。Web API 与搜索查看器直接读取当前会话内存中的
 `SearchRunState`，不依赖持久化运行文件。
 
-![SRHarness Web 搜索树查看器](assets/web.png)
+![SRHarness 数据工作台](docs/assets/web-data-workbench.png)
 
-工作台默认打开“数据与问题”页。用户可以选择或上传 CSV，指定一个因变量和若干自变量，
-编辑变量描述，并将变量拖入 X/Y/Hue/Size 槽位以快速预览变量关系。SRHarness 会根据这些
+![SRHarness 执行时间线](docs/assets/web-timeline.png)
+
+工作台默认打开“数据准备”页，用于上传文件、生成样例数据和与数据准备 Agent 交互。
+“数据分析”页用于选择 CSV 或 Excel，指定一个因变量和若干自变量，编辑变量描述，并将变量拖入
+X/Y/Hue/Size 槽位以快速预览变量关系。SRHarness 会根据这些
 配置生成初始 System Prompt 和 User Prompt，两者均可在运行前编辑。内置 `demo.csv`
 包含三个输入列（其中一个是分类变量）和一个数值因变量。
 
@@ -232,7 +245,7 @@ auto-routing 用于模型后端选择：简单任务和早期探索使用基础�
 ## 评测与可复现性说明
 
 - 搜索和候选选择期间不会向 Agent 暴露 Benchmark 测试数据。
-- 可通过 `--validation-fraction` 和 `--split-by` 从可见训练数据中划分随机或 OOD 风格的验证集。
+- 可通过 `--validation_fraction` 和 `--split_by` 从可见训练数据中划分随机或 OOD 风格的验证集。
 - 数值预测使用统一 Benchmark pipeline 评估；符号等价评估实现在 [`src/sr_harness/utils/symbolic_acc.py`](src/sr_harness/utils/symbolic_acc.py)。
 - 日志保留 Prompt、模型响应、工具调用、候选来源、token 用量和记录到的费用，便于完成后审计运行过程。
 - API 行为、模型别名、价格和随机输出可能随时间变化。严肃比较时应记录准确的 provider/model 标识、代码版本、参数和运行环境。

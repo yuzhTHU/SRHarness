@@ -14,6 +14,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("nd2")
 class ND2Tool(BaseTool):
+    """Implementation of the n d2 tool."""
     metadata = ToolMetadata(name="nd2")
     REPOSITORY = "https://github.com/tsinghua-fib-lab/ND2"
     DEFAULT_BINARY = ["add", "sub", "mul", "div", "pow", "regular"]
@@ -283,6 +284,11 @@ class ND2Tool(BaseTool):
 
     @classmethod
     def backend_status(cls) -> Dict[str, Any]:
+        """Run the ``backend status`` operation.
+
+        Returns:
+            Dict[str, Any]: The operation result.
+        """
         configured = os.environ.get("ND2_HOME")
         local_root = Path.cwd() / "third-party" / "ND2"
         root = (
@@ -309,6 +315,14 @@ class ND2Tool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         split_results = result["data_split_results"]
         train = split_results["train"]["metrics"]
         validation = split_results.get("validation", {}).get("metrics")
@@ -326,6 +340,11 @@ class ND2Tool(BaseTool):
 
     @classmethod
     def get_doc(cls) -> dict[str, str]:
+        """Return documentation exposed as a runtime skill.
+
+        Returns:
+            dict[str, str]: The operation result.
+        """
         return {
             "name": "nd2-network-dynamics",
             "description": (

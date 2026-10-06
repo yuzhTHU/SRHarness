@@ -13,6 +13,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("gemini")
 class GeminiAPI(BaseAPI):
+    """Google Gemini provider adapter."""
     supported_models = [
         "gemini-2.5-pro",
         "gemini-2.5-flash",

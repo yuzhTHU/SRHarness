@@ -1,7 +1,11 @@
+import io
+import json
 import os
 import threading
 import time
+import zipfile
 
+import numpy as np
 import pytest
 from dotenv import dotenv_values
 
@@ -9,8 +13,9 @@ pytest.importorskip('fastapi')
 pytest.importorskip('httpx')
 from fastapi.testclient import TestClient
 
+from sr_harness.agents.data_preparation_agent import DataPreparationAgent
 from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
-from sr_harness.core import APICallResult, SearchRunState, ToolCall
+from sr_harness.core import APICallResult, ContextDataStore, SearchRunState, ToolCall
 from sr_harness.api import BaseAPI
 from sr_harness.web.app import create_app
 from sr_harness.runtime import InteractionController
@@ -26,23 +31,121 @@ def platform(tmp_path):
 
 def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     client, session = platform
-    assert client.get('/').status_code == 200
+    page = client.get('/')
+    assert page.status_code == 200
+    assert 'class="badge"' not in page.text
+    assert 'id="search-record-link"' not in page.text
+    assert 'id="prepare-tab"' in page.text
+    assert 'id="data-tab"' in page.text
+    assert 'id="data-preparation"' in page.text
+    assert 'id="data-setup"' in page.text
+    assert 'id="run-setup"' in page.text
+    assert 'id="plot-variable-palette"' in page.text
+    assert 'id="start-prepared"' not in page.text
+    data_view = page.text[page.text.index('id="data-setup"'):page.text.index('id="run-setup"')]
+    run_setup = page.text[page.text.index('id="run-setup"'):page.text.index('id="feed"')]
+    data_insights_start = page.text.index('id="data-insights"')
+    data_insights = page.text[
+        data_insights_start:page.text.index('</aside>', data_insights_start)
+    ]
+    assert '>符号回归</button>' in page.text
+    assert 'id="data-preview-card"' not in data_view
+    assert 'class="data-card wide relationship-card"' not in data_view
+    assert 'id="variable-config-card"' in data_view
+    assert 'id="task-problem-card"' in data_view
+    assert '#variable-config-card,#task-problem-card{border:0;border-radius:0;background:transparent' in page.text
+    assert '#data-drop,.data-agent-compose,#variable-role-table,#problem-description,#composer{background:var(--interactive-surface)' in page.text
+    assert 'id="problem-description"' in data_view
+    assert 'id="data-refresh"' in data_view
+    assert 'id="save-data-selection"' not in data_view
+    assert 'id="data-preview-card"' in data_insights
+    assert 'class="data-card wide relationship-card"' in data_insights
+    assert 'id="search-insights"' in page.text
+    assert 'id="run-variable-preview"' in run_setup
+    assert 'class="problem-card"' not in run_setup
+    assert '<input' not in run_setup
+    assert '<button' not in run_setup
+    assert 'id="initial-prompt-panel"' in page.text
+    assert '<details id="initial-prompt-panel"' not in page.text
+    assert 'id="initial-prompt-toggle"' in page.text
+    assert 'data-initial-prompt-tab=' not in page.text
+    assert 'id="user-prompt"' not in page.text
+    assert 'id="system-prompt" class="prompt-editor" aria-label="System Prompt" readonly' in page.text
+    assert '<span id="initial-prompt-toggle-label">系统提示词</span>' in page.text
+    assert (
+        "Find an interpretable formula explaining the selected target from the "
+        "selected features."
+    ) in data_view
+    assert 'id="composer-purpose"' in page.text
+    assert "if((session?.state||'idle')==='idle')promptEdited.user=true" in page.text
+    assert "syncResearchProblem($('problem-description').value)" in page.text
+    assert 'function renderTimelineSurface()' in page.text
+    assert 'id="timeline-view-switch"' not in page.text
+    assert 'function renderVariableRolePreview()' in page.text
+    assert "variableOrder.filter(column=>variableRole(column)!=='unused')" in page.text
+    assert "api('/api/data/selection'" in page.text
+    assert 'function scheduleDataSelectionSave()' in page.text
+    assert 'setTimeout(flushDataSelectionSave,400)' in page.text
+    assert 'id="data-refresh"' in page.text
+    assert 'id="data-file"' not in page.text
+    assert 'id="data-max-turns"' not in page.text
+    assert "api('/api/data/context')" in page.text
+    assert 'async function responseError(response' in page.text
+    assert "await responseError(response,_('uploadFailed'))" in page.text
+    assert 'id="workspace-name-editor"' in page.text
+    assert 'id="data-context-guide"' not in page.text
+    assert 'manifest.json 记录变量信息，&lt;variable&gt;.npy 记录变量取值' in page.text
+    assert 'id="data-agent-safety"' in page.text
+    assert "api('/api/workspace/lock',{path,locked},'PUT')" in page.text
+    safety = client.get('/data-agent-safety')
+    assert safety.status_code == 200
+    assert 'workspace_shell' in safety.text
+    assert 'workspace_code_executor' in safety.text
+    assert '操作系统级只读 bind mount' in safety.text
+    assert '<button id="context-tab" type="button" hidden>' in page.text
+    assert "$('context-tab').hidden=tab!=='context'" in page.text
+    assert '#context-tab{display:flex' in page.text
+    assert 'function dataContextLink(turn)' in page.text
+    assert "agent_scope:'data'" in page.text
+    assert "/api/data/agent/stop" in page.text
+    assert '.data-agent-send.stop' in page.text
+    assert '.data-agent-card{display:grid;grid-template-columns:minmax(0,1fr)' in page.text
+    assert '.reasoning-block.expanded .reasoning-content{display:block;width:100%' in page.text
+    assert "previewBlock(card,p.content,'message-preview-block')" in page.text
+    assert "if(dataMode)previewBlock(card,state.content,'message-preview-block stream-content')" in page.text
+    assert 'function unobservePreviewBlocks(parent)' in page.text
+    assert 'id="up"' not in page.text
+    assert 'id="path"' not in page.text
+    assert ':root[data-theme="dark"] #tree-status' in page.text
     assert client.get('/viewer').status_code == 200
     assert client.put('/api/workspace/upload?path=data/sample.csv', content=b'x,y\n1,2').status_code == 200
     assert client.get('/api/workspace/download?path=data/sample.csv').content == b'x,y\n1,2'
     assert client.get('/api/workspace?path=data').json()['entries'][0]['name'] == 'sample.csv'
+    tree = client.get('/api/workspace', params={'recursive': True}).json()['entries']
+    assert tree[0]['name'] == 'data'
+    assert tree[0]['read_only'] is False
+    assert tree[0]['size'] is None
+    assert tree[0]['children'][0]['path'] == 'data/sample.csv'
+    assert tree[0]['children'][0]['read_only'] is False
+    assert client.get(
+        '/api/workspace/size', params={'path': 'data'},
+    ).json()['size'] == len(b'x,y\n1,2')
     demo = client.post('/api/data/demo').json()
-    assert demo['path'] == 'demo.csv'
-    assert 'demo.csv' in client.get('/api/data/csv-files').json()['files']
-    preview = client.get('/api/data/preview', params={'path': 'demo.csv', 'rows': 5}).json()
-    assert preview['columns'] == ['x1', 'x2', 'x3', 'y']
-    assert preview['numeric'] == {'x1': True, 'x2': True, 'x3': False, 'y': True}
-    full_preview = client.get('/api/data/preview', params={'path': 'demo.csv', 'rows': 100}).json()
-    assert {row['x3'] for row in full_preview['rows']} == {'alpha', 'beta', 'gamma', 'delta'}
-    assert len(preview['rows']) == 5
+    assert demo['path'] == 'context.data'
+    assert (session.workspace / 'context.data' / 'manifest.json').is_file()
+    preview = client.get('/api/data/context', params={'rows': 5}).json()
+    assert preview['columns'] == ['sample', 'x1', 'x2', 'x3', 'y']
+    assert preview['column_kinds'] == {
+        'sample': 'axis', 'x1': 'variable', 'x2': 'variable',
+        'x3': 'variable', 'y': 'variable',
+    }
+    assert preview['variables']['x3']['dtype'].startswith('<U')
+    assert {row['x3'] for row in preview['data']} <= {'alpha', 'beta', 'gamma', 'delta'}
+    assert len(preview['data']) == 5
     assert preview['truncated']
+    assert client.post('/api/data/demo').status_code == 409
     prompts = client.post('/api/data/prompts', json={
-        'dataset': 'demo.csv', 'target': 'y', 'features': ['x1', 'x2'],
+        'target': 'y', 'features': ['x1', 'x2'],
         'problem_description': 'Explain the curve.',
         'variable_descriptions': {'x1': 'first input', 'y': 'measured response'},
     })
@@ -65,6 +168,309 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert client.post('/api/session/start', json={'max_refinement_depth': 0}).status_code == 400
     assert session.state == 'idle'
     assert client.post('/api/session/start', json={'dataset': 'missing.csv'}).status_code == 400
+
+
+def test_workspace_npy_preview(platform):
+    client, session = platform
+    np.save(
+        session.workspace / 'matrix.npy',
+        np.array([[1.5, 2.5], [3.5, 4.5]]),
+    )
+    np.save(
+        session.workspace / 'labels.npy',
+        np.array(['alpha', 'beta', 'gamma']),
+    )
+
+    matrix = client.get(
+        '/api/workspace/preview', params={'path': 'matrix.npy'},
+    )
+    assert matrix.status_code == 200
+    assert matrix.json() == {
+        'kind': 'npy',
+        'shape': [2, 2],
+        'dtype': 'float64',
+        'size': 4,
+        'text': '[[1.5 2.5]\n [3.5 4.5]]',
+        'truncated': False,
+    }
+
+    labels = client.get(
+        '/api/workspace/preview', params={'path': 'labels.npy'},
+    ).json()
+    assert labels['kind'] == 'npy'
+    assert labels['shape'] == [3]
+    assert labels['dtype'].startswith('<U')
+    assert labels['text'] == "['alpha' 'beta' 'gamma']"
+
+
+def test_workspace_items_can_be_locked_and_unlocked(platform):
+    client, session = platform
+    assert client.put(
+        '/api/workspace/upload', params={'path': 'research/source.csv'}, content=b'x\n1\n',
+    ).status_code == 200
+
+    response = client.put('/api/workspace/lock', json={
+        'path': 'research', 'locked': True,
+    })
+    assert response.status_code == 200, response.text
+    tree = client.get('/api/workspace', params={'recursive': True}).json()['entries']
+    directory = next(item for item in tree if item['name'] == 'research')
+    source = directory['children'][0]
+    assert directory['locked'] and directory['read_only'] and not directory['mounted']
+    assert source['locked'] and source['read_only'] and not source['mounted']
+    assert not (session.workspace / 'research').stat().st_mode & 0o222
+    assert not (session.workspace / 'research' / 'source.csv').stat().st_mode & 0o222
+    assert client.delete(
+        '/api/workspace', params={'path': 'research/source.csv'},
+    ).status_code == 400
+    assert client.put(
+        '/api/workspace/upload', params={'path': 'research/new.csv'}, content=b'x\n2\n',
+    ).status_code == 400
+
+    response = client.put('/api/workspace/lock', json={
+        'path': 'research', 'locked': False,
+    })
+    assert response.status_code == 200, response.text
+    assert (session.workspace / 'research').stat().st_mode & 0o200
+    assert (session.workspace / 'research' / 'source.csv').stat().st_mode & 0o200
+    assert client.delete(
+        '/api/workspace', params={'path': 'research/source.csv'},
+    ).status_code == 200
+
+
+def test_workspace_upload_stages_on_destination_filesystem(platform, monkeypatch):
+    client, session = platform
+    replace = os.replace
+
+    def same_directory_replace(source, destination):
+        assert os.path.dirname(os.fspath(source)) == os.path.dirname(os.fspath(destination))
+        return replace(source, destination)
+
+    monkeypatch.setattr('sr_harness.web.platform.os.replace', same_directory_replace)
+    response = client.put(
+        '/api/workspace/upload', params={'path': 'context.data.zip'}, content=b'PK\x03\x04',
+    )
+    assert response.status_code == 200, response.text
+    assert (session.workspace / 'context.data.zip').read_bytes() == b'PK\x03\x04'
+
+    def failed_replace(source, destination):
+        raise OSError('simulated storage failure')
+
+    monkeypatch.setattr('sr_harness.web.platform.os.replace', failed_replace)
+    response = client.put(
+        '/api/workspace/upload', params={'path': 'failed.zip'}, content=b'PK\x03\x04',
+    )
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'Unable to upload file: simulated storage failure'
+
+
+def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
+    client, session = platform
+    directory = session.workspace / 'context.data'
+    directory.mkdir()
+    (directory / 'manifest.json').write_text(json.dumps({
+        'variables': {
+            'x': {'file': 'x.npy', 'description': 'Input.', 'axes': ['sample']},
+            'y': {'file': 'y.npy', 'description': 'Output.', 'axes': ['sample']},
+            'A': {
+                'file': 'A.npy', 'description': 'Directed edge list.',
+                'axes': ['edge', 'endpoint'],
+            },
+        },
+        'axes': {
+            'sample': {'values': [0, 1, 2], 'description': 'Sample index.'},
+            'edge': {'size': 2, 'description': 'Edge index.'},
+            'endpoint': {
+                'values': ['target', 'source'], 'description': 'Endpoint order.',
+            },
+        },
+    }))
+    np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
+    np.save(directory / 'y.npy', np.array([2.0, 4.0, 6.0]))
+    np.save(directory / 'A.npy', np.array([[1, 0], [0, 1]]))
+    session.context.commit_context_data(ContextDataStore(directory).load())
+
+    preview = client.get('/api/data/context').json()
+    assert preview['columns'] == ['sample', 'x', 'y']
+    assert preview['column_kinds'] == {
+        'sample': 'axis', 'x': 'variable', 'y': 'variable',
+    }
+    assert preview['rows'] == 3
+    assert preview['variables']['A']['shape'] == [2, 2]
+    assert preview['axes']['endpoint']['size'] == 2
+    assert preview['data'] == [
+        {'sample': 0, 'x': 1.0, 'y': 2.0},
+        {'sample': 1, 'x': 2.0, 'y': 4.0},
+        {'sample': 2, 'x': 3.0, 'y': 6.0},
+    ]
+    prompts = client.post('/api/data/prompts', json={
+        'target': 'y', 'features': ['sample', 'x'],
+        'variable_descriptions': {'sample': 'Sample index.'},
+    })
+    assert prompts.status_code == 200, prompts.text
+    assert "Feature names: ['sample', 'x']" in prompts.json()['user_prompt']
+
+
+def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypatch):
+    client, session = platform
+    directory = session.workspace / 'context.data'
+    directory.mkdir()
+    (directory / 'manifest.json').write_text(json.dumps({
+        'variables': {
+            'x': {'file': 'x.npy', 'description': 'Original input.', 'axes': ['sample']},
+            'z': {'file': 'z.npy', 'description': 'New input.', 'axes': ['sample']},
+            'y': {'file': 'y.npy', 'description': 'Output.', 'axes': ['sample']},
+        },
+        'axes': {
+            'sample': {'values': [2000, 2001, 2002], 'description': 'Year.'},
+        },
+    }))
+    np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
+    np.save(directory / 'z.npy', np.array([2.0, 3.0, 5.0]))
+    np.save(directory / 'y.npy', np.array([4.0, 6.0, 9.0]))
+    loaded = ContextDataStore(directory).load()
+    session.context.commit_context_data(loaded)
+
+    response = client.put('/api/data/selection', json={
+        'target': 'y',
+        'features': ['sample', 'x'],
+        'variable_descriptions': {'sample': 'Calendar year.', 'x': ''},
+    })
+    assert response.status_code == 200, response.text
+    assert session.context.target == 'y'
+    assert session.context.features == ['sample', 'x']
+    assert session.context.variable_descriptions['sample'] == 'Calendar year.'
+    assert session.context.variable_descriptions['x'] == ''
+
+    # Committing a feature added by the preparation Agent keeps axis-based roles.
+    session.context.commit_context_data(loaded)
+    assert session.context.features == ['sample', 'x']
+
+    session.state = 'running'
+    monkeypatch.setattr(session.controller, 'status', lambda: {
+        'paused': False, 'waiting_at_boundary': False,
+    })
+    blocked = client.put('/api/data/selection', json={
+        'target': 'y', 'features': ['x', 'z'],
+    })
+    assert blocked.status_code == 409
+
+    monkeypatch.setattr(session.controller, 'status', lambda: {
+        'paused': True, 'waiting_at_boundary': True,
+    })
+    updated = client.put('/api/data/selection', json={
+        'target': 'y', 'features': ['x', 'z'],
+        'variable_descriptions': {'z': 'Feature added during the pause.'},
+    })
+    assert updated.status_code == 200, updated.text
+    assert session.context.features == ['x', 'z']
+
+
+def test_read_only_startup_workspace_inputs_are_visible(tmp_path):
+    source = tmp_path / 'source'
+    source.mkdir()
+    table = source / 'observations.csv'
+    table.write_text('x,y\n1,2\n')
+    session = InteractiveSession(
+        tmp_path / 'logs',
+        workspace_files=[str(source)],
+    )
+    with TestClient(create_app(tmp_path, controller=session.controller, session=session)) as client:
+        root = client.get('/api/workspace').json()['entries']
+        assert root[0]['name'] == 'source'
+        assert root[0]['directory']
+        recursive_root = client.get(
+            '/api/workspace', params={'recursive': True},
+        ).json()['entries']
+        assert recursive_root[0]['read_only'] is True
+        assert recursive_root[0]['mounted'] is True
+        assert recursive_root[0]['locked'] is False
+        assert recursive_root[0]['children'][0]['path'] == (
+            'source/observations.csv'
+        )
+        assert recursive_root[0]['children'][0]['read_only'] is True
+        assert client.put('/api/workspace/lock', json={
+            'path': 'source', 'locked': False,
+        }).status_code == 400
+        assert client.get(
+            '/api/workspace/size', params={'path': 'source'},
+        ).json()['size'] == len(b'x,y\n1,2\n')
+        mounted_archive = client.get(
+            '/api/workspace/download', params={'path': 'source'},
+        )
+        assert mounted_archive.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(mounted_archive.content)) as archive:
+            assert archive.read('source/observations.csv') == b'x,y\n1,2\n'
+        assert client.get('/api/workspace/preview', params={
+            'path': 'source/observations.csv',
+        }).json()['text'] == 'x,y\n1,2\n'
+        assert client.get('/api/data/csv-files').json()['files'] == [
+            'source/observations.csv',
+        ]
+        assert client.put('/api/workspace/upload', params={
+            'path': 'source/new.csv',
+        }, content=b'x\n3\n').status_code == 400
+        assert client.patch('/api/workspace', json={
+            'source': 'source', 'destination': 'renamed-source',
+        }).status_code == 400
+        assert client.delete('/api/workspace', params={'path': 'source'}).status_code == 400
+
+
+def test_workspace_directory_move_rename_and_delete(platform):
+    client, _ = platform
+    assert client.post('/api/workspace/directory', json={'path': 'research'}).json() == {
+        'path': 'research',
+    }
+    assert client.put(
+        '/api/workspace/upload', params={'path': 'notes.txt'}, content=b'notes',
+    ).status_code == 200
+    moved = client.patch('/api/workspace', json={
+        'source': 'notes.txt', 'destination': 'research/notes.txt',
+    })
+    assert moved.status_code == 200
+    directory_archive = client.get(
+        '/api/workspace/download', params={'path': 'research'},
+    )
+    assert directory_archive.status_code == 200
+    assert 'research.zip' in directory_archive.headers['content-disposition']
+    with zipfile.ZipFile(io.BytesIO(directory_archive.content)) as archive:
+        assert archive.read('research/notes.txt') == b'notes'
+    renamed = client.patch('/api/workspace', json={
+        'source': 'research/notes.txt', 'destination': 'research/summary.txt',
+    })
+    assert renamed.status_code == 200
+    assert client.get(
+        '/api/workspace/download', params={'path': 'research/summary.txt'},
+    ).content == b'notes'
+    assert client.patch('/api/workspace', json={
+        'source': 'research', 'destination': 'renamed-research',
+    }).status_code == 200
+    assert client.patch('/api/workspace', json={
+        'source': 'renamed-research',
+        'destination': 'renamed-research/nested',
+    }).status_code == 400
+    assert client.delete(
+        '/api/workspace', params={'path': 'renamed-research/summary.txt'},
+    ).status_code == 200
+    assert client.delete(
+        '/api/workspace', params={'path': 'renamed-research'},
+    ).status_code == 200
+
+
+def test_session_temporary_and_explicit_workspace_lifetimes(tmp_path):
+    temporary_session = InteractiveSession(tmp_path / 'logs')
+    temporary_workspace = temporary_session.workspace
+    assert temporary_workspace.exists()
+    temporary_session.close()
+    assert not temporary_workspace.exists()
+
+    explicit_workspace = tmp_path / 'workspace'
+    explicit_session = InteractiveSession(
+        tmp_path / 'logs',
+        workspace_path=explicit_workspace,
+    )
+    explicit_session.close()
+    assert explicit_workspace.exists()
 
 
 def test_runtime_capabilities_can_be_configured(platform):
@@ -140,19 +546,26 @@ def test_data_agent_has_independent_runtime_settings(platform):
     )
     assert capabilities.status_code == 200
     catalog = capabilities.json()
-    assert {'commit_data', 'workspace_code_executor', 'read_skill'} <= {
+    assert {'commit_data', 'load_context_data', 'workspace_code_executor', 'read_skill'} <= {
         tool['name'] for tool in catalog['tools']
     }
     assert 'commit_data' in catalog['default_tools']
+    assert 'load_context_data' in catalog['default_tools']
+    assert 'discover-symbolic-laws' in {
+        skill['name'] for skill in catalog['skills']
+    }
+    assert 'discover-symbolic-laws' not in catalog['default_skills']
+    assert 'discover-symbolic-laws' not in session.data_agent_settings['skills']
+    assert 'max_turns' not in session.data_agent_settings
 
     response = client.put('/api/data/agent/settings', json={
         'llm_provider': 'openai',
         'llm_model': 'test-data-model',
         'tool_parser': 'json',
         'llm_max_tokens': 2048,
-        'max_turns': 4,
         'tools': ['workspace_shell', 'commit_data'],
         'skills': [],
+        'proxy': '',
     })
     assert response.status_code == 200
     assert response.json()['data_agent_settings'] == {
@@ -160,14 +573,119 @@ def test_data_agent_has_independent_runtime_settings(platform):
         'llm_model': 'test-data-model',
         'tool_parser': 'json',
         'llm_max_tokens': 2048,
-        'max_turns': 4,
         'tools': ['workspace_shell', 'commit_data'],
         'skills': [],
+        'proxy': '',
     }
     assert session.settings['llm_provider'] == 'openrouter'
     assert client.put('/api/data/agent/settings', json={
         'tools': ['workspace_shell'],
     }).status_code == 400
+
+
+def test_data_agent_can_be_stopped_independently(platform, monkeypatch):
+    client, session = platform
+    started = threading.Event()
+
+    def wait_for_stop(agent, instruction):
+        started.set()
+        while True:
+            agent._check_stop()
+            time.sleep(.005)
+
+    monkeypatch.setattr(DataPreparationAgent, 'run', wait_for_stop)
+    response = client.post('/api/data/agent', json={'message': 'Prepare data.'})
+    assert response.status_code == 200, response.text
+    assert started.wait(2)
+
+    response = client.post('/api/data/agent/stop')
+    assert response.status_code == 200, response.text
+    assert response.json()['data_state'] == 'stopping'
+    session.data_thread.join(2)
+    assert not session.data_thread.is_alive()
+    assert session.data_state == 'stopped'
+    assert session.data_result['status'] == 'stopped'
+
+
+def test_data_agent_model_test_checks_completion_and_tool_call(platform, monkeypatch):
+    client, _ = platform
+
+    class FakeAPI:
+        def __init__(self):
+            self.requests = 0
+
+        def __call__(self, prompt, **kwargs):
+            self.requests += 1
+
+            def generate():
+                if self.requests == 1:
+                    yield {
+                        'content': 'SRHARNESS_OK',
+                        'tool_call': [],
+                        'message': {'role': 'assistant', 'content': 'SRHARNESS_OK'},
+                    }
+                else:
+                    call = ToolCall(
+                        'report_model_test',
+                        {'answer': 'SRHARNESS_TOOL_OK'},
+                        id='model-test',
+                    )
+                    yield {
+                        'content': '',
+                        'tool_call': [call],
+                        'message': {'role': 'assistant', 'content': ''},
+                    }
+                return {'usage': {'token': {}, 'price': {}}, 'contents': [], 'tool_calls': []}
+
+            return APICallResult(generate())
+
+    fake = FakeAPI()
+    created = {}
+
+    def create_api(provider, **kwargs):
+        created.update(provider=provider, **kwargs)
+        return fake
+
+    monkeypatch.setattr(BaseAPI, 'create', create_api)
+    response = client.post('/api/data/agent/test', json={
+        'llm_provider': 'deepseek',
+        'llm_model': 'deepseek-v4-flash-0731',
+        'tool_parser': 'openai',
+        'llm_max_tokens': 512,
+        'proxy': '',
+    })
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        'ok': True,
+        'accessible': True,
+        'plain_response': 'SRHARNESS_OK',
+        'tool_call_supported': True,
+        'called_tools': ['report_model_test'],
+    }
+    assert created['provider'] == 'deepseek'
+    assert created['model'] == 'deepseek-v4-flash-0731'
+    assert created['tool_parser_name'] == 'openai'
+    assert created['tool_list'][0].metadata.name == 'report_model_test'
+
+
+def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monkeypatch):
+    client, session = platform
+    session.env_path = tmp_path / '.env'
+    for name in ('MY_PROXY', 'my_proxy', 'http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'):
+        monkeypatch.delenv(name, raising=False)
+
+    response = client.put('/api/data/agent/settings', json={
+        'proxy': 'http://127.0.0.1:7890',
+    })
+    assert response.status_code == 200, response.text
+    assert dotenv_values(session.env_path)['MY_PROXY'] == 'http://127.0.0.1:7890'
+    assert os.environ['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
+
+    response = client.put('/api/data/agent/settings', json={'proxy': ''})
+    assert response.status_code == 200, response.text
+    assert 'MY_PROXY' not in dotenv_values(session.env_path)
+    assert 'MY_PROXY' not in os.environ
+    assert 'HTTPS_PROXY' not in os.environ
 
 
 def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
@@ -179,7 +697,6 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
         'llm_model': 'data-preparation-model',
         'tool_parser': 'openai',
         'llm_max_tokens': 1234,
-        'max_turns': 3,
         'tools': ['commit_data'],
         'skills': [],
     })
@@ -238,7 +755,6 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
     assert api_options['provider'] == 'deepseek'
     assert api_options['model'] == 'data-preparation-model'
     assert session.data_agent.llm_max_tokens == 1234
-    assert session.data_agent.max_turns == 3
     assert session.context.target == '人口数量'
     assert session.context.features == ['年份', 'GDP']
     data_events = session.controller.events()
@@ -246,6 +762,10 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
     assert 'data_user' in data_event_kinds
     assert data_event_kinds.index('data_context') < data_event_kinds.index('data_assistant_start')
     assert data_event_kinds.index('data_assistant_start') < data_event_kinds.index('data_assistant')
+    context_event = next(event for event in data_events if event['kind'] == 'data_context')
+    assert context_event['payload']['turn'] == 1
+    assert context_event['payload']['messages'][0]['role'] == 'system'
+    assert 'data-preparation agent' in context_event['payload']['messages'][0]['content']
     assistant_event = next(event for event in data_events if event['kind'] == 'data_assistant')
     assert assistant_event['payload']['provider'] == 'deepseek'
     assert assistant_event['payload']['model'] == 'data-preparation-model'
@@ -253,6 +773,70 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
     assert preview['revision'] == 1
     assert preview['rows'] == 5
     assert preview['data'][0]['年份'] == 2020
+
+
+def test_data_agent_has_no_turn_limit_and_keeps_cumulative_turns(platform, monkeypatch):
+    client, session = platform
+
+    class FakeDataAPI:
+        tool_description_json = []
+
+        def __init__(self):
+            self.turn = 0
+
+        def __call__(self, prompt, **kwargs):
+            self.turn += 1
+            current_turn = self.turn
+
+            def generate():
+                if current_turn <= 13:
+                    call = ToolCall(
+                        'workspace_shell', {'command': 'ls'}, id=f'call-{current_turn}',
+                    )
+                    message = {
+                        'role': 'assistant',
+                        'content': f'Working in turn {current_turn}.',
+                        'tool_calls': [{
+                            'id': call.id,
+                            'type': 'function',
+                            'function': {'name': call.name, 'arguments': '{"command":"ls"}'},
+                        }],
+                    }
+                    yield {
+                        'content': message['content'],
+                        'tool_call': [call],
+                        'message': message,
+                    }
+                else:
+                    message = {'role': 'assistant', 'content': 'Finished.'}
+                    yield {'content': 'Finished.', 'tool_call': [], 'message': message}
+                return {'usage': {'token': {}, 'price': {}}, 'responses': []}
+
+            return APICallResult(generate())
+
+    fake = FakeDataAPI()
+    monkeypatch.setattr(BaseAPI, 'create', lambda *args, **kwargs: fake)
+
+    response = client.post('/api/data/agent', json={'message': 'Prepare the data.'})
+    assert response.status_code == 200, response.text
+    session.data_thread.join(10)
+    assert session.data_state == 'completed'
+    assert session.data_agent.turn_count == 14
+
+    response = client.post('/api/data/agent', json={'message': 'Continue.'})
+    assert response.status_code == 200, response.text
+    session.data_thread.join(10)
+    assert session.data_state == 'completed'
+    assert session.data_agent.turn_count == 15
+
+    context_events = [
+        event for event in session.controller.events()
+        if event['kind'] == 'data_context'
+    ]
+    assert [event['payload']['turn'] for event in context_events] == list(range(1, 16))
+    assert context_events[-1]['payload']['messages'][-1] == {
+        'role': 'user', 'content': 'Continue.',
+    }
 
 
 def test_question_reconnect_and_stop():

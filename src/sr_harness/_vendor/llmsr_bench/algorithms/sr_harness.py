@@ -60,7 +60,7 @@ def update_parser(parser):
     parser.add_argument("--validation_fraction", type=float, default=0.2, help=(
         "Fraction of samples held out for validation."
     ))
-    parser.add_argument("--split_by", choices=["random", "ood"], default="ood", help=(
+    parser.add_argument("--split_by", choices=["random", "ood"], default="random", help=(
         "Validation split strategy."
     ))
     parser.add_argument("--split_random_state", type=int, default=42, help=(

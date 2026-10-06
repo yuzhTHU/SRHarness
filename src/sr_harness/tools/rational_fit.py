@@ -8,6 +8,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register("rational_fit")
 class RationalFitTool(BaseTool):
+    """Implementation of the rational fit tool."""
     metadata = ToolMetadata("rational_fit")
 
     def execute(
@@ -251,6 +252,14 @@ class RationalFitTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         lines = [cls.format_evaluation_result(result, title="Best fitted rational formula")]
         if result["alternatives"]:
             lines.append("Simpler non-dominated alternatives (validation error versus complexity):")

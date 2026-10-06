@@ -9,6 +9,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register("relationship_analysis")
 class RelationshipAnalysisTool(BaseTool):
+    """Implementation of the relationship analysis tool."""
     metadata = ToolMetadata("relationship_analysis")
 
     def execute(
@@ -239,6 +240,14 @@ class RelationshipAnalysisTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         def number(value):
             if value == 0:
                 return "0"

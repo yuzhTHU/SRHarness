@@ -12,6 +12,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("deepseek")
 class DeepSeekAPI(BaseAPI):
+    """DeepSeek provider adapter."""
     supported_models = [
         "deepseek-chat",
         "deepseek-reasoner",
@@ -29,8 +30,8 @@ class DeepSeekAPI(BaseAPI):
         client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         payload = {
             "model": self.model,
-            "messages": messages, 
-            "stream": False, 
+            "messages": messages,
+            "stream": False,
             "max_tokens": max_tokens,
             "temperature": temperature,
         }

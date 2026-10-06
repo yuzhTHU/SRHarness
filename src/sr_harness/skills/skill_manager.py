@@ -15,6 +15,7 @@ _logger = getLogger(f"sr_harness.{__name__}")
 
 @dataclass(frozen=True)
 class Skill:
+    """Metadata for one runtime skill."""
     name: str
     description: str
     readonly: bool
@@ -38,7 +39,11 @@ class SkillManager:
         self.skill_directories["custom"].mkdir(parents=True, exist_ok=True)
 
     def register_tool_docs(self, tool_cls_list: Iterable[type]) -> None:
-        """Materialize documentation from enabled tools as read-only runtime skills."""
+        """Materialize documentation from enabled tools as read-only runtime skills.
+
+        Args:
+            tool_cls_list: Tool classes to register.
+        """
         for tool_cls in tool_cls_list:
             doc = tool_cls.get_doc()
             if doc is None:
@@ -65,7 +70,11 @@ class SkillManager:
             (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
     def discover_tool_skills(self) -> list[Skill]:
-        """Return all registered skills that contain a ``tool.py`` file."""
+        """Return all registered skills that contain a ``tool.py`` file.
+
+        Returns:
+            list[Skill]: The operation result.
+        """
         return [
             skill
             for skill in self.load_skills().values()
@@ -73,6 +82,11 @@ class SkillManager:
         ]
 
     def load_skills(self) -> dict[str, Skill]:
+        """Load skills.
+
+        Returns:
+            dict[str, Skill]: The operation result.
+        """
         skills: dict[str, Skill] = {}
         for scope, root in self.skill_directories.items():
             for skill_path in sorted(root.glob("*/SKILL.md")):
@@ -97,6 +111,14 @@ class SkillManager:
         return skills
 
     def get_skill(self, name: str) -> Skill:
+        """Return skill.
+
+        Args:
+            name: Registered name.
+
+        Returns:
+            Skill: The operation result.
+        """
         skills = self.load_skills()
         if name in skills:
             return skills[name]
@@ -104,7 +126,15 @@ class SkillManager:
         raise ValueError(f"Skill '{name}' not found. Available skills: {available}")
 
     def search_skills(self, query: str, limit: int = 5) -> list[Skill]:
-        """Rank skills by lexical overlap in name and discovery description."""
+        """Rank skills by lexical overlap in name and discovery description.
+
+        Args:
+            query: Search query.
+            limit: Maximum number of results.
+
+        Returns:
+            list[Skill]: The operation result.
+        """
         tokens = set(re.findall(r"[a-zA-Z][\w-]+|[\u4e00-\u9fff]{2,}", query.lower()))
         ranked = []
         for skill in self.load_skills().values():
@@ -118,6 +148,15 @@ class SkillManager:
         return matches[:max(1, min(int(limit), 20))]
 
     def read_skill(self, name: str, file_path: str = "SKILL.md") -> str:
+        """Read skill.
+
+        Args:
+            name: Registered name.
+            file_path: Path relative to the selected resource.
+
+        Returns:
+            str: The operation result.
+        """
         skill = self.get_skill(name)
         path = self._resolve_skill_file(skill, file_path)
         if not path.is_file():
@@ -125,6 +164,14 @@ class SkillManager:
         return path.read_text(encoding="utf-8")
 
     def get_skill_tree(self, name: str) -> list[str]:
+        """Return skill tree.
+
+        Args:
+            name: Registered name.
+
+        Returns:
+            list[str]: The operation result.
+        """
         skill_dir = self.get_skill(name).skill_directory
         return [
             path.relative_to(skill_dir).as_posix() + ("/" if path.is_dir() else "")
@@ -140,7 +187,17 @@ class SkillManager:
         file_path: str = "SKILL.md",
         force: bool = False,
     ) -> Skill:
-        """Create a custom skill file or update a file in an editable skill."""
+        """Create a custom skill file or update a file in an editable skill.
+
+        Args:
+            name: Registered name.
+            content: Text content.
+            file_path: Path relative to the selected resource.
+            force: Whether to overwrite an existing resource.
+
+        Returns:
+            Skill: The operation result.
+        """
         name = self._validate_name(name)
         skills = self.load_skills()
         skill = skills.get(name)

@@ -12,7 +12,7 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from ..api import BaseAPI
 from ..tools import BaseTool
 from ..parser import BaseParser
@@ -23,20 +23,14 @@ from ..utils import format_pareto_front, render_markdown, tag2ansi, setup_loggin
 from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, ToolCall, ToolCallResult
 from .agent import Agent
 
+if TYPE_CHECKING:
+    from ..evaluator import Evaluator
+
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
 
 class SRAgent(Agent):
-    """符号回归 Agent。
-
-    提供完整的符号回归流程框架，包括数据预处理、Prompt 生成、LLM 请求、
-    工具调用、Buffer 更新等。具体实现需继承此类并实现必要方法。
-
-    Attributes:
-        api: LLM API 实例。
-        buffer: 对话历史 Buffer。
-        max_refinement_depth: 最大迭代次数。
-    """
+    """Agent that performs an R-C-L-K symbolic-regression search."""
 
     def __init__(
         self,
@@ -65,6 +59,7 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
+        evaluator: Evaluator | None = None,
     ):
         """初始化 Agent。
 
@@ -96,6 +91,7 @@ class SRAgent(Agent):
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与其它 Agent 共享的数据和工作区上下文。None 表示新建独立上下文。
+            evaluator: 自定义公式拟合与评估协议。设置后通过共享 context 提供给工具。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         log_path = Path(save_path) / "info.log" if save_path is not None else None
@@ -223,6 +219,9 @@ class SRAgent(Agent):
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
         self.context = context if context is not None else AgentContext()
+        if evaluator is not None:
+            self.context.evaluator = evaluator
+        self.evaluator = self.context.evaluator
         self.run_state = SearchRunState(
             save_path=save_path,
             ranking_metric=ranking_metric,
@@ -245,34 +244,34 @@ class SRAgent(Agent):
         _logger.info(f"Initialized {self.__class__.__name__}")
 
     def run(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray] | np.ndarray, problem_description: str) -> Dict[str, Any]:
-        """执行符号回归任务的主入口。
-
-        负责数据划分以及工作区、工具、Parser 和 API 的初始化，随后调用
-        search() 执行 R-C-L 搜索。
+        """Run the configured operation.
 
         Args:
-            X: 输入特征字典，键为特征名，值为 numpy 数组。
-            y: 目标变量 numpy 数组。
-            problem_description: 问题描述字符串，告知 Agent 任务目标。
+            X: Input feature arrays keyed by variable name.
+            y: Target data or target expression.
+            problem_description: Natural-language description of the discovery task.
 
         Returns:
-            包含本次运行状态、候选公式列表、Pareto front 候选下标和最佳候选下标的字典。
+            Dict[str, Any]: The operation result.
         """
         if not isinstance(y, dict):
             y = {"target": y}
 
         target = next(iter(y))
         supplied_data = X | y
-        if (
-            not self.context.data
-            or self.context.target != target
-            or list(self.context.features) != list(X)
-            or any(
-                name not in self.context.data
-                or not np.array_equal(self.context.data[name], value)
-                for name, value in supplied_data.items()
-            )
-        ):
+
+        def existing_value(name: str):
+            if name in self.context.data:
+                return self.context.data[name]
+            axis = self.context.axes.get(name)
+            return None if axis is None else axis.values
+
+        data_changed = not self.context.data or any(
+            (current := existing_value(name)) is None
+            or not np.array_equal(current, value)
+            for name, value in supplied_data.items()
+        )
+        if data_changed:
             self.context.commit_data(
                 supplied_data,
                 target=target,
@@ -280,6 +279,9 @@ class SRAgent(Agent):
                 variable_descriptions=self.context.variable_descriptions,
                 provenance=self.context.provenance,
             )
+        else:
+            self.context.target = target
+            self.context.features = list(X)
         train_data, validation_data = self._split_data(X, y)
         self.context.bind_split(train_data, validation_data)
         self._active_X = X
@@ -325,15 +327,27 @@ class SRAgent(Agent):
 
     @contextmanager
     def prepare_tool_context(self, tool_context: AgentContext):
-        """Prepare resources and context shared by initialized tools."""
+        """Prepare resources and context shared by initialized tools.
+
+        Args:
+            tool_context: Shared context used to initialize tools.
+        """
         yield tool_context
 
     def search(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray], problem_description: str) -> Dict[str, Any]:
         """Run the R-C-L search after data, tools, parser, and API are initialized.
 
-        Each refinement step builds the prompt, requests the model, executes tools,
-        records the search node, collects candidates, updates the conversation, and
-        evaluates the termination hook.
+                Each refinement step builds the prompt, requests the model, executes tools,
+                records the search node, collects candidates, updates the conversation, and
+                evaluates the termination hook.
+
+        Args:
+            X: Input feature arrays keyed by variable name.
+            y: Target data or target expression.
+            problem_description: Natural-language description of the discovery task.
+
+        Returns:
+            Dict[str, Any]: The operation result.
         """
         ## 开始迭代
         self.total_timer.clear(reset_last_add_time=True)
@@ -485,11 +499,13 @@ class SRAgent(Agent):
         return select(train_indices), select(validation_indices) if n_validation else {}
 
     def build_initial_prompt(self, problem_description, X, y, restart_records):
-        """根据历史最佳结果构建新的 initial prompt。
+        """Build initial prompt.
 
-        当 topk_record 非空时（即 R > 1 的重启轮次），会将之前探索过的最优公式
-        及其指标作为上下文注入 prompt，并设置一个更严格的 MSE 目标，引导 LLM
-        在之前最优解的基础上进一步优化（参考 SR-Scientist 的多轮策略）。
+        Args:
+            problem_description: Natural-language description of the discovery task.
+            X: Input feature arrays keyed by variable name.
+            y: Target data or target expression.
+            restart_records: Ranked candidates used to seed a restart.
         """
         initial_prompt = []
         self._task_route_score, self._task_route_reasons = self.model_router.assess(
@@ -542,6 +558,7 @@ class SRAgent(Agent):
                     f"    R2={result['train']['metrics']['r2']:.6g} | {result['validation']['metrics']['r2']:.6g}\n"
                     f"    MSE={result['train']['metrics']['mse']:.6g} | {result['validation']['metrics']['mse']:.6g}\n"
                 )
+            previous_formulas_text = "\n".join(previous_formulas)
             if (best_mse := restart_records[0].metric("mse", "train")) > 0:
                 goal = f"find a formula with MSE < {best_mse * 0.1:.3g} (10x better than the previous best MSE)"
             else:
@@ -549,7 +566,7 @@ class SRAgent(Agent):
             user_content += (
                 f"\n---\n\n"
                 f"Previously Explored Formulas (from best to worst):\n"
-                f"{'\n'.join(previous_formulas)}\n\n"
+                f"{previous_formulas_text}\n\n"
                 f"Use these as inspiration. Try to improve upon them or find simpler alternatives.\n"
                 f"\n---\n\n"
                 f"Based on the above results, {goal}."
@@ -568,7 +585,17 @@ class SRAgent(Agent):
         return initial_prompt
 
     def build_prompt(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]:
-        """根据 Buffer 构建 LLM Prompt。"""
+        """Build prompt.
+
+        Args:
+            buffer: Conversation history buffer.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            List[Dict[str, Any]]: The operation result.
+        """
         if self.force_initial_diagnostics and L == 1:
             # Persist the evidence in the branch buffer so later refinement
             # rounds retain the diagnostics and skill instructions.
@@ -596,19 +623,45 @@ class SRAgent(Agent):
         return prompt
 
     def before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
-        """Apply mode-specific control changes before constructing this iteration's prompt."""
+        """Apply mode-specific control changes before constructing this iteration's prompt.
+
+        Args:
+            buffer: Conversation history buffer.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            str | None: The operation result.
+        """
         return None
 
     def refresh_data(self, buffer: List[Dict[str, Any]]) -> bool:
-        """Apply a newly committed shared-data revision at an iteration boundary."""
+        """Apply a newly committed shared-data revision at an iteration boundary.
+
+        Args:
+            buffer: Conversation history buffer.
+
+        Returns:
+            bool: The operation result.
+        """
         if not hasattr(self, "context") or not hasattr(self, "_data_revision"):
             return False
         if self.context.data_revision == self._data_revision:
             return False
         if self.context.target is None or not self.context.features:
             raise ValueError("The updated context does not define a target and features")
-        X = {name: self.context.data[name] for name in self.context.features}
-        y = {self.context.target: self.context.data[self.context.target]}
+
+        def selected_value(name: str) -> np.ndarray:
+            if name in self.context.data:
+                return self.context.data[name]
+            axis = self.context.axes.get(name)
+            if axis is None:
+                raise ValueError(f"The selected variable or axis no longer exists: {name}")
+            return axis.values
+
+        X = {name: selected_value(name) for name in self.context.features}
+        y = {self.context.target: selected_value(self.context.target)}
         train_data, validation_data = self._split_data(X, y)
         self.context.bind_split(train_data, validation_data)
         self._active_X.clear()
@@ -617,6 +670,11 @@ class SRAgent(Agent):
         self._active_y.update(y)
         previous_revision = self._data_revision
         self._data_revision = self.context.data_revision
+        descriptions = [
+            f"- {name}: {description}"
+            for name in [self.context.target, *self.context.features]
+            if (description := self.context.variable_descriptions.get(name, "").strip())
+        ]
         buffer.append({
             "role": "user",
             "content": (
@@ -625,12 +683,23 @@ class SRAgent(Agent):
                 f"The target is {self.context.target!r}; available features are "
                 f"{self.context.features}. Reassess earlier evidence against the updated variables "
                 "and continue the investigation."
+                + ("\nVariable descriptions:\n" + "\n".join(descriptions) if descriptions else "")
             ),
         })
         return True
 
     def handle_iteration_complete(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
-        """Return a terminal status when the current search should stop."""
+        """Return a terminal status when the current search should stop.
+
+        Args:
+            buffer: Conversation history buffer.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            str | None: The operation result.
+        """
         best_candidate = self.best_candidate()
         if (
             best_candidate is not None and best_candidate.metric("mse", "train") == 0.0
@@ -639,7 +708,16 @@ class SRAgent(Agent):
         return None
 
     def run_initial_diagnostics(self, R, L, C) -> Dict[str, str]:
-        """Run the mandatory branch-opening diagnostics and format them for the LLM."""
+        """Run the mandatory branch-opening diagnostics and format them for the LLM.
+
+        Args:
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            Dict[str, str]: The operation result.
+        """
         calls = [
             ToolCall(name="statistics_analysis", params={}),
             ToolCall(name="relationship_analysis", params={}),
@@ -669,9 +747,17 @@ class SRAgent(Agent):
                 + "\n\n".join(sections)
             ),
         }
-    
+
     def request_llm(self, prompt: List[Dict[str, Any]], R, L, C, stream_callback=None):
-        """请求 LLM 得到 Content 和 Tool Calls。"""
+        """Run the ``request llm`` operation.
+
+        Args:
+            prompt: Prompt messages sent to the model.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+            stream_callback: Optional callback invoked for streamed model updates.
+        """
         response_list = []
         route = self.model_router.route(
             task_score=self._task_route_score,
@@ -713,9 +799,16 @@ class SRAgent(Agent):
             _logger.debug(tool_calls_for_log)
         usage = self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list, usage
-    
+
     def get_results(self, response_list, R, L, C):
-        """执行 Tool Calls 得到 Results。"""
+        """Return results.
+
+        Args:
+            response_list: Model responses for the current step.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         # 合并 - 调用 - 分割
         all_tool_calls = []
         num_tool_calls = []
@@ -740,7 +833,16 @@ class SRAgent(Agent):
         results: List[ToolCallResult],
         R, L, C, forced: bool = False
     ) -> None:
-        """Persist tool calls from either the LLM or framework-enforced diagnostics."""
+        """Persist tool calls from either the LLM or framework-enforced diagnostics.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+            results: Result records to process.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+            forced: The forced value.
+        """
         if self.save_path is None:
             return
         with open(Path(self.save_path) / 'tool_calls.jsonl', 'a') as f:
@@ -756,7 +858,7 @@ class SRAgent(Agent):
                     "meta_data": result.meta_data,
                 }, f)
                 f.write('\n')
-    
+
     def update_buffer(
         self,
         buffer: List[Dict[str, Any]],
@@ -764,7 +866,17 @@ class SRAgent(Agent):
         results_list: List[List[ToolCallResult]],
         node_parents: Dict[str, str], R, L, C
     ):
-        """根据 LLM Response 和 Tool Results 更新 Buffer。"""
+        """Update buffer.
+
+        Args:
+            buffer: Conversation history buffer.
+            response_list: Model responses for the current step.
+            results_list: Tool results aligned with model responses.
+            node_parents: The node parents value.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         # 如果没有成功的回复，跳过本轮更新
         if len(response_list) == 0:
             return buffer, node_parents
@@ -813,6 +925,11 @@ class SRAgent(Agent):
 
     def build_process_message(self, L):
         # 将当前搜索进度加入 buffer
+        """Build process message.
+
+        Args:
+            L: One-based refinement-step index.
+        """
         remaining_rounds = self.max_refinement_depth - L - 1
         progress_line = (
             f"Current progress: refinement round L={L+1}/{self.max_refinement_depth}. "
@@ -882,6 +999,11 @@ class SRAgent(Agent):
         )}
 
     def push_candidate(self, record: CandidateRecord) -> None:
+        """Run the ``push candidate`` operation.
+
+        Args:
+            record: Search or candidate record.
+        """
         if not self.run_state.push_candidate(record):
             _logger.warning(
                 "Skipping candidate with missing or non-finite ranking metrics: "
@@ -889,7 +1011,15 @@ class SRAgent(Agent):
             )
 
     def collect_candidates(self, response_list, results_list, R, L, C):
-        """Validate candidate tool results and add them to the run state."""
+        """Validate candidate tool results and add them to the run state.
+
+        Args:
+            response_list: Model responses for the current step.
+            results_list: Tool results aligned with model responses.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         loader = []
         for K in range(1, len(response_list) + 1):
             for _, res in zip(response_list[K - 1][1], results_list[K - 1]):
@@ -934,15 +1064,22 @@ class SRAgent(Agent):
                 )
                 self.push_candidate(record)
         return self.run_state.ranked_candidates()
-    
+
     def log_info(self, response_list, R, L, C):
-        """打印本轮日志, response_list 是用来统计本轮新增工具调用次数的。"""
+        """Run the ``log info`` operation.
+
+        Args:
+            response_list: Model responses for the current step.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         new_count = defaultdict(int)
         for _, tool_calls, _ in response_list:
             for tool_call in tool_calls:
                 new_count[tool_call.name] += 1
         tool_calls_str = ', '.join(
-            f"{name}: {count} ({new_count[name]} new)" 
+            f"{name}: {count} ({new_count[name]} new)"
             for name, count in self.tools_counter.named_count.items()
         )
         if best_record := self.best_candidate():
@@ -963,7 +1100,17 @@ class SRAgent(Agent):
         _logger.info(tag2ansi(msg))
 
     def record_llm_result(self, llm_result, R, L, C) -> Dict[str, Any] | None:
-        """记录最近一次 LLM 请求的返回值和用量统计。"""
+        """Record llm result.
+
+        Args:
+            llm_result: The llm result value.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            Dict[str, Any] | None: The operation result.
+        """
         usage = llm_result.returned['usage']
         for name, num in usage['token'].items():
             self.token_counter.add(name, num)
@@ -980,11 +1127,22 @@ class SRAgent(Agent):
                 }, f)
                 f.write('\n')
         return usage
-    
+
     def record_search_iteration(
         self, response_list, results_list, parent_nodes, prompt, usage, R, L, C,
     ):
-        """Record one visualization node for each local sample."""
+        """Record one visualization node for each local sample.
+
+        Args:
+            response_list: Model responses for the current step.
+            results_list: Tool results aligned with model responses.
+            parent_nodes: Parent search nodes by response.
+            prompt: Prompt messages sent to the model.
+            usage: Token and price usage information.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         parents: list[ParentLink] = []
         for parent_node_id, relation in parent_nodes.items():
             if relation not in {"restart_seed", "continuation", "context_merge"}:
@@ -995,6 +1153,13 @@ class SRAgent(Agent):
         self.run_state.register_iteration(response_list, results_list, tuple(parents), prompt, usage, R, L, C)
 
     def format_progress(self, R, L, C):
+        """Format progress.
+
+        Args:
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         return (
             f"(R={R}/{self.max_restart_loop}) × "
             f"(C={C}/{self.global_width}) × "
@@ -1003,6 +1168,11 @@ class SRAgent(Agent):
         )
 
     def record_metric(self, record):
+        """Record metric.
+
+        Args:
+            record: Search or candidate record.
+        """
         metric_label = self.ranking_metric.replace('_', ' ').upper()
         if isinstance(record, CandidateRecord):
             split_results = record.details.get("data_split_results")
@@ -1021,6 +1191,11 @@ class SRAgent(Agent):
         return None, None
 
     def sortby(self, record):
+        """Run the ``sortby`` operation.
+
+        Args:
+            record: Search or candidate record.
+        """
         _, metric_value = self.record_metric(record)
         if metric_value is None:
             return None
@@ -1051,7 +1226,14 @@ class SRAgent(Agent):
 
     @staticmethod
     def candidate_dict(record: CandidateRecord) -> dict[str, Any]:
-        """Adapt a candidate to utilities that consume split results at top level."""
+        """Adapt a candidate to utilities that consume split results at top level.
+
+        Args:
+            record: Search or candidate record.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         return {
             "formula": record.formula,
             "node_id": record.node_id,
@@ -1059,14 +1241,31 @@ class SRAgent(Agent):
         }
 
     def best_candidate(self) -> CandidateRecord | None:
+        """Run the ``best candidate`` operation.
+
+        Returns:
+            CandidateRecord | None: The operation result.
+        """
         candidates = self.run_state.ranked_candidates()
         return candidates[0] if candidates else None
 
     def get_pareto_front(self) -> list[CandidateRecord]:
-        """Return candidates on the metric-complexity Pareto front."""
+        """Return candidates on the metric-complexity Pareto front.
+
+        Returns:
+            list[CandidateRecord]: The operation result.
+        """
         candidates = self.run_state.ranked_candidates()
         return [candidates[index] for index in self.run_state.pareto_indices(candidates)]
 
     def search_result(self, status: str, R: int | None, L: int | None, C: int | None):
+        """Run the ``search result`` operation.
+
+        Args:
+            status: Run completion status.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         progress = self.format_progress(R, L, C)
         return self.run_state.result(status=status, progress=progress).to_dict()

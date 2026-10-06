@@ -6,9 +6,9 @@
 为符号回归搜索提供先验知识指导。
 
 可通过下述指令将模型上传到 Github Release（需要设置 GITHUB_TOKEN 环境变量）
-    sr-harness upload-models --checkpoint path/to/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
+    python scripts/upload_models.py --checkpoint path/to/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 可通过下述指令从 Github Release 下载模型到本地（或者在首次调用时自动下载）
-    sr-harness download-models --checkpoint path/to/save/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
+    python scripts/download_models.py --checkpoint path/to/save/model.pth --name property-scratch-v5 --release-tag sr-agent-models-v5
 """
 from __future__ import annotations
 
@@ -110,6 +110,7 @@ def _decode_per_var(logits: np.ndarray, label_map: dict, n_vars: int) -> list:
 # 此工具尚未处于 Ready 状态
 # @BaseTool.register("predict_property")
 class PropertyPredictorTool(BaseTool):
+    """Implementation of the property predictor tool."""
     metadata = ToolMetadata(name="predict_property")
 
     MODEL_TYPE: Literal[
@@ -281,6 +282,14 @@ class PropertyPredictorTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if "error" in result:
             return f"Error: {result['error']}"
 

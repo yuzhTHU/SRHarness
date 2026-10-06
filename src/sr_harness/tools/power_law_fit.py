@@ -9,6 +9,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register("power_law_fit")
 class PowerLawFitTool(BaseTool):
+    """Implementation of the power law fit tool."""
     metadata = ToolMetadata("power_law_fit")
 
     def execute(
@@ -252,6 +253,14 @@ class PowerLawFitTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if "data_split_results" not in result:
             if result.get("domain_inapplicable"):
                 issues = "\n".join(f"    {issue}" for issue in result["exceptions"])

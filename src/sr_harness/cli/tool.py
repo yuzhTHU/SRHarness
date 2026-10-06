@@ -12,6 +12,14 @@ from sr_harness.tools import BaseTool
 
 
 def load_json_text(text: str) -> dict[str, Any]:
+    """Load json text.
+
+    Args:
+        text: Text to process.
+
+    Returns:
+        dict[str, Any]: The operation result.
+    """
     value = json.loads(text)
     if not isinstance(value, dict):
         raise ValueError("Tool params must be a JSON object.")
@@ -19,6 +27,15 @@ def load_json_text(text: str) -> dict[str, Any]:
 
 
 def load_params(params: str | None = None, params_file: str | None = None) -> dict[str, Any]:
+    """Load params.
+
+    Args:
+        params: The params value.
+        params_file: The params file value.
+
+    Returns:
+        dict[str, Any]: The operation result.
+    """
     loaded: dict[str, Any] = {}
     if params_file:
         loaded |= load_json_text(Path(params_file).read_text(encoding="utf-8"))
@@ -28,13 +45,29 @@ def load_params(params: str | None = None, params_file: str | None = None) -> di
 
 
 def decode_npz_value(value: np.ndarray) -> Any:
+    """Run the ``decode npz value`` operation.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Any: The operation result.
+    """
     if value.shape == ():
         return value.item()
     return value
 
 
 def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
-    """Load a BaseTool context from context.npz."""
+    """Load a BaseTool context from context.npz.
+
+    Args:
+        path: Filesystem path.
+        target: Target name or target values.
+
+    Returns:
+        dict[str, Any]: The operation result.
+    """
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Context file not found: {path}")
@@ -74,6 +107,14 @@ def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
 
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
+    """Configure the command-line argument parser.
+
+    Args:
+        parser: Argument parser to configure.
+
+    Returns:
+        argparse.ArgumentParser: The operation result.
+    """
     if parser is None:
         parser = argparse.ArgumentParser(
             prog="sr-harness tool",
@@ -105,10 +146,26 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
 
 
 def tool_class(name: str) -> type[BaseTool]:
+    """Run the ``tool class`` operation.
+
+    Args:
+        name: Registered name.
+
+    Returns:
+        type[BaseTool]: The operation result.
+    """
     return BaseTool.create(name, create_instance=False)
 
 
 def main(args: argparse.Namespace) -> int:
+    """Run the command and return its process exit code.
+
+    Args:
+        args: Parsed command-line arguments.
+
+    Returns:
+        int: The operation result.
+    """
     if args.tool_command == "list":
         if args.json:
             print(json.dumps(list(BaseTool.REGISTRY_DICT), indent=2, ensure_ascii=False))

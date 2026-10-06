@@ -29,6 +29,18 @@ def render(
     latex: bool = False,
     number_format: str = "",
 ) -> str:
+    """Render an expression as canonical text.
+
+    Args:
+        expression: Symbolic expression to process.
+        parent_precedence: Precedence required by the enclosing expression.
+        right: Whether the expression is the right operand of its parent.
+        latex: Whether to render LaTeX notation.
+        number_format: Format specification for numeric literals.
+
+    Returns:
+        The rendered expression.
+    """
     if isinstance(expression, Number):
         return format(expression.value, number_format) if number_format else repr(expression.value)
     if isinstance(expression, Symbol):
@@ -91,18 +103,23 @@ def render(
     if isinstance(expression, Reduction):
         indices = ", ".join(str(index) for index in expression.indices)
         operand = render(expression.operand, latex=latex, number_format=number_format)
-        return f"\\sum_{{{indices}}} {operand}" if latex else f"sum[{indices}]({operand})"
-    if isinstance(expression, Aggregate):
+        if expression.relation is None:
+            return f"\\sum_{{{indices}}} {operand}" if latex else f"sum[{indices}]({operand})"
         relation = render(expression.relation, latex=latex, number_format=number_format)
-        operand = render(expression.operand, latex=latex, number_format=number_format)
-        return f"aggr({relation}, {operand})"
+        if latex:
+            return f"\\sum_{{{indices}; {relation}}} {operand}"
+        return f"sum[{indices}]({relation}, {operand})"
+    if isinstance(expression, Aggregate):
+        from .desugar import desugar
+
+        return render(
+            desugar(expression),
+            parent_precedence,
+            right,
+            latex=latex,
+            number_format=number_format,
+        )
     if isinstance(expression, RelationLift):
         name = "targ" if expression.role == "target" else "sour"
-        arguments = [expression.operand]
-        if expression.relation is not None:
-            arguments.insert(0, expression.relation)
-        rendered = ", ".join(
-            render(arg, latex=latex, number_format=number_format) for arg in arguments
-        )
-        return f"{name}({rendered})"
+        raise ValueError(f"{name}(...) must appear inside aggr(...).")
     raise TypeError(f"Cannot render {type(expression).__name__}.")

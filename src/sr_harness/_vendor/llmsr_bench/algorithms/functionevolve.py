@@ -3,7 +3,7 @@
 Clone Phoinikas03/FunctionEvolve into baseline/repo/FunctionEvolve and install
 its requirements in the selected Python environment. Example:
 
-    sr-harness bench --algorithm functionevolve --datasets bio_pop_growth \
+    sr-harness benchmark --algorithm functionevolve --datasets bio_pop_growth \
         --problem_names BPG5 --llm_model qwen/qwen3.6-27b
 
 The default search uses 30 steps and 20 seeds. A small integration smoke test can
@@ -56,8 +56,9 @@ def update_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
                         choices=['Structure', 'DE', 'CMA-ES', 'L-BFGS-B', 'least_squares'])
     parser.add_argument('--functionevolve_reasoning', choices=['enabled', 'disabled', 'low'],
                         default='enabled', help='OpenRouter reasoning setting for all agents; low sets effort=low.')
-    parser.add_argument('--functionevolve_resume', action='store_true',
-                        help='Resume the newest existing task checkpoint under save_path.')
+    parser.add_argument('--functionevolve_resume', action=argparse.BooleanOptionalAction, default=False, help=(
+        'Resume the newest existing task checkpoint under save_path.'
+    ))
     for name, default in _DEFAULTS.items():
         parser.add_argument(f'--functionevolve_{name}', type=type(default), default=default)
     return parser

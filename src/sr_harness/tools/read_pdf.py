@@ -31,6 +31,7 @@ def _validate_public_url(url: str) -> None:
 
 @BaseTool.register("read_pdf")
 class PDFReadTool(BaseTool):
+    """Implementation of the p d f read tool."""
     metadata = ToolMetadata(name="read_pdf")
 
     def execute(self, source: str, start_page: int = 1, max_pages: int = 10) -> Dict[str, Any]:
@@ -87,6 +88,14 @@ class PDFReadTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         return "\n\n".join(
             f"## Page {page['page']}\n{page['text']}" for page in result["pages"]
         )

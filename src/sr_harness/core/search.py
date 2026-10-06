@@ -19,7 +19,14 @@ ParentRelation = Literal["continuation", "restart_seed", "context_merge"]
 
 
 def json_value(value: Any) -> Any:
-    """Convert runtime values to standards-compliant JSON values."""
+    """Convert runtime values to standards-compliant JSON values.
+
+    Args:
+        value: Input value.
+
+    Returns:
+        Any: The operation result.
+    """
     if is_dataclass(value) and not isinstance(value, type):
         return json_value(asdict(value))
     if isinstance(value, np.ndarray):
@@ -58,6 +65,7 @@ def json_value(value: Any) -> Any:
 
 @dataclass(frozen=True, slots=True)
 class SearchCoordinate:
+    """Coordinates of one R-C-L-K search sample."""
     R: int
     C: int
     L: int
@@ -66,15 +74,22 @@ class SearchCoordinate:
 
 @dataclass(frozen=True, slots=True)
 class ParentLink:
+    """Typed link to a parent search node."""
     parent_node_id: str
     relation: ParentRelation
 
     def to_dict(self) -> dict[str, str]:
+        """Return a serializable dictionary representation.
+
+        Returns:
+            dict[str, str]: The operation result.
+        """
         return {"node_id": self.parent_node_id, "relation": self.relation}
 
 
 @dataclass(slots=True)
 class SearchNode:
+    """Recorded state for one search-tree node."""
     run_id: str
     node_id: str
     node_label: str
@@ -85,6 +100,14 @@ class SearchNode:
     detail: dict[str, Any]
 
     def to_dict(self, *, include_detail: bool = True) -> dict[str, Any]:
+        """Return a serializable dictionary representation.
+
+        Args:
+            include_detail: Whether to include detailed payloads.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         record = {
             "run_id": self.run_id,
             "node_id": self.node_id,
@@ -105,11 +128,20 @@ class SearchNode:
 
 @dataclass(slots=True)
 class CandidateRecord:
+    """Candidate formula and its evaluation details."""
     formula: str
     node_id: str
     details: dict[str, Any] = field(default_factory=dict)
 
     def split_metrics(self, split: str) -> dict[str, Any]:
+        """Run the ``split metrics`` operation.
+
+        Args:
+            split: Data split name.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         return (
             self.details.get("data_split_results", {})
             .get(split, {})
@@ -117,13 +149,32 @@ class CandidateRecord:
         )
 
     def metric(self, name: str, split: str) -> Any:
+        """Run the ``metric`` operation.
+
+        Args:
+            name: Registered name.
+            split: Data split name.
+
+        Returns:
+            Any: The operation result.
+        """
         return self.split_metrics(split).get(name)
 
     @property
     def complexity(self) -> Any:
+        """Run the ``complexity`` operation.
+
+        Returns:
+            Any: The operation result.
+        """
         return self.metric("complexity", "train")
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serializable dictionary representation.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         return {
             "formula": self.formula,
             "node_id": self.node_id,
@@ -131,13 +182,18 @@ class CandidateRecord:
         }
 
     def display_dict(self) -> dict[str, Any]:
-        """Return a flattened view for UI rendering without mutating the record."""
+        """Return a flattened view for UI rendering without mutating the record.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         split = "validation" if self.split_metrics("validation") else "train"
         return self.to_dict() | {"split": split} | json_value(self.split_metrics(split))
 
 
 @dataclass(slots=True)
 class SearchResult:
+    """Final snapshot of one symbolic-regression run."""
     status: Literal["completed", "early_stopped", "interrupted", "failed"]
     progress: str
     candidates: list[CandidateRecord]
@@ -145,6 +201,11 @@ class SearchResult:
     best_candidate: int | None
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a serializable dictionary representation.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         return {
             "status": self.status,
             "progress": self.progress,
@@ -185,17 +246,53 @@ class SearchRunState:
 
     @staticmethod
     def now() -> str:
+        """Run the ``now`` operation.
+
+        Returns:
+            str: The operation result.
+        """
         return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
 
     @staticmethod
     def node_label(R: int, C: int, L: int, K: int) -> str:
+        """Run the ``node label`` operation.
+
+        Args:
+            R: One-based restart index.
+            C: One-based conversation-branch index.
+            L: One-based refinement-step index.
+            K: One-based local-sample index.
+
+        Returns:
+            str: The operation result.
+        """
         return f"R{R}-C{C}-L{L}-K{K}"
 
     def node_id(self, R: int, C: int, L: int, K: int) -> str:
+        """Run the ``node id`` operation.
+
+        Args:
+            R: One-based restart index.
+            C: One-based conversation-branch index.
+            L: One-based refinement-step index.
+            K: One-based local-sample index.
+
+        Returns:
+            str: The operation result.
+        """
         return f"{self.run_id}:{self.node_label(R=R, C=C, L=L, K=K)}"
 
     @staticmethod
     def parent_link(parent_node_id: str, relation: ParentRelation) -> ParentLink:
+        """Run the ``parent link`` operation.
+
+        Args:
+            parent_node_id: The parent node id value.
+            relation: Relation expression that binds symbolic indices.
+
+        Returns:
+            ParentLink: The operation result.
+        """
         return ParentLink(parent_node_id=parent_node_id, relation=relation)
 
     def register_iteration(
@@ -209,6 +306,18 @@ class SearchRunState:
         L: int,
         C: int,
     ) -> None:
+        """Register iteration.
+
+        Args:
+            response_list: Model responses for the current step.
+            results_list: Tool results aligned with model responses.
+            parents: Parent links for the new search nodes.
+            prompt: Prompt messages sent to the model.
+            usage: Token and price usage information.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+        """
         with self._lock:
             for K, ((content, tool_calls, message), results) in enumerate(
                 zip(response_list, results_list), 1
@@ -239,6 +348,14 @@ class SearchRunState:
                         )
 
     def push_candidate(self, candidate: CandidateRecord) -> bool:
+        """Run the ``push candidate`` operation.
+
+        Args:
+            candidate: The candidate value.
+
+        Returns:
+            bool: The operation result.
+        """
         priority = self._candidate_priority(candidate)
         if priority is None:
             return False
@@ -247,16 +364,35 @@ class SearchRunState:
         return True
 
     def update_diagnostics(self, formula: str, diagnostics: dict[str, Any]) -> None:
+        """Update diagnostics.
+
+        Args:
+            formula: Symbolic formula string.
+            diagnostics: Diagnostic values to store.
+        """
         with self._lock:
             for candidate in self._candidates:
                 if candidate.formula == formula:
                     candidate.details["eic_diagnostics"] = diagnostics
 
     def ranked_candidates(self) -> list[CandidateRecord]:
+        """Run the ``ranked candidates`` operation.
+
+        Returns:
+            list[CandidateRecord]: The operation result.
+        """
         with self._lock:
             return sorted(self._candidates, key=self._candidate_priority)
 
     def pareto_indices(self, candidates: list[CandidateRecord] | None = None) -> list[int]:
+        """Run the ``pareto indices`` operation.
+
+        Args:
+            candidates: The candidates value.
+
+        Returns:
+            list[int]: The operation result.
+        """
         candidates = candidates if candidates is not None else self.ranked_candidates()
         indices = []
         current_complexity = float("inf")
@@ -271,6 +407,15 @@ class SearchRunState:
         return indices
 
     def result(self, status: str, progress: str) -> SearchResult:
+        """Run the ``result`` operation.
+
+        Args:
+            status: Run completion status.
+            progress: Human-readable search progress.
+
+        Returns:
+            SearchResult: The operation result.
+        """
         candidates = self.ranked_candidates()
         result = SearchResult(
             status=status,
@@ -284,18 +429,35 @@ class SearchRunState:
         return result
 
     def records(self, *, include_detail: bool = False) -> list[dict[str, Any]]:
+        """Run the ``records`` operation.
+
+        Args:
+            include_detail: Whether to include detailed payloads.
+
+        Returns:
+            list[dict[str, Any]]: The operation result.
+        """
         with self._lock:
             nodes = list(self.nodes.values())
         return [node.to_dict(include_detail=include_detail) for node in nodes]
 
     @property
     def node_count(self) -> int:
+        """Run the ``node count`` operation.
+
+        Returns:
+            int: The operation result.
+        """
         with self._lock:
             return len(self.nodes)
 
     @property
     def latest_coordinate(self) -> SearchCoordinate | None:
-        """Return the coordinate of the most recently recorded search node."""
+        """Return the coordinate of the most recently recorded search node.
+
+        Returns:
+            SearchCoordinate | None: The operation result.
+        """
         with self._lock:
             if not self.nodes:
                 return None
@@ -303,6 +465,14 @@ class SearchRunState:
             return self.nodes[node_id].coordinate
 
     def node_record(self, node_id: str) -> dict[str, Any] | None:
+        """Run the ``node record`` operation.
+
+        Args:
+            node_id: The node id value.
+
+        Returns:
+            dict[str, Any] | None: The operation result.
+        """
         with self._lock:
             node = self.nodes.get(node_id)
         return node.to_dict() if node is not None else None

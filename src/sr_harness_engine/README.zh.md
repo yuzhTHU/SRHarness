@@ -1,5 +1,7 @@
 # SRHarness Engine 符号模型语言规范
 
+> 网页版长文档（含快速开始、完整示例和自动生成的 API Reference）：[`docs/engine.md`](../../docs/engine.md)
+
 `sr_harness_engine` 是 SRHarness 的底层符号模型引擎。它负责用结构化表达式描述数学模型，提供安全解析、规范渲染、数值求值和参数优化，并为后续的复杂度、EIC、TopK、Pareto Front、等价判断和模型变换提供统一的表达式树。
 
 本引擎描述模型的右端项（RHS）。`y = f(x)`、`dx/dt = f(x)`、节点动力学或轨迹积分等左端项和实验含义由 SRHarness 的问题定义与评估器负责。评估器同时负责数据划分、参数拟合协议、积分方式和评价指标。
@@ -65,6 +67,13 @@ abs  sin  cos  tan  tanh  exp  log  log10  sqrt  sigmoid
 
 字面数字是固定常数，不参与参数优化。
 
+解析器会折叠不依赖变量或待拟合参数的加、减、乘法子表达式，但不会调整符号项的顺序。除法、幂和函数调用保留原结构，以免 `2 / 3`、`4 / 3` 或 `sqrt(2)` 这类精确且有意义的常量退化为浮点小数：
+
+```python
+expression = engine.parse("y + (2 * 3) * x")
+assert str(expression) == "y + 6 * x"
+```
+
 ## 命名参数
 
 待拟合参数必须用 `param` 显式声明：
@@ -82,6 +91,8 @@ value = expression.evaluate(data, parameters=fit.parameters)
 
 拟合目前以均方误差为目标，并通过 `scipy.optimize.minimize` 优化。`fit()` 返回 `FitResult`，不会修改原表达式。
 
+`expression.count_parameters(data)` 返回模型中独立待拟合数值的数量。同名 `param` 只计一次，固定数值不计入；`grouped_param` 在类别数据可用时按不同类别的数量计数。
+
 ## 分组参数
 
 类别字段可以决定参数取值：
@@ -96,32 +107,32 @@ grouped_param(s, name='slope', value={'A': 1.0, 'B': 2.0}) * x
 
 ## 网络与超图的显式指标语法
 
-关系使用整数表表示。`A.shape == (E, 2)` 表示二元关系，`T.shape == (H, 3)` 表示三元关系。表达式中的指标按照关系表的列顺序绑定：
+关系使用整数表表示。`A.shape == (E, 2)` 表示二元关系，各列依次为 `(target, source)`；`T.shape == (H, 3)` 表示三元关系，各列依次为 `(target, source1, source2)`。表达式中的指标按照关系表的列顺序绑定：
 
 ```text
-x[i] + sum[j](A[i, j] * x[i] * x[j])
+x[i] + sum[j](A[i, j], x[i] * x[j])
 ```
 
 求值过程为：
 
-1. `A[i, j]` 将 `i`、`j` 绑定到 `A` 的第 0、1 列；
+1. `A[i, j]` 将目标指标 `i`、源指标 `j` 绑定到 `A` 的第 0、1 列；
 2. `x[i]` 和 `x[j]` 根据相应列收集节点值；
 3. `sum[j]` 对 `j` 缩并，按仍然自由的 `i` 聚合；
 4. 输出重新排列为节点轴，孤立节点位置保留为零；
 5. 外部的 `x[i]` 是具有自由节点指标的完整节点数组。
 
-关系表只描述关联结构，所以 `A[i, j]` 和 `T[i, j, k]` 本身取值为 1。带权关系应把权重声明为单独的 Symbol，并用同一关系的行顺序存储。更高阶关系采用相同规则：
+`sum` 的第一个参数是关系绑定器，第二个参数是被求和的消息。关系表不作为数值因子乘进消息。带权关系应把权重声明为单独的 Symbol，并用同一关系的行顺序存储。更高阶关系采用相同规则：
 
 ```text
 x[i]
-+ sum[j](A[i, j] * x[i] * x[j])
-+ sum[j, k](T[i, j, k] * x[i] * x[j] * x[k])
++ sum[j](A[i, j], x[i] * x[j])
++ sum[j, k](T[i, j, k], x[i] * x[j] * x[k])
 ```
 
 求和指标不必来自当前关系。下面的内层 `sum[k]` 对 `x` 的完整节点轴做全局求和，然后将结果广播到外层边关系：
 
 ```text
-x[i] + sum[j](A[i, j] * sum[k](x[k]) * x[j])
+x[i] + sum[j](A[i, j], x[i] * sum[k](x[k]) * x[j])
 ```
 
 一条 `sum[...]` 当前只能以一个关系表作为指标绑定来源。连接多个不同关系的复合缩并将在后续通过显式关系连接原语支持。
@@ -131,13 +142,31 @@ x[i] + sum[j](A[i, j] * sum[k](x[k]) * x[j])
 为了表达常见的有向边消息传递，引擎保留与 nd2py 接近的写法：
 
 ```text
+aggr(A * targ(x) * sour(x))
 x + aggr(A, targ(A, x) * sour(A, x))
 x + aggr(A, targ(x) * sour(x))
 ```
 
-在这套便捷语法中，二列边表依次存储 `(source, target)`。`sour` 收集第 0 列节点，`targ` 收集第 1 列节点，`aggr` 按第 1 列目标节点求和。省略 `targ/sour` 中的关系时，它们继承最近一层 `aggr` 的关系。
+`aggr(A * expression)` 是推荐写法；双参数形式作为等价便捷写法保留。在这套语法中，`targ` 收集第 0 列目标节点，`sour` 收集第 1 列源节点，`aggr` 按目标节点求和。省略 `targ/sour` 中的关系时，它们继承最近一层 `aggr` 的关系。解析后这些节点立即编译成统一的指标表达式，例如：
 
-显式指标语法不预设“源”和“目标”，列的含义完全由指标名称和缩并位置决定。新模型应优先使用显式指标语法；便捷语法适合简短的二元消息传递表达式。
+```text
+aggr(A * targ(x) * sour(x))
+    -> sum[j](A[i, j], x[i] * x[j])
+```
+
+因此，字符串渲染只会输出指标表达式，不保留原始的 `aggr/targ/sour` 拼写。
+
+### 关系字段与权重
+
+在关系缩并内部，带有完整关系指标的普通 Symbol 表示按关系行对齐的字段：
+
+```text
+sum[j](A[i, j], w[i, j] * x[i] * x[j])
+```
+
+若 `A.shape == (E, 2)`，则 `w.shape == (E,)` 表示每条边一个权重；`w.shape == (N, E)` 表示每个样本或通道、每条边一个权重。关系字段的最后一维必须与 `E` 相等。引擎按 `A` 的行顺序读取权重，然后依据第 0 列的目标节点聚合。这里不要求构造形状为“节点数 × 节点数”的稠密权重矩阵。
+
+引擎按指标从左到右绑定关系表各列；本规范约定目标指标在前、源指标在后。新模型应优先使用显式指标语法；便捷语法适合简短的二元消息传递表达式。
 
 ## 时延
 
@@ -192,3 +221,34 @@ custom_python_function(x)
 - 由 ODE、DDE、网络系统评估器提供的积分与拟合协议。
 
 任意代码求值工具属于 SRHarness 的实验与诊断层，不属于本符号语言，也不应默认产生可进入 TopK 或 Pareto Front 的正式候选模型。
+
+## SRHarness 评估器接口
+
+符号引擎负责 RHS 表达式，实验协议由 `sr_harness.Evaluator` 定义。用户可以继承这个类，实现自己的参数拟合和评价方法：
+
+```python
+from typing import Any
+
+from sr_harness import Evaluator
+
+
+class MyEvaluator(Evaluator):
+    def fit(
+        self,
+        formula: str,
+        data: dict[str, Any],
+        target: Any,
+    ) -> dict[str, Any]:
+        ...
+
+    def evaluate(
+        self,
+        formula: str,
+        data: dict[str, Any],
+        target: Any,
+        parameters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        ...
+```
+
+这个接口只要求公式字符串、普通字典和目标数据，不要求用户了解 Agent、搜索状态或 Web UI。ODE 评估器可以在其中积分轨迹，网络评估器可以读取关系表，特殊任务也可以自行决定拟合参数和返回哪些指标。候选模型本身仍然是受符号语法约束的字符串。

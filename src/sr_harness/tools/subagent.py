@@ -11,6 +11,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("delegate_subagent")
 class SubagentTool(BaseTool):
+    """Implementation of the subagent tool."""
     metadata = ToolMetadata(name="delegate_subagent")
     MODES = {
         "hypothesis_generation": (
@@ -158,6 +159,14 @@ class SubagentTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         return f"Independent SR subagent ({result['mode']}):\n{result['content']}"
 
 

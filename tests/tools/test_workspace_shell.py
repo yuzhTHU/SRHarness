@@ -94,6 +94,36 @@ class TestWorkspace:
             assert (linked_dir / "file.txt").read_text() == "hello"
             ws.cleanup()
 
+    def test_linked_inputs_are_read_only_and_name_collisions_fail(self, tmp_path):
+        """Mounted files can be read but cannot be modified through the workspace."""
+        first = tmp_path / "first" / "data.csv"
+        second = tmp_path / "second" / "data.csv"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        first.write_text("x\n1\n")
+        second.write_text("x\n2\n")
+
+        ws = Workspace(workspace_files=[str(first)])
+        try:
+            assert ws.resolve("data.csv").read_text() == "x\n1\n"
+            assert ws.resolve("data.csv", write=True) is None
+            with pytest.raises(FileExistsError, match="already in use"):
+                ws.link_item(second)
+        finally:
+            ws.cleanup()
+
+    def test_linked_directory_files_are_discoverable(self, tmp_path):
+        """Directory mounts expose nested files through logical workspace paths."""
+        source = tmp_path / "observations"
+        source.mkdir()
+        (source / "data.csv").write_text("x,y\n1,2\n")
+        ws = Workspace(workspace_files=[str(source)])
+        try:
+            assert ws.resolve("observations/data.csv").read_text() == "x,y\n1,2\n"
+            assert dict(ws.iter_files())[Path("observations/data.csv")].is_file()
+        finally:
+            ws.cleanup()
+
     def test_cleanup_removes_workspace(self):
         """cleanup 正确删除工作区目录。"""
         ws = Workspace()
@@ -149,6 +179,14 @@ class TestWorkspaceShellTool:
         """chmod 被拒绝。"""
         result = self.tool.execute("chmod 777 data.csv")
         assert result.get("success") is False
+
+    def test_locked_file_rejects_destructive_commands(self):
+        self.ws.set_locked("data.csv", True)
+        result = self.tool.execute("rm data.csv")
+        assert result.get("success") is False
+        assert (self.ws.path / "data.csv").exists()
+        self.ws.set_locked("data.csv", False)
+        assert self.tool.execute("rm data.csv").get("success") is True
 
     def test_rejects_bash(self):
         """bash 被拒绝。"""

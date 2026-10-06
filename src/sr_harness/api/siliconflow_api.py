@@ -13,6 +13,7 @@ _logger = logging.getLogger(f"sr_harness.{__name__}")
 
 @BaseAPI.register("siliconflow")
 class SiliconFlowAPI(BaseAPI):
+    """SiliconFlow provider adapter."""
     supported_models = [
         "Qwen3-8B",
         "Deepseek-V3",
@@ -69,6 +70,16 @@ class SiliconFlowAPI(BaseAPI):
 
     def qwen3_8b(self, url, headers, payload) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
+        """Run the ``qwen3 8b`` operation.
+
+        Args:
+            url: The url value.
+            headers: The headers value.
+            payload: Serializable event payload.
+
+        Returns:
+            Generator[str, None, Dict]: The operation result.
+        """
         yield from []
         payload = {
             'model': 'Qwen/Qwen3-8B',
@@ -124,6 +135,16 @@ class SiliconFlowAPI(BaseAPI):
 
     def deepseek_v3(self, url, headers, payload) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
+        """Run the ``deepseek v3`` operation.
+
+        Args:
+            url: The url value.
+            headers: The headers value.
+            payload: Serializable event payload.
+
+        Returns:
+            Generator[str, None, Dict]: The operation result.
+        """
         yield from []
         payload = {
             'model': 'deepseek-ai/DeepSeek-V3',

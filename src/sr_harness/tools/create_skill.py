@@ -17,6 +17,7 @@ _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class AuthoringState(Enum):
+    """Implementation of the authoring state."""
     PREPARE = auto()
     AUTHOR = auto()
     CONTINUE = auto()
@@ -77,6 +78,7 @@ Use status=ready only when the draft is complete and questions is empty.'''
 
 @BaseTool.register("create_skill")
 class CreateSkill(BaseTool):
+    """Implementation of the create skill."""
     metadata = ToolMetadata(name="create_skill")
 
     def execute(
@@ -277,6 +279,14 @@ class CreateSkill(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = f"Created {result['skill_type']} skill {result['name']!r}."
         if result.get("tool_name"):
             text += f" Registered custom tool {result['tool_name']!r}."

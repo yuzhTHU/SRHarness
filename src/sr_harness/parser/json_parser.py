@@ -15,23 +15,13 @@ _logger = getLogger(f'sr_harness.{__name__}')
 
 @BaseParser.register('json')
 class JSONParser(BaseParser):
-    """基于 JSON 格式的工具调用解析器。
-
-    期望 LLM 使用以下格式输出：
-    ```json
-    {
-        "actions": [
-            {"tool": "tool_name", "params": {"param1": "value1", "param2": "value2"}}
-        ]
-    }
-    ```
-    """
+    """Parser for JSON-formatted tool calls."""
 
     def format_tools(self) -> str:
-        """将工具列表格式化为 LLM 可读的描述字符串。
+        """Format tools.
 
         Returns:
-            格式化后的工具描述字符串。
+            str: The operation result.
         """
         lines = ["## Available Tools:", ""]
 
@@ -76,13 +66,13 @@ class JSONParser(BaseParser):
         return "\n".join(lines)
 
     def parse_response(self, response: str) -> List[ToolCall]:
-        """从 LLM 响应中解析工具调用。
+        """Parse response.
 
         Args:
-            response: LLM 的原始响应文本。
+            response: Provider response object.
 
         Returns:
-            工具调用列表。
+            List[ToolCall]: The operation result.
         """
         tool_calls = []
 
@@ -105,13 +95,13 @@ class JSONParser(BaseParser):
         return tool_calls
 
     def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
-        """将工具调用列表格式化为 JSON 字符串。
+        """Format tool calls.
 
         Args:
-            tool_calls: 工具调用列表。
+            tool_calls: Tool calls returned by the model.
 
         Returns:
-            格式化后的 JSON 字符串。
+            str: The operation result.
         """
         lines = []
         for call in tool_calls:

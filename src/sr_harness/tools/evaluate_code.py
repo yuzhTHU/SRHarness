@@ -23,6 +23,7 @@ from .code_executor import CodeExecutorTool, LimitedWriter, SandBoxCodeExecutor
 
 @BaseTool.register("evaluate_code")
 class EvaluateCodeTool(BaseTool):
+    """Implementation of the evaluate code tool."""
     metadata = ToolMetadata(name="evaluate_code")
 
     DEFAULT_TIMEOUT_SECONDS = CodeExecutorTool.DEFAULT_TIMEOUT_SECONDS
@@ -158,6 +159,14 @@ class EvaluateCodeTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = cls.format_evaluation_result(result, title="Evaluated code-defined model")
         marker = "Formula Complexity="
         if text.count(marker) > 1:
@@ -174,7 +183,14 @@ class EvaluateCodeTool(BaseTool):
 
     @classmethod
     def prepare_function_code(cls, code: str, expected_params: tuple[str, ...], code_name: str) -> tuple[str, str]:
-        """ 将代码字符串解析为单个函数定义，并验证其签名和安全性。 """
+        """Parse one function definition and validate its signature and safety.
+
+        Args:
+            code: Function source supplied by the agent.
+            expected_args: Required function parameter names.
+
+        Returns:
+            Validated source ready for restricted execution."""
         if not (code := CodeExecutorTool.extract_code(code)):
             raise ValueError(f"{code_name} must not be empty.")
         if not (validation_result := SandBoxCodeExecutor.validate_code(code))["is_safe"]:
@@ -216,6 +232,21 @@ class EvaluateCodeTool(BaseTool):
         output_limit_bytes: int,
         result_queue: mp.Queue,
     ) -> None:
+        """Run the ``sandbox worker`` operation.
+
+        Args:
+            model_code: The model code value.
+            model_func_name: The model func name value.
+            predict_code: The predict code value.
+            predict_func_name: The predict func name value.
+            data: Data arrays keyed by variable name.
+            evaluation_data: The evaluation data value.
+            target: Target name or target values.
+            timeout_seconds: The timeout seconds value.
+            memory_limit_mb: The memory limit mb value.
+            output_limit_bytes: The output limit bytes value.
+            result_queue: The result queue value.
+        """
         SandBoxCodeExecutor.prepare_sandbox_runtime(
             stdin_text="",
             timeout_seconds=timeout_seconds,
@@ -283,6 +314,18 @@ class EvaluateCodeTool(BaseTool):
 
     @classmethod
     def call_code_function(cls, code: str, function_name: str, inputs: tuple[Any, ...], filename: str, safe_globals) -> Any:
+        """Run the ``call code function`` operation.
+
+        Args:
+            code: The code value.
+            function_name: The function name value.
+            inputs: The inputs value.
+            filename: The filename value.
+            safe_globals: The safe globals value.
+
+        Returns:
+            Any: The operation result.
+        """
         before = safe_globals.get(function_name)
         exec(compile(code, filename, "exec"), safe_globals, safe_globals)
         function = safe_globals.get(function_name)
@@ -292,6 +335,14 @@ class EvaluateCodeTool(BaseTool):
 
     @classmethod
     def format_model(cls, model) -> str:
+        """Format model.
+
+        Args:
+            model: The model value.
+
+        Returns:
+            str: The operation result.
+        """
         try:
             return model['description']
         except Exception:

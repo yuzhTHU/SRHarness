@@ -26,6 +26,11 @@ class InteractionController:
         self._activity: dict[str, Any] = {"phase": "idle", "since": time.time()}
 
     def status(self) -> dict[str, Any]:
+        """Run the ``status`` operation.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         with self._condition:
             return {
                 "paused": self._paused,
@@ -40,6 +45,15 @@ class InteractionController:
             }
 
     def command(self, action: str, message: str = "") -> dict[str, Any]:
+        """Run the ``command`` operation.
+
+        Args:
+            action: The action value.
+            message: Message text or provider message payload.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         action = action.strip().lower()
         with self._condition:
             if action == "pause":
@@ -66,6 +80,7 @@ class InteractionController:
             return self.status()
 
     def wait_until_running(self) -> None:
+        """Run the ``wait until running`` operation."""
         with self._condition:
             while self._paused and not self._stopped:
                 self._waiting_at_boundary = True
@@ -75,6 +90,11 @@ class InteractionController:
                 raise KeyboardInterrupt("Stopped through the interaction controller")
 
     def checkpoint(self) -> list[str]:
+        """Run the ``checkpoint`` operation.
+
+        Returns:
+            list[str]: The operation result.
+        """
         with self._condition:
             self.wait_until_running()
             guidance = list(self._guidance)
@@ -82,11 +102,24 @@ class InteractionController:
             return guidance
 
     def take_search_transition(self) -> str | None:
-        """Consume a request to advance to the next branch or restart."""
+        """Consume a request to advance to the next branch or restart.
+
+        Returns:
+            str | None: The operation result.
+        """
         with self._condition:
             return self._search_transitions.popleft() if self._search_transitions else None
 
     def ask(self, message: str, timeout: float | None = None) -> str:
+        """Run the ``ask`` operation.
+
+        Args:
+            message: Message text or provider message payload.
+            timeout: Maximum wait time in seconds.
+
+        Returns:
+            str: The operation result.
+        """
         event_id = uuid.uuid4().hex
         with self._condition:
             self._questions[event_id] = message
@@ -105,6 +138,12 @@ class InteractionController:
             return self._replies.pop(event_id)
 
     def reply(self, event_id: str, message: str) -> None:
+        """Run the ``reply`` operation.
+
+        Args:
+            event_id: Identifier of a pending interaction event.
+            message: Message text or provider message payload.
+        """
         with self._condition:
             if event_id not in self._questions or event_id in self._replies:
                 raise ValueError(f"unknown question event: {event_id}")
@@ -113,10 +152,27 @@ class InteractionController:
             self._condition.notify_all()
 
     def events(self, after_seq: int = 0) -> list[dict[str, Any]]:
+        """Run the ``events`` operation.
+
+        Args:
+            after_seq: Last observed event sequence.
+
+        Returns:
+            list[dict[str, Any]]: The operation result.
+        """
         with self._condition:
             return [dict(event) for event in self._events if event["seq"] > after_seq]
 
     def publish(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Publish .
+
+        Args:
+            kind: Event or resource kind.
+            payload: Serializable event payload.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         with self._condition:
             return self._publish_locked(kind, payload)
 

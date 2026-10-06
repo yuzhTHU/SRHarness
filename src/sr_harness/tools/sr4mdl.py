@@ -17,6 +17,7 @@ from .base_tool import BaseTool, ToolMetadata, is_numeric_array
 
 @BaseTool.register("sr4mdl")
 class SR4MDLTool(BaseTool):
+    """Implementation of the s r4 m d l tool."""
     metadata = ToolMetadata(name="sr4mdl")
     REPOSITORY = "https://github.com/tsinghua-fib-lab/SR4MDL"
     BINARY_OPERATORS = {
@@ -255,6 +256,11 @@ class SR4MDLTool(BaseTool):
 
     @classmethod
     def backend_status(cls) -> Dict[str, Any]:
+        """Run the ``backend status`` operation.
+
+        Returns:
+            Dict[str, Any]: The operation result.
+        """
         configured = os.environ.get("SR4MDL_HOME")
         local_root = Path.cwd() / "third-party" / "SR4MDL"
         root = (
@@ -284,10 +290,23 @@ class SR4MDLTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         return BaseTool.format_result_dict(result)
 
     @classmethod
     def get_doc(cls) -> dict[str, str]:
+        """Return documentation exposed as a runtime skill.
+
+        Returns:
+            dict[str, str]: The operation result.
+        """
         return {
             "name": "sr4mdl-search",
             "description": (

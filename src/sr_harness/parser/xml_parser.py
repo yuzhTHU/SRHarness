@@ -14,4 +14,5 @@ _logger = getLogger(f'sr_harness.{__name__}')
 
 @BaseParser.register('xml')
 class XMLParser(BaseParser):
+    """Parser for XML-formatted tool calls."""
     pass

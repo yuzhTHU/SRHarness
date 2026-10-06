@@ -1,19 +1,25 @@
 """Single interactive run and observable hooks, without changing the search loop."""
 from __future__ import annotations
 
-import csv
+import json
 import os
+import shutil
+import tempfile
 import threading
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
-from dotenv import dotenv_values, set_key
+from dotenv import dotenv_values, set_key, unset_key
 
 from ..agents.data_preparation_agent import DataPreparationAgent
 from ..agents.sr_agent_interactive import SRAgentInteractive
-from ..core import AgentContext, json_value
+from ..api import BaseAPI
+from ..core import AgentContext, ContextDataStore, ToolMetadata, json_value
 from ..interaction import InteractionManager, WebInteractionManager
 from ..runtime import InteractionController
 from ..interaction.web import add_variable_descriptions
@@ -34,7 +40,7 @@ RUNTIME_SETTING_NAMES = (
 
 DATA_AGENT_SETTING_NAMES = (
     "llm_provider", "llm_model", "tool_parser", "llm_max_tokens",
-    "max_turns", "tools", "skills",
+    "tools", "skills", "proxy",
 )
 
 PROVIDER_API_KEY_VARIABLES = {
@@ -47,6 +53,37 @@ PROVIDER_API_KEY_VARIABLES = {
 }
 
 
+class _ModelTestTool(BaseTool):
+    """Private tool used to verify that a model can emit a parsed tool call."""
+
+    metadata = ToolMetadata(
+        name="report_model_test",
+        description="Report the requested value to complete an SRHarness model test.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string",
+                    "description": "The exact value requested by the model-test prompt.",
+                },
+            },
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+    )
+
+    def execute(self, answer: str):
+        """Return the value supplied by the model-test request.
+
+        Args:
+            answer: Exact value requested by the test prompt.
+
+        Returns:
+            The supplied test value.
+        """
+        return {"answer": answer}
+
+
 class InteractiveSession:
     """Own one run for the lifetime of the server; no account/session registry."""
     def __init__(
@@ -57,19 +94,39 @@ class InteractiveSession:
         data=None,
         initial_prompt="",
         env_path=None,
+        workspace_files=None,
+        run_dir=None,
+        workspace_path=None,
     ):
         self.controller = controller or InteractionController()
         self.lock = threading.RLock()
+        self.model_test_lock = threading.Lock()
         self.run_id = uuid.uuid4().hex
-        self.run_dir = Path(log_dir).resolve() / self.run_id
-        self.workspace = self.run_dir / "workspace"
-        self.workspace.mkdir(parents=True)
-        self.context = AgentContext(workspace=Workspace(path=self.workspace))
+        self.run_dir = (
+            Path(run_dir).expanduser().resolve()
+            if run_dir is not None
+            else Path(log_dir).expanduser().resolve() / self.run_id
+        )
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        self.workspace_manager = Workspace(
+            workspace_files=workspace_files,
+            path=workspace_path,
+        )
+        self.workspace = self.workspace_manager.path
+        self.context = AgentContext(workspace=self.workspace_manager)
         self._capability_skill_manager = SkillManager()
+        self.context["skill_manager"] = self._capability_skill_manager
         self.env_path = Path(env_path or Path.cwd() / ".env").resolve()
+        env_values = dotenv_values(self.env_path) if self.env_path.exists() else {}
+        configured_proxy = (
+            env_values.get("MY_PROXY")
+            or os.environ.get("MY_PROXY")
+            or os.environ.get("my_proxy")
+            or ""
+        )
         self.settings = {
             "llm_provider": "openrouter",
-            "llm_model": "deepseek/deepseek-v4-flash",
+            "llm_model": "deepseek/deepseek-v4-flash-0731",
             "strong_llm_provider": None,
             "strong_llm_model": None,
             "auto_routing": True,
@@ -96,9 +153,12 @@ class InteractiveSession:
             "llm_model": self.settings["llm_model"],
             "tool_parser": self.settings["tool_parser"],
             "llm_max_tokens": self.settings["llm_max_tokens"],
-            "max_turns": 12,
             "tools": list(DataPreparationAgent.DEFAULT_TOOLS),
-            "skills": None,
+            "skills": [
+                name for name in self._capability_skill_manager.load_skills()
+                if name not in DataPreparationAgent.DEFAULT_EXCLUDED_SKILLS
+            ],
+            "proxy": configured_proxy,
         }
         self.pending_settings = None
         self.data = data
@@ -115,7 +175,13 @@ class InteractiveSession:
         self.data_agent = None
         self.sr_agent = None
 
+    def close(self) -> None:
+        """Release temporary resources owned by the session."""
+        if not self.workspace_manager.retain:
+            self.workspace_manager.cleanup()
+
     def snapshot(self):
+        """Return a serializable snapshot of the current session."""
         with self.lock:
             topk = (
                 []
@@ -138,7 +204,11 @@ class InteractiveSession:
                     **self.controller.status()}
 
     def capabilities(self, agent: str = "search"):
-        """Describe configurable tools and user-facing skills for the Web UI."""
+        """Describe configurable tools and user-facing skills for the Web UI.
+
+        Args:
+            agent: The agent value.
+        """
         if agent not in {"search", "data"}:
             raise ValueError(f"Unsupported agent capability scope: {agent}")
         excluded_tools = {"code_executor"}
@@ -156,14 +226,33 @@ class InteractiveSession:
             {"name": skill.name, "description": skill.description}
             for skill in self._capability_skill_manager.load_skills().values()
         ]
-        defaults = (
+        default_tools = (
             list(DataPreparationAgent.DEFAULT_TOOLS)
             if agent == "data"
             else None
         )
-        return {"tools": tools, "skills": skills, "default_tools": defaults}
+        default_skills = (
+            [
+                skill["name"] for skill in skills
+                if skill["name"] not in DataPreparationAgent.DEFAULT_EXCLUDED_SKILLS
+            ]
+            if agent == "data"
+            else None
+        )
+        return {
+            "tools": tools,
+            "skills": skills,
+            "default_tools": default_tools,
+            "default_skills": default_skills,
+        }
 
     def validate_capabilities(self, settings, agent: str = "search"):
+        """Validate capabilities.
+
+        Args:
+            settings: Runtime settings to validate or apply.
+            agent: The agent value.
+        """
         catalog = self.capabilities(agent)
         for key, catalog_key in (("tools", "tools"), ("skills", "skills")):
             if key not in settings:
@@ -175,7 +264,11 @@ class InteractiveSession:
             raise ValueError("The data-preparation agent requires the commit_data tool")
 
     def provider_credential(self, provider: str):
-        """Report credential availability without exposing the secret value."""
+        """Report credential availability without exposing the secret value.
+
+        Args:
+            provider: The provider value.
+        """
         provider = str(provider).strip().lower()
         try:
             variable = PROVIDER_API_KEY_VARIABLES[provider]
@@ -191,7 +284,12 @@ class InteractiveSession:
         }
 
     def set_provider_credential(self, provider: str, api_key: str):
-        """Atomically update the project dotenv file and this server process."""
+        """Atomically update the project dotenv file and this server process.
+
+        Args:
+            provider: The provider value.
+            api_key: The api key value.
+        """
         status = self.provider_credential(provider)
         if not isinstance(api_key, str) or not api_key.strip():
             raise ValueError("api_key must be a non-empty string")
@@ -211,8 +309,84 @@ class InteractiveSession:
             os.environ[status["env_var"]] = api_key
         return self.provider_credential(provider)
 
+    def set_proxy(self, proxy: str) -> None:
+        """Persist the optional model proxy and update this server process.
+
+        Args:
+            proxy: Proxy URL, or an empty string to clear the configured proxy.
+        """
+        proxy = self.validate_proxy(proxy)
+        previous = str(self.data_agent_settings.get("proxy", ""))
+        self.env_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.env_path.exists():
+            self.env_path.touch(mode=0o600)
+        if proxy:
+            set_key(self.env_path, "MY_PROXY", proxy, quote_mode="always")
+            os.environ["MY_PROXY"] = proxy
+            for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+                os.environ[name] = proxy
+        else:
+            unset_key(self.env_path, "MY_PROXY")
+            os.environ.pop("MY_PROXY", None)
+            os.environ.pop("my_proxy", None)
+            for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+                if previous and os.environ.get(name) == previous:
+                    os.environ.pop(name, None)
+
+    @staticmethod
+    def validate_proxy(proxy: str) -> str:
+        """Validate and normalize an optional HTTP or SOCKS proxy URL.
+
+        Args:
+            proxy: Proxy URL supplied by the Web UI.
+
+        Returns:
+            The stripped URL, or an empty string when proxying is disabled.
+        """
+        if not isinstance(proxy, str):
+            raise ValueError("proxy must be a string")
+        proxy = proxy.strip()
+        if not proxy:
+            return ""
+        if len(proxy) > 4096 or any(character in proxy for character in "\r\n\0"):
+            raise ValueError("proxy contains unsupported characters")
+        parsed = urlparse(proxy)
+        if parsed.scheme not in {"http", "https", "socks5", "socks5h"} or not parsed.netloc:
+            raise ValueError("proxy must be an HTTP, HTTPS, SOCKS5, or SOCKS5H URL")
+        return proxy
+
+    @contextmanager
+    def temporary_proxy(self, proxy: str):
+        """Temporarily expose a proxy to provider clients during a model test."""
+        names = ("MY_PROXY", "my_proxy", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY")
+        previous = {name: os.environ.get(name) for name in names}
+        try:
+            if proxy:
+                os.environ["MY_PROXY"] = proxy
+                for name in names[2:]:
+                    os.environ[name] = proxy
+            else:
+                os.environ.pop("MY_PROXY", None)
+                os.environ.pop("my_proxy", None)
+                configured = str(self.data_agent_settings.get("proxy", ""))
+                for name in names[2:]:
+                    if configured and os.environ.get(name) == configured:
+                        os.environ.pop(name, None)
+            yield
+        finally:
+            for name, value in previous.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
     @staticmethod
     def validate_setting_dependencies(settings):
+        """Validate setting dependencies.
+
+        Args:
+            settings: Runtime settings to validate or apply.
+        """
         if not settings.get("force_initial_diagnostics"):
             return
         tools = settings.get("tools")
@@ -229,10 +403,15 @@ class InteractiveSession:
             )
 
     def start(self, payload):
+        """Run the ``start`` operation.
+
+        Args:
+            payload: Serializable event payload.
+        """
         with self.lock:
             if self.state != "idle":
                 raise ValueError("This server already owns a run. Restart it to begin a new task.")
-            if self.data_state == "running":
+            if self.data_state in {"running", "stopping"}:
                 raise ValueError("Wait for the data-preparation agent to finish before starting")
             options = self.validate_settings(payload, initial=True)
             self.validate_capabilities(options)
@@ -282,18 +461,10 @@ class InteractiveSession:
                     raise ValueError("Selected columns must contain finite values without missing data")
                 X = {column: frame[column].to_numpy(dtype=float) for column in features}
                 y = {target: frame[target].to_numpy(dtype=float)}
-            elif self.context.data and self.context.target and self.context.features:
+            elif self.context.data:
                 target = str(payload.get("target") or self.context.target)
                 features = payload.get("features") or self.context.features
-                if (
-                    not isinstance(features, list)
-                    or not features
-                    or target in features
-                    or any(name not in self.context.data for name in [target, *features])
-                ):
-                    raise ValueError("Select an existing target and at least one distinct feature")
-                X = {name: self.context.data[name] for name in features}
-                y = {target: self.context.data[target]}
+                X, y = self._select_context_columns(target, features)
                 self.context.variable_descriptions = self.variable_descriptions.copy()
             else:
                 rng = np.random.default_rng(42)
@@ -307,9 +478,13 @@ class InteractiveSession:
         return self.snapshot()
 
     def prepare_data(self, instruction: str):
-        """Continue the persistent data-agent conversation in the background."""
+        """Continue the persistent data-agent conversation in the background.
+
+        Args:
+            instruction: Natural-language instruction for the agent.
+        """
         with self.lock:
-            if self.data_state == "running":
+            if self.data_state in {"running", "stopping"}:
                 raise ValueError("The data-preparation agent is already running")
             if self.state == "starting":
                 raise ValueError("Wait for symbolic regression to reach a controllable boundary")
@@ -331,7 +506,6 @@ class InteractiveSession:
                     tools=settings["tools"],
                     tool_parser=settings["tool_parser"],
                     llm_max_tokens=settings["llm_max_tokens"],
-                    max_turns=settings["max_turns"],
                     skills=settings["skills"],
                     interaction_manager=manager,
                 )
@@ -340,10 +514,10 @@ class InteractiveSession:
                 self.data_agent.llm_model = settings["llm_model"]
                 self.data_agent.tool_parser = settings["tool_parser"]
                 self.data_agent.llm_max_tokens = settings["llm_max_tokens"]
-                self.data_agent.max_turns = settings["max_turns"]
                 self.data_agent.skills = settings["skills"]
                 self.data_agent.tool_cls_list = BaseTool.load_tool_classes(settings["tools"])
                 self.data_agent.initialize_tools(self.context)
+            self.data_agent.reset_stop()
             self.data_state = "running"
             self.data_result = None
             self.data_thread = threading.Thread(
@@ -354,10 +528,31 @@ class InteractiveSession:
             self.data_thread.start()
         return self.snapshot()
 
+    def stop_data_preparation(self):
+        """Request cancellation of the active data-preparation turn.
+
+        Returns:
+            Updated session state showing that cancellation is pending.
+        """
+        with self.lock:
+            if self.data_state != "running" or self.data_agent is None:
+                raise ValueError("The data-preparation agent is not running")
+            self.data_state = "stopping"
+            self.data_agent.request_stop()
+        return self.snapshot()
+
     def _prepare_data(self, instruction: str) -> None:
         try:
             result = self.data_agent.run(instruction)
             state = "completed"
+        except InterruptedError as exc:
+            result = {
+                "status": "stopped",
+                "message": str(exc),
+                "context": self.context.schema(),
+            }
+            state = "stopped"
+            self.controller.publish("data_complete", result)
         except Exception as exc:
             result = {"error": str(exc), "context": self.context.schema()}
             state = "failed"
@@ -367,6 +562,11 @@ class InteractiveSession:
             self.data_state = state
 
     def preview_initial_prompts(self, payload):
+        """Run the ``preview initial prompts`` operation.
+
+        Args:
+            payload: Serializable event payload.
+        """
         description = str(payload.get(
             "problem_description",
             self.initial_prompt or "Find an interpretable formula explaining the selected target from the selected features.",
@@ -403,9 +603,10 @@ class InteractiveSession:
                 raise ValueError("Select a target and at least one existing feature")
             X = {str(column): np.empty(1) for column in features}
             y = {target: np.empty(1)}
-        elif self.context.data and self.context.target and self.context.features:
-            X = {name: self.context.data[name] for name in self.context.features}
-            y = {self.context.target: self.context.data[self.context.target]}
+        elif self.context.data:
+            target = str(payload.get("target") or self.context.target or "")
+            features = payload.get("features") or self.context.features
+            X, y = self._select_context_columns(target, features)
         else:
             X, y = {"x": np.empty(1)}, {"y": np.empty(1)}
         settings = self.settings
@@ -434,8 +635,54 @@ class InteractiveSession:
             "user_prompt": next(message["content"] for message in messages if message["role"] == "user"),
         }
 
+    def _select_context_columns(
+        self,
+        target: str,
+        features: Any,
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        if (
+            not target
+            or not isinstance(features, list)
+            or not features
+            or target in features
+        ):
+            raise ValueError("Select a target and at least one distinct feature")
+
+        def array(name: str) -> np.ndarray | None:
+            if name in self.context.data:
+                return self.context.data[name]
+            axis = self.context.axes.get(name)
+            return None if axis is None else axis.values
+
+        selected = {name: array(name) for name in [*features, target]}
+        missing = [name for name, value in selected.items() if value is None]
+        if missing:
+            raise ValueError(f"Selected variables or axes do not exist: {missing}")
+        arrays = {name: np.asarray(value) for name, value in selected.items()}
+        if any(value.ndim != 1 for value in arrays.values()):
+            raise ValueError("Selected variables and axes must be one-dimensional")
+        if len({len(value) for value in arrays.values()}) != 1:
+            raise ValueError("Selected variables and axes must have the same length")
+        try:
+            numeric = {
+                name: value.astype(float, copy=False) for name, value in arrays.items()
+            }
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Selected target and features must be numeric") from exc
+        if any(not np.isfinite(value).all() for value in numeric.values()):
+            raise ValueError("Selected target and features must contain finite values")
+        return (
+            {name: numeric[name] for name in features},
+            {target: numeric[target]},
+        )
+
     @staticmethod
     def validate_variable_descriptions(payload):
+        """Validate variable descriptions.
+
+        Args:
+            payload: Serializable event payload.
+        """
         descriptions = payload.get("variable_descriptions", {})
         if not isinstance(descriptions, dict) or any(
             not isinstance(name, str) or not isinstance(value, str)
@@ -449,19 +696,68 @@ class InteractiveSession:
         }
 
     def create_demo(self):
+        """Create and load a manifest-backed sample dataset.
+
+        Returns:
+            Path to the newly created ``context.data`` directory.
+
+        Raises:
+            FileExistsError: If ``context.data`` already exists and is not empty.
+        """
         with self.lock:
-            path = self.workspace / "demo.csv"
-            if not path.exists():
+            path = self.workspace / "context.data"
+            if path.exists() or path.is_symlink():
+                if path.is_symlink() or not path.is_dir() or any(path.iterdir()):
+                    raise FileExistsError("context.data already exists and is not empty")
+                path.rmdir()
+            staging = Path(tempfile.mkdtemp(prefix=".context-data-", dir=self.workspace))
+            try:
                 rng = np.random.default_rng(42)
                 x1 = rng.uniform(-2, 2, 100)
                 x2 = rng.uniform(-1, 3, 100)
                 x3 = np.tile(["alpha", "beta", "gamma", "delta"], 25)
                 rng.shuffle(x3)
                 y = x1*x1 + 2*x2 + 1
-                with path.open("w", newline="") as stream:
-                    writer = csv.writer(stream)
-                    writer.writerow(["x1", "x2", "x3", "y"])
-                    writer.writerows(zip(x1, x2, x3, y))
+                for name, value in {"x1": x1, "x2": x2, "x3": x3, "y": y}.items():
+                    np.save(staging / f"{name}.npy", value)
+                manifest = {
+                    "variables": {
+                        "x1": {
+                            "file": "x1.npy",
+                            "description": "First numeric input sampled uniformly from -2 to 2.",
+                            "axes": ["sample"],
+                        },
+                        "x2": {
+                            "file": "x2.npy",
+                            "description": "Second numeric input sampled uniformly from -1 to 3.",
+                            "axes": ["sample"],
+                        },
+                        "x3": {
+                            "file": "x3.npy",
+                            "description": "Categorical label with four string values.",
+                            "axes": ["sample"],
+                        },
+                        "y": {
+                            "file": "y.npy",
+                            "description": "Synthetic target defined as x1 squared plus 2 times x2 plus 1.",
+                            "axes": ["sample"],
+                        },
+                    },
+                    "axes": {
+                        "sample": {
+                            "size": 100,
+                            "description": "Sample index.",
+                        },
+                    },
+                }
+                (staging / "manifest.json").write_text(
+                    json.dumps(manifest, indent=2), encoding="utf-8",
+                )
+                ContextDataStore(staging).load()
+                staging.replace(path)
+                self.context.commit_context_data(ContextDataStore(path).load())
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
             return path
 
     def _run(self, X, y, description):
@@ -499,6 +795,12 @@ class InteractiveSession:
 
     @staticmethod
     def validate_settings(payload, initial=False):
+        """Validate settings.
+
+        Args:
+            payload: Serializable event payload.
+            initial: Optional initial parameter values.
+        """
         allowed = set(RUNTIME_SETTING_NAMES)
         bounded_integers = {
             "max_refinement_depth", "local_sample_size", "global_width",
@@ -551,10 +853,15 @@ class InteractiveSession:
 
     @staticmethod
     def validate_data_agent_settings(payload):
+        """Validate data agent settings.
+
+        Args:
+            payload: Serializable event payload.
+        """
         result = {key: value for key, value in payload.items() if key in DATA_AGENT_SETTING_NAMES}
         for key, value in result.items():
-            if key in {"llm_max_tokens", "max_turns"}:
-                upper = 1_000_000 if key == "llm_max_tokens" else 1000
+            if key == "llm_max_tokens":
+                upper = 1_000_000
                 if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= upper:
                     raise ValueError(f"{key} must be an integer between 1 and {upper}")
             elif key in {"tools", "skills"}:
@@ -564,6 +871,8 @@ class InteractiveSession:
                     or len(value) != len(set(value))
                 ):
                     raise ValueError(f"{key} must be a list of unique non-empty names")
+            elif key == "proxy":
+                result[key] = InteractiveSession.validate_proxy(value)
             elif not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{key} must be non-empty")
         if "llm_provider" in result and result["llm_provider"] not in PROVIDER_API_KEY_VARIABLES:
@@ -575,13 +884,76 @@ class InteractiveSession:
         return result
 
     def configure_data_agent(self, payload):
+        """Run the ``configure data agent`` operation.
+
+        Args:
+            payload: Serializable event payload.
+        """
         with self.lock:
             settings = self.validate_data_agent_settings(payload)
             self.validate_capabilities(settings, agent="data")
+            if "proxy" in settings:
+                self.set_proxy(settings["proxy"])
             self.data_agent_settings = {**self.data_agent_settings, **settings}
         return self.snapshot()
 
+    def test_data_agent_model(self, payload):
+        """Test plain completion and tool-call support without changing agent history.
+
+        Args:
+            payload: Data-agent settings currently entered in the Web UI.
+
+        Returns:
+            Connectivity and parsed tool-call diagnostics.
+        """
+        updates = self.validate_data_agent_settings(payload)
+        self.validate_capabilities(updates, agent="data")
+        settings = {**self.data_agent_settings, **updates}
+        probe_tool = _ModelTestTool(context=self.context)
+        with self.model_test_lock, self.temporary_proxy(settings.get("proxy", "")):
+            api = BaseAPI.create(
+                settings["llm_provider"],
+                model=settings["llm_model"],
+                tool_list=[probe_tool],
+                tool_parser_name=settings["tool_parser"],
+            )
+            plain_rows = list(api(
+                "Reply with exactly SRHARNESS_OK.",
+                n=1,
+                max_tokens=min(settings["llm_max_tokens"], 64),
+            ))
+            tool_rows = list(api(
+                "Call report_model_test with answer set to SRHARNESS_TOOL_OK. "
+                "Use the tool instead of answering in plain text.",
+                n=1,
+                max_tokens=min(settings["llm_max_tokens"], 128),
+            ))
+        plain_response = plain_rows[0][0] if plain_rows else ""
+        calls = [call for _, row_calls, _ in tool_rows for call in (row_calls or [])]
+        expected_call = next(
+            (
+                call for call in calls
+                if call.name == "report_model_test"
+                and call.params.get("answer") == "SRHARNESS_TOOL_OK"
+            ),
+            None,
+        )
+        accessible = bool(plain_rows)
+        tool_call_supported = expected_call is not None
+        return {
+            "ok": accessible and tool_call_supported,
+            "accessible": accessible,
+            "plain_response": plain_response,
+            "tool_call_supported": tool_call_supported,
+            "called_tools": [call.name for call in calls],
+        }
+
     def configure(self, payload):
+        """Run the ``configure`` operation.
+
+        Args:
+            payload: Serializable event payload.
+        """
         with self.lock:
             if self.state not in {"idle", "starting", "running"}:
                 raise ValueError("Run has finished")
@@ -599,9 +971,17 @@ class InteractiveSession:
                 self.pending_settings = pending
         return self.snapshot()
 
-    def resolve(self, path):
-        root = self.workspace.resolve()
-        candidate = (root / path).resolve()
-        if Path(path).is_absolute() or not candidate.is_relative_to(root):
+    def resolve(self, path, *, write: bool = False):
+        """Resolve .
+
+        Args:
+            path: Filesystem path.
+            write: Whether the caller intends to modify the path.
+
+        Returns:
+            The resolved readable or writable path.
+        """
+        candidate = self.workspace_manager.resolve(str(path), write=write)
+        if candidate is None:
             raise ValueError("Path must stay inside the workspace")
         return candidate

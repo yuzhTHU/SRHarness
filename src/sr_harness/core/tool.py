@@ -44,6 +44,15 @@ class ToolCallResult:
     meta_data: Dict[str, Any]
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Run the ``get`` operation.
+
+        Args:
+            key: The key value.
+            default: Fallback value.
+
+        Returns:
+            Any: The operation result.
+        """
         return self.result.get(key, default)
 
     def __getitem__(self, key: str) -> Any:

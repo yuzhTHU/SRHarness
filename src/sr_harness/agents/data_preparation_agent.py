@@ -2,6 +2,7 @@
 """Persistent tool-using agent for preparing structured research data."""
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from copy import deepcopy
@@ -10,6 +11,7 @@ from typing import Any
 from ..core import AgentContext
 from ..interaction import InteractionManager
 from ..parser import BaseParser
+from ..skills import SkillManager
 from ..tools import BaseTool
 from ..utils import ParallelTimer
 from .agent import Agent
@@ -26,7 +28,9 @@ class DataPreparationAgent(Agent):
         "read_pdf",
         "read_skill",
         "commit_data",
+        "load_context_data",
     ]
+    DEFAULT_EXCLUDED_SKILLS = frozenset({"discover-symbolic-laws"})
 
     def __init__(
         self,
@@ -37,7 +41,6 @@ class DataPreparationAgent(Agent):
         tools: list[str] | None = None,
         tool_parser: str | BaseParser = "openai",
         llm_max_tokens: int = 4096,
-        max_turns: int = 12,
         skills: list[str] | None = None,
         interaction_manager: InteractionManager | None = None,
     ):
@@ -45,8 +48,17 @@ class DataPreparationAgent(Agent):
         self.llm_model = llm_model
         self.tool_parser = tool_parser
         self.llm_max_tokens = llm_max_tokens
-        self.max_turns = max_turns
-        self.skills = skills
+        self.turn_count = 0
+        skill_manager = context.get("skill_manager") or SkillManager()
+        context["skill_manager"] = skill_manager
+        self.skills = (
+            list(skills)
+            if skills is not None
+            else [
+                name for name in skill_manager.load_skills()
+                if name not in self.DEFAULT_EXCLUDED_SKILLS
+            ]
+        )
         self.interaction_manager = interaction_manager or InteractionManager()
         self.tool_cls_list = BaseTool.load_tool_classes(tools or self.DEFAULT_TOOLS)
         self.tools_counter = ParallelTimer(unit="call")
@@ -54,29 +66,67 @@ class DataPreparationAgent(Agent):
         self.parser = None
         self.api = None
         self.context = context
+        self._stop_requested = threading.Event()
         self.buffer: list[dict[str, Any]] = [{
             "role": "system",
             "content": (
                 "You are the data-preparation agent in SRHarness. Work with the user's persistent "
-                "workspace and conversation to create a clean table for symbolic regression. Inspect "
-                "uploaded files, including PDF documents when relevant. Preserve useful identifiers "
-                "such as year while cleaning and joining "
-                "sources, and use web_search plus web_fetch when external evidence is requested. Use "
-                "workspace_code_executor for reproducible transformations and save the resulting table. "
-                "Call commit_data only when the target and selected features are numeric, finite, aligned, "
-                "and ready. Explain material assumptions and sources. A later user request may extend the "
-                "existing dataset, so retain and use this conversation and all workspace artifacts."
+                "workspace and conversation to create structured scientific data. Inspect uploaded files, "
+                "including PDF documents when relevant, and use web_search plus web_fetch when external "
+                "evidence is requested. If web_fetch reports that a site blocked automated access, do not "
+                "retry the same URL; use web_search to locate an accessible authoritative alternative. Use "
+                "workspace_code_executor for reproducible transformations.\n\n"
+                "Store general structured results in the flat workspace directory context.data/. Put each "
+                "variable and each file-backed axis in <name>.npy, using NumPy arrays "
+                "that load with allow_pickle=False. The directory must contain manifest.json with exactly "
+                "two top-level objects: variables and axes. Each variable entry must contain exactly file, "
+                "description, and axes; its file must be <variable>.npy and its axes list must follow array "
+                "dimension order. Each axis entry must contain description and exactly one of: values for a "
+                "short inline JSON array, file for <axis>.npy, or size for a positive positional length. "
+                "Do not add format, version, revision, problem, attributes, shape, or dtype fields. Describe "
+                "units and other meaning in description. Preserve existing variable files unless the user "
+                "asks to replace them. NPY variables may contain numeric, Boolean, or string values. Preserve "
+                "categorical and textual variables as Unicode string arrays rather than object arrays, unless "
+                "the user explicitly requests an encoding such as one-hot encoding. Call load_context_data "
+                "after writing or editing the collection; use "
+                "all reported errors to repair the manifest before claiming completion. commit_data remains "
+                "available for a simple finite numeric CSV/Excel table.\n\n"
+                "Explain material assumptions and sources. A later request may extend the existing data, so "
+                "retain and use this conversation and all workspace artifacts."
             ),
         }]
         self.initialize_tools(context)
 
+    def reset_stop(self) -> None:
+        """Clear a previous stop request before starting another user turn."""
+        self._stop_requested.clear()
+
+    def request_stop(self) -> None:
+        """Request cooperative cancellation at the next safe boundary."""
+        self._stop_requested.set()
+
+    def _check_stop(self) -> None:
+        if self._stop_requested.is_set():
+            raise InterruptedError("Data preparation was stopped by the user")
+
     def initialize_tools(self, context: AgentContext) -> None:
-        """Bind configured skills before constructing context-aware tools."""
+        """Bind configured skills before constructing context-aware tools.
+
+        Args:
+            context: Shared agent and tool context.
+        """
         context["enabled_skills"] = self.skills
         super().initialize_tools(context)
 
     def run(self, instruction: str) -> dict[str, Any]:
-        """Continue the persistent preparation conversation until it yields control."""
+        """Continue the persistent preparation conversation until it yields control.
+
+        Args:
+            instruction: Natural-language instruction for the agent.
+
+        Returns:
+            dict[str, Any]: The operation result.
+        """
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("instruction must not be empty")
@@ -89,7 +139,10 @@ class DataPreparationAgent(Agent):
         self._publish("data_user", {"content": instruction})
         committed = False
         final_content = ""
-        for turn in range(1, self.max_turns + 1):
+        while True:
+            self._check_stop()
+            self.turn_count += 1
+            turn = self.turn_count
             prompt = deepcopy(self.buffer)
             self.set_messages(prompt)
             self._publish("data_context", {"messages": prompt, "turn": turn})
@@ -112,6 +165,7 @@ class DataPreparationAgent(Agent):
 
             def stream_callback(update: dict[str, Any]) -> None:
                 nonlocal last_stream_emit
+                self._check_stop()
                 now = time.monotonic()
                 if update.get("type") == "delta" and now - last_stream_emit < 0.08:
                     return
@@ -133,6 +187,9 @@ class DataPreparationAgent(Agent):
                     stream_callback=stream_callback,
                 )
                 responses = list(call_result)
+                self._check_stop()
+            except InterruptedError:
+                raise
             except Exception as exc:
                 self._publish("data_assistant_error", {
                     "response_id": response_id,
@@ -165,11 +222,6 @@ class DataPreparationAgent(Agent):
             self.buffer.append(message)
             self.buffer.extend(self.parser.format_tool_result_messages(calls, results))
             committed = committed or any(result.result.get("data_committed") for result in results)
-        else:
-            final_content = (
-                final_content
-                or f"Stopped after the configured {self.max_turns} preparation turns."
-            )
         result = {
             "message": final_content,
             "committed": committed,
@@ -181,6 +233,7 @@ class DataPreparationAgent(Agent):
     def _execute_with_events(self, calls):
         results = []
         for call in calls:
+            self._check_stop()
             schema = next((
                 {
                     "description": tool.metadata.description,
@@ -197,6 +250,7 @@ class DataPreparationAgent(Agent):
                 "result": result,
             })
             results.append(result)
+            self._check_stop()
         return results
 
     def _publish(self, kind: str, payload: Any) -> None:

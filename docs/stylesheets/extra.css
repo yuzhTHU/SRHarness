@@ -1,0 +1,6 @@
+.md-grid { max-width: 92rem; }
+.md-content__inner { padding-bottom: 5rem; }
+.md-footer__link { display: none; }
+.md-typeset h2 { margin-top: 2.8em; }
+.md-typeset h3 { margin-top: 2em; }
+.md-typeset img { border: 1px solid var(--md-default-fg-color--lightest); border-radius: .5rem; }

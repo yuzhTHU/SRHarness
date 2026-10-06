@@ -29,7 +29,7 @@ and one or more SandboxFusion ``/run_code`` endpoints must be available.
 ## 测试 SandBox
 # curl 'http://127.0.0.1:8080/run_code' -H 'Content-Type: application/json' --data-raw '{"code": "print(\"Hello, world!\")", "language": "python"}'
 
-## 启动多个 SandBox 并传给 sr-harness bench
+## 启动多个 SandBox 并传给 sr-harness benchmark
 # cd ./third-party/SandboxFusion
 # conda activate sandbox-runtime
 # make run-online HOST=127.0.0.1 PORT=9010 &
@@ -37,7 +37,7 @@ and one or more SandboxFusion ``/run_code`` endpoints must be available.
 # make run-online HOST=127.0.0.1 PORT=9070 &
 # make run-online HOST=127.0.0.1 PORT=9080 &
 # cd ../../
-# sr-harness bench \
+# sr-harness benchmark \
 # --algorithm sr_scientist \
 # --datasets lsrtransform \
 # --llm_provider openrouter \

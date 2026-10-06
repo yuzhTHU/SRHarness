@@ -1,5 +1,7 @@
 # 工具开发指南
 
+> 完整的 SRHarness 使用文档和 API Reference：[`docs/index.md`](../../../docs/index.md)
+
 本目录包含可供 `SRAgent` 调用的工具。新工具需继承 `BaseTool`，注册一个稳定的工具名，并实现 `execute()` 方法和可选的 `format_result_dict()` 类方法。
 
 ## 最小示例
@@ -140,34 +142,16 @@ LLM 会选择一种类型：
 `tool.py`，但不会修改目录中的其他文件，也不能覆盖只读 skill。自定义 `tool.py`
 不得写 `@BaseTool.register(...)`，加载器会根据 `metadata.name` 注册工具。
 
-## TODO：统一评估数据划分模式
+## 自定义评估器与数据划分
 
-需要评估拟合结果的工具后续应共享一个统一接口，但本轮暂不实现，以避免同时改变所有工具的契约。计划支持：
+SRHarness 提供公开的 `sr_harness.Evaluator` 抽象接口。用户可以实现 `fit()` 与
+`evaluate()`，再通过 `SRAgent(evaluator=...)` 注入自己的参数优化、数值积分或评价协议。
+评估器只接收公式字符串、普通数据字典、目标和参数字典，不依赖 Agent、Web UI 或搜索状态。
+它适合 ODE 轨迹积分、网络动力学和其它不能用逐点回归评价的任务。
 
-- `train_equals_test`：在全部可见样本上拟合并评估，保持当前行为和向后兼容。
-- `k_fold`：默认 5 折；每折只用训练折拟合，在测试折评价，最后在全量数据上重拟合用于输出公式。
-- `out_of_domain`：按照指定变量、表达式或预定义 domain 标签切分；训练区间不得包含测试 domain。
+内置公式工具仍通过 `BaseTool.evaluate()` 复用统一的 train/validation 指标与残差诊断。
+`SRAgent` 的 `validation_fraction`、`split_by` 和 `split_random_state` 决定 Agent 可见数据内部的
+训练/验证划分；该划分不得接触 Benchmark 的隐藏测试集。自定义评估器可读取相同的
+`AgentContext` 数据，但应在自己的实现中清楚区分拟合数据、选择指标与最终报告指标。
 
-建议实现为独立的共享组件，而不是让每个工具重复写切分代码：
-
-```python
-EvaluationConfig(
-    mode="train_equals_test" | "k_fold" | "out_of_domain",
-    n_splits=5,
-    shuffle=True,
-    random_seed=0,
-    domain_expression=None,
-    domain_test_range=None,
-)
-```
-
-实施时应完成以下工作：
-
-1. 在 `BaseTool` 附近增加只负责生成索引的 splitter；它不得接触或泄漏隐藏 benchmark test set。
-2. 为拟合工具定义 `fit(train_indices)` 与 `predict(test_indices)` 的内部协议，并统一聚合每折指标、均值、标准差和最差折。
-3. 明确区分 `selection_metrics`、交叉验证指标和全量重拟合后的 `refit_metrics`，避免用测试折选择常数后再次报告同一测试折。
-4. OOD 模式要求显式提供 domain 变量/表达式及边界；支持低端、高端和区间外测试，并汇报训练、测试范围与有限覆盖率。
-5. 保持 `is_candidate` 只对应最终全量重拟合公式；交叉验证中的临时公式不进入 top-k。
-6. 先迁移 `polynomial_fit`、`power_law_fit`、`rational_fit`、`constant_fit`，再迁移 SINDy/PySR；为旧调用保留默认模式。
-
-注意：这里的 “test” 是从 Agent 可见训练数据内部划分出的验证折，不得读取基准测试集或 OOD 隐藏答案。统一接口落地前，各工具现有的内部 holdout 参数仍保持局部实现。
+完整示例见 [`docs/index.md` 的“自定义评估协议”](../../../docs/index.md)。

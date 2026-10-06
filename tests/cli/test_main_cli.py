@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from sr_harness.cli import entrypoint, main, setup_parser
+from sr_harness.cli.run import _resolve_workspace_path
+from sr_harness.cli.synthetic import build_agent_options
 
 
 def test_main_help_lists_subcommands(capsys, monkeypatch):
@@ -13,7 +15,10 @@ def test_main_help_lists_subcommands(capsys, monkeypatch):
     output = capsys.readouterr().out
     assert "SRHarness command-line interface" in output
     assert "run" in output
-    assert "bench" in output
+    assert "synthetic" in output
+    assert "benchmark" in output
+    assert "download-models" not in output
+    assert "upload-models" not in output
 
 
 def test_bare_command_prints_help(capsys, monkeypatch):
@@ -21,8 +26,9 @@ def test_bare_command_prints_help(capsys, monkeypatch):
     assert entrypoint() == 0
     output = capsys.readouterr().out
     assert "SRHarness command-line interface" in output
-    assert "run              Run SRAgent" in output
-    assert "bench            Evaluate an algorithm" in output
+    assert "run        Launch the SRHarness interactive workbench" in output
+    assert "synthetic  Run SRHarness on a synthetic symbolic-regression problem" in output
+    assert "benchmark  Evaluate SRHarness and baseline algorithms on LLM-SRBench" in output
 
 
 def test_run_help_is_delegated(capsys, monkeypatch):
@@ -34,6 +40,93 @@ def test_run_help_is_delegated(capsys, monkeypatch):
     assert "usage: sr-harness run" in output
     assert "--web" not in output
     assert "--anonymize" not in output
+    assert "--workspace" in output
+    assert "--mount" in output
+    assert "--reload" not in output
+    assert "--no-browser" not in output
+    assert "--llm-provider" not in output
+    assert "--llm-model" not in output
+
+
+def test_synthetic_help_is_delegated(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["sr-harness", "synthetic", "--help"])
+    with pytest.raises(SystemExit) as exc_info:
+        entrypoint()
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "usage: sr-harness synthetic" in output
+    assert "--equation" in output
+
+
+def test_synthetic_defaults(monkeypatch):
+    argv = ["sr-harness", "synthetic"]
+    monkeypatch.setattr("sys.argv", argv)
+    args = setup_parser().parse_args(argv[1:])
+    assert args.local_sample_size == 1
+    assert args.max_refinement_depth == 30
+    assert args.global_width == 1
+    assert args.max_restart_loop == 1
+    assert args.split_by == "random"
+    assert args.force_initial_diagnostics is True
+    assert args.ban_tools == []
+    assert args.llm_max_tokens == 4096
+    assert args.verbose is False
+    assert args.debug is True
+
+
+def test_synthetic_banned_tools_override_selected_tools(monkeypatch):
+    argv = [
+        "sr-harness",
+        "synthetic",
+        "--tools",
+        "evaluate_formula",
+        "workspace_shell",
+        "--ban-tools",
+        "workspace_shell",
+        "--llm-max-tokens",
+        "2048",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    args = setup_parser().parse_args(argv[1:])
+    options = build_agent_options(args)
+    assert options["tools"] == ["evaluate_formula"]
+    assert options["llm_max_tokens"] == 2048
+
+
+def test_workspace_warnings_for_existing_files_and_mounts(tmp_path, capsys):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "existing.txt").write_text("data")
+
+    assert _resolve_workspace_path(str(workspace), ["input.csv"]) == workspace
+    warning = capsys.readouterr().err
+    assert "existing files may be modified or deleted by AI-operated tools" in warning
+    assert "read-only mount points will be created" in warning
+
+
+def test_benchmark_requires_algorithm(capsys, monkeypatch):
+    monkeypatch.setattr("sys.argv", ["sr-harness", "benchmark"])
+    with pytest.raises(SystemExit) as exc_info:
+        entrypoint()
+    assert exc_info.value.code == 2
+    assert "the following arguments are required: --algorithm" in capsys.readouterr().err
+
+
+def test_benchmark_boolean_optional_flags(monkeypatch):
+    argv = [
+        "sr-harness",
+        "benchmark",
+        "--algorithm",
+        "linear",
+        "--verbose",
+        "--no-skip-successful",
+        "--anonymize",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    args = setup_parser().parse_args(argv[1:])
+    assert args.verbose is True
+    assert args.skip_successful is False
+    assert args.anonymize is True
 
 
 def test_main_dispatches_parsed_namespace():

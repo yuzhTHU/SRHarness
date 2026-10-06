@@ -15,15 +15,36 @@ _logger = getLogger(f'sr_harness.{__name__}')
 
 @BaseParser.register('openai')
 class OpenAIParser(BaseParser):
-    """基于 OpenAI 格式的工具调用解析器。"""
+    """Parser for native OpenAI-compatible tool calls."""
 
     def format_tools(self) -> str:
+        """Format tools.
+
+        Returns:
+            str: The operation result.
+        """
         raise ValueError("OpenAIParser.format_tools() should not be called.")
 
     def parse_response(self, response: str) -> List[ToolCall]:
+        """Parse response.
+
+        Args:
+            response: Provider response object.
+
+        Returns:
+            List[ToolCall]: The operation result.
+        """
         raise ValueError("OpenAIParser.parse_response() should not be called.")
 
     def format_tool_calls(self, tool_calls: List[ToolCall]) -> str:
+        """Format tool calls.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+
+        Returns:
+            str: The operation result.
+        """
         raise ValueError("OpenAIParser.format_tool_calls() should not be called.")
 
     def format_tool_result_messages(
@@ -31,6 +52,15 @@ class OpenAIParser(BaseParser):
         tool_calls: List[ToolCall],
         results: List[ToolCallResult | None],
     ) -> List[Dict[str, Any]]:
+        """Format tool result messages.
+
+        Args:
+            tool_calls: Tool calls returned by the model.
+            results: Result records to process.
+
+        Returns:
+            List[Dict[str, Any]]: The operation result.
+        """
         messages = []
         for tool_call, result in zip(tool_calls, results):
             result_str = result.result_str if isinstance(result, ToolCallResult) else str(result)

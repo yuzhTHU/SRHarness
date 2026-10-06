@@ -19,6 +19,7 @@ from .base_tool import BaseTool, ToolMetadata
 # 这个工具太狭隘了，用处不大
 # @BaseTool.register("harmonic_interaction_fit")
 class HarmonicInteractionFitTool(BaseTool):
+    """Implementation of the harmonic interaction fit tool."""
     metadata = ToolMetadata(name="harmonic_interaction_fit")
 
     def execute(
@@ -138,6 +139,14 @@ class HarmonicInteractionFitTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         text = cls.format_evaluation_result(result, title="Fitted harmonic interaction")
         config = result["fit_configuration"]
         return text + (

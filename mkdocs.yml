@@ -1,0 +1,35 @@
+site_name: SRHarness Documentation
+site_description: Long-form documentation for SRHarness and SRHarness-Engine
+repo_url: https://github.com/yuzhTHU/MySRAgent
+repo_name: yuzhTHU/MySRAgent
+docs_dir: docs
+strict: true
+nav:
+  - SRHarness: index.md
+  - SRHarness-Engine: engine.md
+theme:
+  name: material
+  language: zh
+  features:
+    - content.code.copy
+    - navigation.top
+    - search.highlight
+    - search.suggest
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+extra_css:
+  - stylesheets/extra.css

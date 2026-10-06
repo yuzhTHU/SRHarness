@@ -9,6 +9,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("ask_human")
 class AskHumanTool(BaseTool):
+    """Implementation of the ask human tool."""
     metadata = ToolMetadata(name="ask_human")
 
     def execute(self, message: str) -> Dict[str, Any]:
@@ -30,6 +31,14 @@ class AskHumanTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         if not result["human_available"]:
             return "No human-input channel is available in this run; continue without a response or use another safe approach."
         else:

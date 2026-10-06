@@ -13,6 +13,14 @@ class TerminalInteractionManager(InteractionManager):
     _SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
     def ask_human(self, message: str) -> str:
+        """Run the ``ask human`` operation.
+
+        Args:
+            message: Message text or provider message payload.
+
+        Returns:
+            str: The operation result.
+        """
         from prompt_toolkit import prompt
         from prompt_toolkit.patch_stdout import patch_stdout
 

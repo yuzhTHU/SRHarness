@@ -12,6 +12,7 @@ from .base_tool import BaseTool, ToolMetadata
 
 @BaseTool.register("commit_data")
 class CommitDataTool(BaseTool):
+    """Implementation of the commit data tool."""
     metadata = ToolMetadata(name="commit_data")
 
     def execute(
@@ -95,6 +96,14 @@ class CommitDataTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: dict[str, Any]) -> str:
+        """Format a tool result for the language model.
+
+        Args:
+            result: Result mapping to format or update.
+
+        Returns:
+            str: The operation result.
+        """
         return (
             f"Committed revision {result['revision']}: {result['rows']} rows, "
             f"target={result['target']}, features={result['features']}."

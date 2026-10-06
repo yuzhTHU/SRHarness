@@ -14,6 +14,7 @@ from .expression import Expression, GroupedParameter, Parameter
 
 @dataclass(frozen=True, slots=True)
 class FitResult:
+    """Result of fitting an expression to target observations."""
     expression: Expression
     parameters: dict[str, Any]
     loss: float
@@ -22,6 +23,16 @@ class FitResult:
     n_iter: int
 
     def evaluate(self, values: Mapping[str, Any], *, time: Any = None, delay_resolver: Any = None):
+        """Evaluate the supplied model or expression.
+
+        Args:
+            values: Values keyed by symbol name.
+            time: Optional sample times.
+            delay_resolver: Optional callback that resolves delayed values.
+
+        Returns:
+            Predictions from the fitted expression.
+        """
         return self.expression.evaluate(
             values, parameters=self.parameters, time=time, delay_resolver=delay_resolver
         )
@@ -38,7 +49,19 @@ def fit(
     method: str = "BFGS",
     options: Mapping[str, Any] | None = None,
 ) -> FitResult:
-    """Minimize mean squared error and return fitted parameter values."""
+    """Minimize mean squared error and return fitted parameter values.
+
+    Args:
+        expression: Symbolic expression to process.
+        values: Values keyed by symbol name.
+        target: Target name or target values.
+        initial: Optional initial parameter values.
+        method: Optimization method name.
+        options: Optional optimizer settings.
+
+    Returns:
+        Fitted parameters, expression, predictions, and loss.
+    """
     initial = dict(initial or {})
     target = np.asarray(target, dtype=float)
     specs: list[tuple[str, Any | None]] = []

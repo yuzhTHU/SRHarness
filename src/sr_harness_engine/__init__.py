@@ -22,6 +22,8 @@ from .expression import (
     sour,
     targ,
 )
+from .analysis import count_parameters, fold_constants
+from .desugar import desugar
 from .optimize import FitResult, fit
 from .parser import parse
 from .render import render
@@ -55,14 +57,24 @@ inv = _unary("inv")
 
 
 def delay(value, delta):
+    """Create a delayed-value expression.
+
+    Args:
+        value: Time-dependent expression to sample from the past.
+        delta: Scalar or sample-aligned delay interval.
+
+    Returns:
+        A symbolic ``delay(value, delta)`` call.
+    """
     return function("delay", value, delta)
 
 
 __all__ = [
     "Aggregate", "Binary", "Expression", "FitResult", "Function", "GroupedParameter",
     "Index", "Indexed", "Number", "Parameter", "Reduction", "RelationLift", "Symbol",
-    "Variable", "abs", "aggr", "arccos", "arcsin", "arctan", "cos", "cosh", "cot",
-    "csc", "delay", "exp", "fit", "function", "grouped_param", "inv", "log", "log10",
+    "Variable", "abs", "aggr", "arccos", "arcsin", "arctan", "cos", "cosh",
+    "cot", "count_parameters", "csc", "delay", "desugar", "exp", "fit",
+    "fold_constants", "function", "grouped_param", "inv", "log", "log10",
     "param", "parse", "reduction", "render", "sec", "sech", "sigmoid", "sign", "sin",
     "sinh", "sour", "sqrt", "tan", "tanh", "targ",
 ]

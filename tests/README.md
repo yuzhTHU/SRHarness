@@ -1,5 +1,7 @@
 # 测试指南
 
+> 使用示例也可参见 [`tests/behavior/`](behavior/) 和 [`docs/`](../docs/index.md)。
+
 ## 运行测试
 
 ```bash

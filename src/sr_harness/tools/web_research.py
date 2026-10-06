@@ -45,6 +45,7 @@ class _DuckDuckGoParser(HTMLParser):
 
 @BaseTool.register("web_search")
 class WebSearchTool(BaseTool):
+    """Implementation of the web search tool."""
     metadata = ToolMetadata(name="web_search")
 
     def execute(self, query: str, max_results: int = 5) -> Dict[str, Any]:
@@ -98,6 +99,7 @@ class _TextParser(HTMLParser):
 
 @BaseTool.register("web_fetch")
 class WebFetchTool(BaseTool):
+    """Implementation of the web fetch tool."""
     metadata = ToolMetadata(name="web_fetch")
 
     def execute(self, url: str, max_characters: int = 30000) -> Dict[str, Any]:
@@ -108,13 +110,32 @@ class WebFetchTool(BaseTool):
             max_characters: Maximum number of extracted text characters, between 1000 and 50000.
         """
         parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             raise ValueError("url must be an absolute HTTP or HTTPS URL")
+        try:
+            literal_address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            literal_address = None
+        if literal_address is not None and not literal_address.is_global:
+            raise ValueError("url must resolve only to public network addresses")
         addresses = {
             item[4][0]
-            for item in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+            for item in socket.getaddrinfo(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
         }
-        if any(not ipaddress.ip_address(address).is_global for address in addresses):
+        public_addresses = {
+            address for address in addresses if ipaddress.ip_address(address).is_global
+        }
+        proxies = requests.utils.get_environ_proxies(url)
+        if not public_addresses or (public_addresses != addresses and not proxies):
             raise ValueError("url must resolve only to public network addresses")
         limit = max(1000, min(int(max_characters), 50000))
         response = requests.get(
@@ -126,6 +147,20 @@ class WebFetchTool(BaseTool):
         )
         if response.is_redirect:
             raise ValueError("redirects are not followed; fetch the public destination URL directly")
+        if response.status_code in {401, 403, 429}:
+            status_code = response.status_code
+            response.close()
+            return {
+                "url": url,
+                "text": "",
+                "truncated": False,
+                "blocked": True,
+                "status_code": status_code,
+                "message": (
+                    "The site blocked automated access. Do not retry this URL repeatedly; "
+                    "use web_search to find an accessible authoritative source for the same data."
+                ),
+            }
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
         if "html" not in content_type and "text" not in content_type and "json" not in content_type:

@@ -9,6 +9,13 @@ from .manager import InteractionManager
 
 
 def add_variable_descriptions(messages, descriptions, variables):
+    """Add variable descriptions.
+
+    Args:
+        messages: Conversation messages in provider-compatible order.
+        descriptions: The descriptions value.
+        variables: The variables value.
+    """
     rows = [
         f"- {name}: {descriptions[name]}"
         for name in variables
@@ -29,10 +36,20 @@ class WebInteractionManager(InteractionManager):
         self.session = session
 
     def bind_run_state(self, run_state) -> None:
+        """Bind run state.
+
+        Args:
+            run_state: The run state value.
+        """
         with self.session.lock:
             self.session.run_state = run_state
 
     def bind_workspace(self, workspace) -> None:
+        """Bind workspace.
+
+        Args:
+            workspace: The workspace value.
+        """
         workspace.retain = True
         with self.session.lock:
             if self.session.workspace != workspace.path:
@@ -41,6 +58,13 @@ class WebInteractionManager(InteractionManager):
                 self.session.workspace = workspace.path
 
     def prepare_initial_prompt(self, messages, *, X, y):
+        """Prepare initial prompt.
+
+        Args:
+            messages: Conversation messages in provider-compatible order.
+            X: Input feature arrays keyed by variable name.
+            y: Target data or target expression.
+        """
         with self.session.lock:
             overrides = self.session.prompt_overrides.copy()
             descriptions = self.session.variable_descriptions.copy()
@@ -51,26 +75,57 @@ class WebInteractionManager(InteractionManager):
         return messages
 
     def checkpoint(self) -> list[str]:
+        """Run the ``checkpoint`` operation.
+
+        Returns:
+            list[str]: The operation result.
+        """
         return self.session.controller.checkpoint()
 
     def take_search_transition(self) -> str | None:
+        """Run the ``take search transition`` operation.
+
+        Returns:
+            str | None: The operation result.
+        """
         return self.session.controller.take_search_transition()
 
     def wait_until_running(self) -> None:
+        """Run the ``wait until running`` operation."""
         self.session.controller.wait_until_running()
 
     def take_runtime_settings(self):
+        """Run the ``take runtime settings`` operation."""
         with self.session.lock:
             settings = self.session.pending_settings
             self.session.pending_settings = None
         return settings
 
     def commit_runtime_settings(self, settings) -> None:
+        """Commit runtime settings.
+
+        Args:
+            settings: Runtime settings to validate or apply.
+        """
         with self.session.lock:
             self.session.settings.update(settings)
 
     def ask_human(self, message: str) -> str:
+        """Run the ``ask human`` operation.
+
+        Args:
+            message: Message text or provider message payload.
+
+        Returns:
+            str: The operation result.
+        """
         return self.session.controller.ask(message)
 
     def publish(self, kind: str, payload) -> None:
+        """Publish .
+
+        Args:
+            kind: Event or resource kind.
+            payload: Serializable event payload.
+        """
         self.session.controller.publish(kind, json_value(payload))
