@@ -47,9 +47,9 @@ def test_pareto_front_retains_accuracy_complexity_tradeoff():
     assert front[0]["train_r2"] < front[1]["train_r2"]
     assert front[1]["formula"] == "0.67 * x"
     text = ConstantFitTool.format_result_dict(result)
-    assert "Pareto front (maximize #Simplified Constants and Train-set R2):" in text
+    assert "Pareto front (maximize #Simplified Constants and Validation-set R2):" in text
     assert "0.999" in text
-    assert "    0 | 1.00 | N/A | 0.67 * x" in text
+    assert "    0 | 1.00 | 1.00 | 0.67 * x" in text
 
 
 def test_validation_r2_is_used_for_pareto_selection_when_available():
@@ -72,7 +72,7 @@ def test_y_expression_takes_precedence_over_use_eq_as_y():
     tool = ConstantFitTool(data=data, target="y")
     result = tool.execute(eq="0.51*x", y="y-1", use_eq_as_y=True)
     assert result["target_expression"] == "y-1"
-    assert result["primary_metric"] == "train_r2"
+    assert result["primary_metric"] == "validation_r2"
     assert any(item["formula"] == "1 / 2 * x" for item in result["pareto_front"])
 
 

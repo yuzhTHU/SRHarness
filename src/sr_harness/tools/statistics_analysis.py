@@ -27,7 +27,7 @@ class StatisticsTool(BaseTool):
             near_zero_threshold: First absolute-value threshold used to count near-zero samples.
                 The output also reports thresholds 1e-6 and 1e-4.
         """
-        data = self.context['data'] # {str: np.ndarray}, 包括 input variables & target variable
+        data = self.context.data # {str: np.ndarray}, 包括 input variables & target variable
         if variables is None:
             variables = [key for key in data if is_numeric_array(data[key])]
         get_stats_args = dict(

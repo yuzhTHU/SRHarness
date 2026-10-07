@@ -43,7 +43,7 @@ class VariableRangeAnalysis(BaseTool):
     metadata = ToolMetadata(name="variable_range_analysis", description="Summarize one variable.")
 
     def execute(self, variable: str) -> dict:
-        values = np.asarray(self.context["data"][variable], dtype=float)
+        values = np.asarray(self.context.data[variable], dtype=float)
         finite = values[np.isfinite(values)]
         return {"variable": variable, "minimum": float(finite.min()), "maximum": float(finite.max())}
 '''
@@ -55,13 +55,13 @@ class SquareFormulaProposer(BaseTool):
 
     def execute(self, variable: str) -> dict:
         formula = self.parse_formula(f"{variable}**2")
-        target = self.parse_formula(self.context["target"])
+        target = self.parse_formula(self.context.target)
         return self.evaluate(f=formula, y=target)
 '''
 
 _TYPE_GUIDANCE = {
     "instructions": "Create an instruction-only skill. Leave tool_code empty and write reusable SKILL.md guidance.",
-    "data_analysis": "Create a data-analysis BaseTool. Inspect self.context['data'] and return a normal analysis dictionary. Demo:\n" + _DATA_ANALYSIS_DEMO,
+    "data_analysis": "Create a data-analysis BaseTool. Inspect self.context.data and return a normal analysis dictionary. Demo:\n" + _DATA_ANALYSIS_DEMO,
     "formula_proposer": "Create a formula-proposal BaseTool. Return or merge self.evaluate(...) output, preserving formula, is_candidate, and data_split_results. Demo:\n" + _FORMULA_PROPOSER_DEMO,
 }
 
@@ -111,7 +111,7 @@ class CreateSkill(BaseTool):
             if history_messages < 0:
                 raise ValueError("history_messages must be a non-negative integer.")
         max_rounds = bounded_value(
-            self.context.get("skill_authoring_rounds"),
+            getattr(self.context.args, "skill_authoring_rounds", None),
             min=1, max=8, default=4, converter=int,
         )
         messages = []
@@ -123,7 +123,7 @@ class CreateSkill(BaseTool):
 
         while True:
             if state is AuthoringState.PREPARE:
-                source_messages = self.context.get("messages") or []
+                source_messages = getattr(self.context.args, "messages", None) or []
                 if history_messages is not None:
                     source_messages = source_messages[-history_messages:] if history_messages else []
                 messages.extend(deepcopy(source_messages))
@@ -142,7 +142,7 @@ class CreateSkill(BaseTool):
                     "pending_questions": questions,
                 }
                 call_messages = [*messages, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, default=str)}]
-                if callback := self.context.get("skill_authoring_callback"):
+                if callback := getattr(self.context.args, "skill_authoring_callback", None):
                     raw_response = callback(call_messages)
                 else:
                     raw_response = self._call_configured_llm(call_messages)
@@ -177,14 +177,14 @@ class CreateSkill(BaseTool):
                 return {"status": "created", "rounds": round_index, **result}
 
     def _call_configured_llm(self, messages: list[dict[str, str]]) -> str:
-        provider = self.context.get("llm_provider")
-        model = self.context.get("llm_model")
+        provider = getattr(self.context.args, "llm_provider", None)
+        model = getattr(self.context.args, "llm_model", None)
         if not provider or not model:
             raise ValueError("create_skill requires llm_provider/llm_model context or a skill_authoring_callback.")
         from ..api import BaseAPI
 
         result = BaseAPI.create(provider, model=model)(
-            messages, n=1, max_tokens=min(int(self.context.get("llm_max_tokens") or 4096), 4096),
+            messages, n=1, max_tokens=min(int(getattr(self.context.args, "llm_max_tokens", 4096) or 4096), 4096),
         )
         content = ""
         for content, _, _ in result:
@@ -195,8 +195,8 @@ class CreateSkill(BaseTool):
 
     def _save_draft(self, draft: dict[str, Any], *, skill_type: str, force: bool) -> dict[str, Any]:
         name, description, content, tool_code, readonly = self._validate_draft(draft, skill_type)
-        assert "skill_manager" in self.context, "skill_manager must be provided in context."
-        manager = self.context["skill_manager"]
+        assert hasattr(self.context.args, "skill_manager"), "skill_manager must be provided in context.args."
+        manager = self.context.args.skill_manager
         existed = name in manager.load_skills()
         stored_readonly = readonly if skill_type == "instructions" else False
         skill_content = (

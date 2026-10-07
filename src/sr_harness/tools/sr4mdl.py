@@ -96,8 +96,8 @@ class SR4MDLTool(BaseTool):
         max_samples = max(20, min(int(max_samples), 5000))
         n_iter = max(1, min(int(n_iter), 10000))
 
-        data = self.context["data"]
-        y = (y or self.context["target"]).strip().strip('"').strip("'")
+        data = self.context.data
+        y = (y or self.context.target).strip().strip('"').strip("'")
         x = x or [
             name for name, values in data.items()
             if name != y and is_numeric_array(values)

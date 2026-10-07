@@ -121,6 +121,11 @@ class WebInteractionManager(InteractionManager):
         """
         return self.session.controller.ask(message)
 
+    def should_request_guidance_after_tool_free_response(self) -> bool:
+        """Avoid competing with an already queued pause or search transition."""
+        status = self.session.controller.status()
+        return not status["paused"] and status["pending_transition"] is None
+
     def publish(self, kind: str, payload) -> None:
         """Publish .
 

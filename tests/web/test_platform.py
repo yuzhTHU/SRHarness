@@ -4,9 +4,11 @@ import os
 import threading
 import time
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
+import sr_harness
 from dotenv import dotenv_values
 
 pytest.importorskip('fastapi')
@@ -15,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from sr_harness.agents.data_preparation_agent import DataPreparationAgent
 from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
-from sr_harness.core import APICallResult, ContextDataStore, SearchRunState, ToolCall
+from sr_harness.core import APICallResult, ContextDataLoader, SearchRunState, ToolCall
 from sr_harness.api import BaseAPI
 from sr_harness.web.app import create_app
 from sr_harness.runtime import InteractionController
@@ -40,6 +42,20 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="data-preparation"' in page.text
     assert 'id="data-setup"' in page.text
     assert 'id="run-setup"' in page.text
+    assert "connected:'已连接到后端'" in page.text
+    assert 'id="pause"' not in page.text
+    assert 'id="stop"' not in page.text
+    assert 'function renderComposerControl()' in page.text
+    assert "if(!questionId&&!session.paused){const control=await api('/api/control/command',{action:'pause'})" in page.text
+    assert "const control=await api('/api/control/command',{action:'message',message:prompt})" in page.text
+    assert '.composer #send.send-icon{display:grid;place-items:center;width:34px;height:34px' in page.text
+    assert "for(const [inputId,buttonId] of [['R','next-c'],['C','next-r']]" in page.text
+    assert "button.textContent='+1'" in page.text
+    assert '#settings-pane-search .search-step-control{display:flex;align-items:center;gap:6px' in page.text
+    assert '#settings-pane-search .search-step-control .advance-button{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px' in page.text
+    assert "composerToolbar.prepend($('settings-toggle'),$('initial-prompt-toggle'))" in page.text
+    assert "$('status').className='small muted';$('send').before($('status'))" in page.text
+    assert '.composer>.row #status{padding:0;border-radius:0;background:transparent;color:var(--muted);font-size:11px' in page.text
     assert 'id="plot-variable-palette"' in page.text
     assert 'id="start-prepared"' not in page.text
     data_view = page.text[page.text.index('id="data-setup"'):page.text.index('id="run-setup"')]
@@ -53,8 +69,178 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'class="data-card wide relationship-card"' not in data_view
     assert 'id="variable-config-card"' in data_view
     assert 'id="task-problem-card"' in data_view
-    assert '#variable-config-card,#task-problem-card{border:0;border-radius:0;background:transparent' in page.text
-    assert '#data-drop,.data-agent-compose,#variable-role-table,#problem-description,#composer{background:var(--interactive-surface)' in page.text
+    assert "card.id='evaluator-config-card'" in page.text
+    assert "content:'3'" in page.text
+    assert 'class="evaluator-config-heading step-heading"' in page.text
+    assert ".task-problem-heading,.evaluator-config-heading{margin-bottom:10px}" in page.text
+    assert "evaluatorHelp:'选择内置评估器或自定义新的评估器，实现数据切分、模型拟合、模型评估'" in page.text
+    assert 'class="evaluator-editor"' in page.text
+    assert '.evaluator-editor{margin-top:10px;overflow:hidden;border:1px solid #d8dee4;border-radius:25px;background:#fff;box-shadow:var(--interactive-shadow)}' in page.text
+    assert 'id="evaluator-code"' in page.text
+    assert 'id="evaluator-agent-input"' in page.text
+    assert 'id="evaluator-agent-feed" class="data-agent-feed evaluator-agent-feed" hidden' in page.text
+    assert 'class="data-agent-compose evaluator-agent-compose"' in page.text
+    assert 'class="data-agent-compose-toolbar evaluator-agent-compose-toolbar"' in page.text
+    assert 'class="data-agent-send evaluator-agent-send"' in page.text
+    assert "feed.hidden=false;feed.append" in page.text
+    assert '.evaluator-editor-toolbar button{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 14px' in page.text
+    assert "api('/api/evaluator/test',evaluatorPayload())" in page.text
+    assert "api('/api/evaluator/agent',{message,source:$('evaluator-code').value})" in page.text
+    assert "if(evaluatorDirty)await saveEvaluatorConfiguration()" in page.text
+    assert '<h3>配置变量描述</h3>' in data_view
+    assert '点击颜色条切换变量角色，点击变量描述以编辑，也可拖动手柄调整变量顺序' in data_view
+    assert '<h3 id="task-problem-title">配置问题描述</h3>' in data_view
+    assert '说明研究目标作为初始提示词。变量描述中已有的内容无需重复。' in data_view
+    assert '#data-setup>.data-layout{padding:0}' in page.text
+    assert '#variable-config-card,#task-problem-card{padding:0;border:0;border-radius:0;background:transparent' in page.text
+    assert '.data-agent-card{padding:0;border:0;background:transparent}' in page.text
+    assert '.data-agent-compose{margin-bottom:20px}' in page.text
+    assert '.data-agent-settings>.settings-heading{display:none}' in page.text
+    assert '#data-agent-settings-title,#data-agent-settings-subtitle,#data-api-key-env{display:none}' in page.text
+    assert '.data-agent-settings .settings-form label:has(#data-proxy),.data-agent-settings .settings-form .api-key-setting{grid-column:1;grid-template-columns:minmax(105px,.9fr) minmax(0,1.2fr)}' in page.text
+    assert '.data-agent-settings .settings-scroll{container-type:inline-size}' in page.text
+    assert '.data-agent-settings .settings-form{grid-template-columns:1fr}' in page.text
+    assert '@container (min-width:590px){.data-agent-settings .settings-form{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert '.data-agent-settings .settings-form label>span:first-child,.data-agent-settings .settings-form .api-key-setting>span:first-child b{white-space:nowrap}' in page.text
+    assert '.data-agent-settings .capability-columns section:has(>#data-tool-options){container:data-tools/inline-size}' in page.text
+    assert '#data-tool-options{grid-template-columns:1fr}' in page.text
+    assert '@container data-tools (min-width:360px){#data-tool-options{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert '.data-agent-settings .settings-form label:has(#data-proxy),.data-agent-settings .settings-form .api-key-setting{grid-column:auto}' in page.text
+    assert '.data-agent-compose-toolbar{padding-right:7px;padding-bottom:7px}' in page.text
+    assert 'button.composer-settings-button:is(#initial-prompt-toggle,#data-agent-settings-toggle,#settings-toggle){border:0;border-radius:7px;background:transparent;color:#647571;font-size:13px}' in page.text
+    assert 'button.composer-settings-button:is(#initial-prompt-toggle,#data-agent-settings-toggle,#settings-toggle)[aria-expanded="true"]{border:0;border-radius:7px;background:#eaf3f0;color:var(--accent)}' in page.text
+    assert ':root[data-theme="dark"] button.composer-settings-button:is(#initial-prompt-toggle,#data-agent-settings-toggle,#settings-toggle){border:0;border-radius:7px;background:transparent;color:#aebbb8}' in page.text
+    assert ':root[data-theme="dark"] button.composer-settings-button:is(#initial-prompt-toggle,#data-agent-settings-toggle,#settings-toggle):hover{background:#22302d;color:#d2dfdc}' in page.text
+    assert ':root[data-theme="dark"] button.composer-settings-button:is(#initial-prompt-toggle,#data-agent-settings-toggle,#settings-toggle)[aria-expanded="true"]{border:0;background:#29413c;color:#74c7bb}' in page.text
+    assert ':root[data-theme="dark"] #initial-prompt-toggle[aria-expanded="true"]{background:#29413c!important;color:#74c7bb}' in page.text
+    assert '.composer>#initial-prompt-panel{border-color:#9fc5be;border-radius:17px;background:#f3f9f7}' in page.text
+    assert ':root[data-theme="dark"] .composer>#initial-prompt-panel{border-color:#4d8d83;background:#172522}' in page.text
+    assert '.initial-prompt-body #system-prompt{border:1px solid #d8e5e2;border-radius:4px;background:#fff;box-shadow:0 1px 2px #263b3808;color:var(--ink)}' in page.text
+    assert '.initial-prompt-body #system-prompt:focus{border-color:#a8c8c2;background:#fff;color:var(--ink)}' in page.text
+    assert ':root[data-theme="dark"] .initial-prompt-body #system-prompt{border-color:#3d514d;background:#202b29;color:var(--ink)}' in page.text
+    assert '.initial-prompt-panel>.settings-heading{display:none}' in page.text
+    assert '.initial-prompt-body{padding:12px}' in page.text
+    assert ':root[data-theme="dark"] .data-agent-send{background:var(--accent);color:#fff}' in page.text
+    assert ':root[data-theme="dark"] .data-agent-send:hover{background:#14665f}' in page.text
+    assert ':root[data-theme="dark"] .data-agent-send.stop{background:var(--danger)}' in page.text
+    assert ':root[data-theme="dark"] .data-agent-send:disabled{background:#aebbb8}' in page.text
+    assert '.data-agent-settings{margin-top:2px;border-color:#9fc5be;border-radius:17px;background:#f3f9f7;box-shadow:none}' in page.text
+    assert '.data-agent-settings .settings-scroll{padding-bottom:5px}' in page.text
+    assert '.data-agent-settings .settings-actions{padding-top:5px;border-top:0;border-radius:0 0 17px 17px}' in page.text
+    assert '.data-agent-settings .settings-form label,.data-agent-settings .api-key-setting>span:first-child b,#data-settings-hint{color:#4f625e}' in page.text
+    assert '.data-agent-settings .settings-form input,.data-agent-settings .settings-form select{border-color:#d8e5e2;background:#fff;box-shadow:0 1px 2px #263b3808}' in page.text
+    assert '.data-agent-settings .api-key-control button{border-color:#d8e5e2;background:#fff}' in page.text
+    assert '.data-agent-settings .api-key-control{position:relative;display:block}' in page.text
+    assert '.data-agent-settings .settings-form .api-key-control input{width:100%;padding-right:36px;border-radius:4px}' in page.text
+    assert '.data-agent-settings .api-key-control #data-api-key-visibility{position:absolute;top:50%;right:4px' in page.text
+    assert "function renderDataApiKeyVisibility()" in page.text
+    assert "button.setAttribute('aria-pressed',String(visible))" in page.text
+    assert ':root[data-theme="dark"] .data-agent-settings .settings-form label,:root[data-theme="dark"] .data-agent-settings .api-key-setting>span:first-child b,:root[data-theme="dark"] #data-settings-hint{color:#b8c6c3}' in page.text
+    assert '#data-model-test,#data-settings-cancel,#data-settings-apply{flex:0 0 auto;height:34px;border-radius:17px;white-space:nowrap}' in page.text
+    assert "$('data-model-test').before($('data-settings-hint'))" in page.text
+    assert "$('data-agent-send').before($('data-agent-state'))" in page.text
+    assert "$('data-api-key-status').remove()" in page.text
+    assert "apiKeyConfigured:'已配置，输入新值以替换'" in page.text
+    assert "input.placeholder=credential.configured?_('apiKeyConfigured')" in page.text
+    assert "openrouter:'https://openrouter.ai/settings/keys'" in page.text
+    assert "apiKeyGet:'获取 {{env}} ↗'" in page.text
+    assert "link.textContent=_('apiKeyGet',{env:envVar})" in page.text
+    assert "$('data-api-key-label').replaceChildren('API Key (',link,')')" in page.text
+    assert '.composer>#settings-panel{margin-top:2px;border-color:#9fc5be;border-radius:17px;background:#f3f9f7;box-shadow:none}' in page.text
+    assert '#settings-panel>.settings-heading,#api-key-env{display:none}' in page.text
+    assert '#settings-panel .settings-scroll{container-type:inline-size;padding-bottom:5px}' in page.text
+    assert '#settings-panel .settings-actions{padding-top:5px;border-top:0;border-radius:0 0 17px 17px}' in page.text
+    assert '#settings-panel .settings-form,#settings-panel .settings-form.compact{grid-template-columns:1fr}' in page.text
+    assert '@container (min-width:590px){#settings-panel .settings-form,#settings-panel .settings-form.compact{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert '#settings-panel .settings-form label>span:first-child,#settings-panel .api-key-setting>span:first-child b{white-space:nowrap}' in page.text
+    assert '#settings-panel .settings-form input,#settings-panel .settings-form select{border-color:#d8e5e2;background:#fff;box-shadow:0 1px 2px #263b3808}' in page.text
+    assert '#settings-panel .api-key-control #api-key-visibility{position:absolute;top:50%;right:4px' in page.text
+    assert '#settings-cancel,#apply{flex:0 0 auto;height:34px;border-radius:17px;white-space:nowrap}' in page.text
+    assert '#model-test{flex:0 0 auto;height:34px;border-radius:17px;white-space:nowrap}' in page.text
+    assert '@container run-tools (min-width:360px){#tool-options{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert "function renderApiKeyVisibility()" in page.text
+    assert "$('settings-cancel').before($('settings-hint'));$('api-key-status').remove()" in page.text
+    assert "modelTestButton.id='model-test'" in page.text
+    assert "$('settings-cancel').before(modelTestStatus,modelTestButton)" in page.text
+    assert "api('/api/session/test',settingsPayload())" in page.text
+    assert "$('api-key-label').replaceChildren('API Key (',link,')')" in page.text
+    assert '#settings-panel .settings-form .api-key-setting{grid-column:auto;grid-template-columns:minmax(105px,.9fr) minmax(0,1.2fr)}' in page.text
+    assert '#api-key-label a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}' in page.text
+    assert '#settings-pane-model,#settings-pane-search{display:grid;grid-template-columns:1fr;column-gap:18px;row-gap:5px}' in page.text
+    assert '#settings-pane-model>.settings-form,#settings-pane-search>.settings-form,#settings-pane-search>.switch-list{display:contents}' in page.text
+    assert '@container (min-width:590px){#settings-pane-model,#settings-pane-search{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert "restartCount:'R · Restart Count'" in page.text
+    assert "branchCount:'C · Independent Branches'" in page.text
+    assert "conversationDepth:'L · Conversation Depth'" in page.text
+    assert "samplesPerRound:'K · Samples per Round'" in page.text
+    assert "function renderSearchSettingLabels()" in page.text
+    assert "renderApiKeyVisibility();renderSearchSettingLabels()" in page.text
+    assert '#composer>#prompt{padding-right:34px;resize:none}' in page.text
+    assert "promptResizeHandle.className='prompt-resize-handle'" in page.text
+    assert "promptResizeHandle.style.top=promptInput.offsetTop+7+'px'" in page.text
+    assert 'resizePromptInput(startHeight-(moveEvent.clientY-startY))' in page.text
+    assert ".data-ingest-intro::before{content:'1'}" in page.text
+    assert '.data-ingest-intro{display:flex;align-items:flex-start;gap:10px}' in page.text
+    assert '.data-ingest-intro::before{flex:0 0 24px;grid-row:auto}' in page.text
+    assert '.data-ingest-intro-copy{display:flex;min-width:0;flex:1;flex-direction:column}' in page.text
+    assert "dataIngestIntroCopy.className='data-ingest-intro-copy'" in page.text
+    assert '.step-heading{display:flex!important;align-items:flex-start;gap:10px}' in page.text
+    assert '.step-heading-copy{display:flex;min-width:0;flex:1;flex-direction:column}' in page.text
+    assert ".data-agent-heading>div.step-heading::before{content:'2';grid-row:auto}" in page.text
+    assert "#variable-config-card .variable-card-heading>div.step-heading::before{content:'1'}" in page.text
+    assert "#task-problem-card .task-problem-heading::before{content:'2'}" in page.text
+    assert '#problem-description,#variable-role-table,#variable-role-body{border-radius:25px}' in page.text
+    assert '#variable-role-table{overflow:hidden}' in page.text
+    assert '#variable-role-table>.variable-table-head{padding:8px 10px 5px;background:var(--interactive-surface)}' in page.text
+    assert '#variable-role-table .variable-row:first-child{border-radius:0}' in page.text
+    assert "$('variable-role-table').prepend(variableTableHead)" in page.text
+    assert '#variable-role-body .variable-description{min-height:30px;max-height:none;resize:none;overflow:hidden;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}' in page.text
+    assert "const description=document.createElement('textarea')" in page.text
+    assert "function resizeVariableDescription(description)" in page.text
+    assert 'let variableTableWidth=-1;new ResizeObserver' in page.text
+    assert '#variable-role-table{container-type:inline-size}' in page.text
+    assert '#variable-role-body .variable-description{min-width:0;max-width:100%}' in page.text
+    assert '#variable-role-table>.variable-table-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' in page.text
+    assert '@container (max-width:400px){#variable-role-table>.variable-table-head,#variable-role-body>.variable-row{grid-template-columns:18px 28px minmax(48px,.4fr) minmax(0,1fr);gap:4px;padding-right:6px;padding-left:6px}' in page.text
+    assert '#variable-role-table>.variable-table-head,#variable-role-body>.variable-row{padding-left:2px}' in page.text
+    assert '#variable-role-table .variable-handle{margin-left:0;justify-self:start}' in page.text
+    assert 'function structureStepHeading(host)' in page.text
+    assert "taskProblemHeading.className='task-problem-heading step-heading'" in page.text
+    assert '#variable-config-card .variable-card-heading .step-heading-copy{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:8px}' in page.text
+    assert '#variable-config-card .variable-card-heading .step-heading-copy>.variable-help{grid-column:1/-1}' in page.text
+    assert '#variable-config-card .step-heading-copy>.data-refresh-button{align-self:start;margin:0;border:1px solid transparent;border-radius:999px}' in page.text
+    assert "variableHeadingCopy.querySelector('h3').after($('data-refresh'))" in page.text
+    assert 'variableHeadingActions.remove()' in page.text
+    assert '#run-variable-preview .variable-role-table{overflow:hidden}' in page.text
+    assert '#run-variable-preview .variable-table-head,#run-variable-preview .variable-preview-row{grid-template-columns:minmax(100px,.32fr) minmax(0,1fr)}' in page.text
+    assert '#run-variable-preview .variable-preview-name{width:auto;padding:0;border-radius:0;background:transparent!important;color:var(--ink);font:700 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}' in page.text
+    assert "if(role==='target')pill.append(el('span',roleLabels.target,'column-kind target-kind'))" in page.text
+    assert 'runVariableTable.prepend(runVariableTableHead)' in page.text
+    assert "head.closest('#run-variable-preview')" in page.text
+    assert '#run-variable-preview .variable-description-preview{overflow:visible;text-overflow:clip;white-space:normal;overflow-wrap:anywhere;line-height:1.5}' in page.text
+    assert '.center:has(>#composer:not(.data-mode)){background:#fbfcfd}' in page.text
+    assert '.center:has(>#composer:not(.data-mode))>.bar{background:#fff}' in page.text
+    assert ':root[data-theme="dark"] .center:has(>#composer:not(.data-mode)){background:#111817}' in page.text
+    assert '#data-ingest,.data-agent-compose,#variable-role-table,#problem-description,#composer{box-shadow:var(--interactive-shadow)}' in page.text
+    assert '.data-agent-compose:focus-within,#composer:focus-within{box-shadow:var(--interactive-shadow)}' in page.text
+    assert ".data-agent-heading>div:first-child::before{content:'2'}" in page.text
+    assert '#variable-config-card .variable-card-heading h3,#task-problem-title{display:flex;align-items:center;gap:10px;min-height:24px}' in page.text
+    assert '#variable-config-card .variable-card-heading h3::before{content:\'1\'}' in page.text
+    assert '#task-problem-title::before{content:\'2\'}' in page.text
+    assert '.data-agent-feed{border:0;border-radius:0;background:#fff;box-shadow:0 -24px 32px -16px #fff,0 24px 32px -16px #fff}' in page.text
+    assert '#data-ingest{height:50px;padding:7px 7px 7px 14px;border:1px solid #dce4e2;border-radius:25px;background:var(--interactive-surface)' in page.text
+    assert '#data-ingest .data-ingest-prompt{min-width:0;flex:1;color:var(--muted);font-size:12px' in page.text
+    assert '#data-ingest #data-upload{flex:0 0 auto;height:34px;margin-left:auto;padding:0 14px;border:0;border-radius:17px;background:var(--accent);color:#fff}' in page.text
+    assert "dataDropCopy:'拖入文件以上传'" in page.text
+    assert "MESSAGE_CATALOGS.zh.dataDropCopy" not in page.text
+    assert "Object.assign(MESSAGE_CATALOGS['zh-CN']" in page.text
+    assert "Object.assign(MESSAGE_CATALOGS.zh," not in page.text
+    assert "uploadDataHelpPrefix:'上传数据文件，也可以从',uploadDataHelpSuffix:'快速开始'" in page.text
+    assert "dataAgentHelp:'用自然语言指导 Agent 整理、清洗、补充或检查数据，结果将被保存在 context.data/ 目录以供使用'" in page.text
+    assert "help.replaceChildren(document.createTextNode(_('dataAgentHelp')+' ('),link,document.createTextNode(')'))" in page.text
+    assert "dataIngest.before(dataIngestIntro)" in page.text
+    assert "dataIngest.append(dataDropCopy,$('data-upload'),$('data-file-input'))" in page.text
+    assert "dataIngest.ondrop=dataGuard(" in page.text
     assert 'id="problem-description"' in data_view
     assert 'id="data-refresh"' in data_view
     assert 'id="save-data-selection"' not in data_view
@@ -70,16 +256,27 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="initial-prompt-toggle"' in page.text
     assert 'data-initial-prompt-tab=' not in page.text
     assert 'id="user-prompt"' not in page.text
-    assert 'id="system-prompt" class="prompt-editor" aria-label="System Prompt" readonly' in page.text
+    assert 'id="system-prompt" class="prompt-editor" aria-label="System Prompt"' in page.text
+    assert 'aria-label="System Prompt" readonly' not in page.text
+    assert 'id="system-prompt-confirm-title">确认系统提示词</b>' in page.text
+    assert 'id="system-prompt-confirm-help">可在发送前编辑。清空以重新生成。</span>' in page.text
     assert '<span id="initial-prompt-toggle-label">系统提示词</span>' in page.text
     assert (
         "Find an interpretable formula explaining the selected target from the "
         "selected features."
     ) in data_view
     assert 'id="composer-purpose"' in page.text
-    assert "if((session?.state||'idle')==='idle')promptEdited.user=true" in page.text
+    assert "promptEdited.user=Boolean($('prompt').value.trim())" in page.text
+    assert "promptEdited.system=Boolean($('system-prompt').value.trim())" in page.text
+    assert "if(!promptEdited.user)schedulePromptPreview()" in page.text
+    assert "if(!promptEdited.system)schedulePromptPreview()" in page.text
+    assert "system_prompt:$('system-prompt').value.trim()||promptDefaults.system_prompt" in page.text
+    assert "showTabHint(_('runStartedHint'))" not in page.text
     assert "syncResearchProblem($('problem-description').value)" in page.text
     assert 'function renderTimelineSurface()' in page.text
+    assert "composerPurposeTitle:'检查用户提示词'" in page.text
+    assert "$('composer-purpose').hidden=active" in page.text
+    assert "$('composer-purpose-title').textContent=_('composerPurposeTitle')" in page.text
     assert 'id="timeline-view-switch"' not in page.text
     assert 'function renderVariableRolePreview()' in page.text
     assert "variableOrder.filter(column=>variableRole(column)!=='unused')" in page.text
@@ -91,10 +288,14 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="data-max-turns"' not in page.text
     assert "api('/api/data/context')" in page.text
     assert 'async function responseError(response' in page.text
+    assert 'function compactStreamEventBatch(events)' in page.text
     assert "await responseError(response,_('uploadFailed'))" in page.text
     assert 'id="workspace-name-editor"' in page.text
     assert 'id="data-context-guide"' not in page.text
-    assert 'manifest.json 记录变量信息，&lt;variable&gt;.npy 记录变量取值' in page.text
+    assert (
+        'manifest.json 记录变量与轴信息；网络或超图数据还会记录 num_nodes 和关系变量。'
+        '&lt;name&gt;.npy 保存取值'
+    ) in page.text
     assert 'id="data-agent-safety"' in page.text
     assert "api('/api/workspace/lock',{path,locked},'PUT')" in page.text
     safety = client.get('/data-agent-safety')
@@ -117,7 +318,14 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="up"' not in page.text
     assert 'id="path"' not in page.text
     assert ':root[data-theme="dark"] #tree-status' in page.text
+    assert 'function applyPromptPreview(preview,systemOnly=false)' in page.text
+    assert 'const hasPreparedData=Boolean(session?.supplied_data||useCommittedContext)' in page.text
+    assert 'applyPromptPreview(preview,!hasPreparedData)' in page.text
+    assert "if(s.state==='idle')refreshPromptPreview()" in page.text
     assert client.get('/viewer').status_code == 200
+    initial_prompts = client.post('/api/data/prompts', json={})
+    assert initial_prompts.status_code == 200
+    assert 'Symbolic Regression Agent' in initial_prompts.json()['system_prompt']
     assert client.put('/api/workspace/upload?path=data/sample.csv', content=b'x,y\n1,2').status_code == 200
     assert client.get('/api/workspace/download?path=data/sample.csv').content == b'x,y\n1,2'
     assert client.get('/api/workspace?path=data').json()['entries'][0]['name'] == 'sample.csv'
@@ -288,7 +496,7 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
     np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
     np.save(directory / 'y.npy', np.array([2.0, 4.0, 6.0]))
     np.save(directory / 'A.npy', np.array([[1, 0], [0, 1]]))
-    session.context.commit_context_data(ContextDataStore(directory).load())
+    session.context.commit_context_data(ContextDataLoader(directory).load())
 
     preview = client.get('/api/data/context').json()
     assert preview['columns'] == ['sample', 'edge', 'endpoint', 'x', 'y', 'A']
@@ -318,10 +526,11 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     directory = session.workspace / 'context.data'
     directory.mkdir()
     (directory / 'manifest.json').write_text(json.dumps({
+        'num_nodes': 2,
         'variables': {
-            'theta': {
-                'file': 'theta.npy', 'description': 'Node phases.',
-                'axes': ['time', 'node'],
+                'theta': {
+                    'file': 'theta.npy', 'description': 'Node phases.',
+                    'axes': ['time', 'node'], 'structure': 'A',
             },
             'omega': {
                 'file': 'omega.npy', 'description': 'Natural frequencies.',
@@ -331,9 +540,9 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
                 'file': 'A.npy', 'description': 'Directed edge list.',
                 'axes': ['edge', 'endpoint'],
             },
-            'dtheta_dt': {
-                'file': 'dtheta_dt.npy', 'description': 'Phase derivatives.',
-                'axes': ['time', 'node'],
+                'dtheta_dt': {
+                    'file': 'dtheta_dt.npy', 'description': 'Phase derivatives.',
+                    'axes': ['time', 'node'], 'structure': 'A',
             },
         },
         'axes': {
@@ -349,7 +558,7 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     np.save(directory / 'omega.npy', np.ones((3, 2)))
     np.save(directory / 'A.npy', np.array([[0, 1], [1, 0]]))
     np.save(directory / 'dtheta_dt.npy', np.full((3, 2), 2.0))
-    session.context.commit_context_data(ContextDataStore(directory).load())
+    session.context.commit_context_data(ContextDataLoader(directory).load())
 
     preview = client.get('/api/data/context').json()
     assert preview['columns'] == [
@@ -365,7 +574,7 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     })
     assert response.status_code == 200, response.text
     X, y = session._select_context_columns(
-        session.context.target, session.context.features,
+        session.context.target, list(session.context.feature_names()),
     )
     assert {name: value.shape for name, value in X.items()} == {
         'theta': (3, 2), 'omega': (3, 2), 'A': (2, 2),
@@ -391,7 +600,7 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
     np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
     np.save(directory / 'z.npy', np.array([2.0, 3.0, 5.0]))
     np.save(directory / 'y.npy', np.array([4.0, 6.0, 9.0]))
-    loaded = ContextDataStore(directory).load()
+    loaded = ContextDataLoader(directory).load()
     session.context.commit_context_data(loaded)
 
     response = client.put('/api/data/selection', json={
@@ -401,13 +610,13 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
     })
     assert response.status_code == 200, response.text
     assert session.context.target == 'y'
-    assert session.context.features == ['sample', 'x']
+    assert list(session.context.feature_names()) == ['x']
     assert session.context.variable_descriptions['sample'] == 'Calendar year.'
     assert session.context.variable_descriptions['x'] == ''
 
-    # Committing a feature added by the preparation Agent keeps axis-based roles.
+    # Reloading the full manifest restores every non-axis variable as a feature.
     session.context.commit_context_data(loaded)
-    assert session.context.features == ['sample', 'x']
+    assert list(session.context.feature_names()) == ['x', 'z']
 
     session.state = 'running'
     monkeypatch.setattr(session.controller, 'status', lambda: {
@@ -426,7 +635,7 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
         'variable_descriptions': {'z': 'Feature added during the pause.'},
     })
     assert updated.status_code == 200, updated.text
-    assert session.context.features == ['x', 'z']
+    assert list(session.context.feature_names()) == ['x', 'z']
 
 
 def test_read_only_startup_workspace_inputs_are_visible(tmp_path):
@@ -730,6 +939,133 @@ def test_data_agent_model_test_checks_completion_and_tool_call(platform, monkeyp
     assert created['tool_parser_name'] == 'openai'
     assert created['tool_list'][0].metadata.name == 'report_model_test'
 
+    fake.requests = 0
+    response = client.post('/api/session/test', json={
+        'llm_provider': 'openrouter',
+        'llm_model': 'openai/gpt-4.1-mini',
+        'tool_parser': 'openai',
+        'llm_max_tokens': 256,
+    })
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        'ok': True,
+        'accessible': True,
+        'plain_response': 'SRHARNESS_OK',
+        'tool_call_supported': True,
+        'called_tools': ['report_model_test'],
+    }
+    assert created['provider'] == 'openrouter'
+    assert created['model'] == 'openai/gpt-4.1-mini'
+    assert created['tool_parser_name'] == 'openai'
+
+
+def test_evaluator_configuration_test_and_restricted_agent(platform, monkeypatch):
+    client, session = platform
+    configuration = client.get('/api/evaluator')
+    assert configuration.status_code == 200
+    assert configuration.json()['selected'] == 'default'
+    assert {item['id'] for item in configuration.json()['evaluators']} == {
+        'base', 'default', 'graph',
+    }
+    base = next(item for item in configuration.json()['evaluators'] if item['id'] == 'base')
+    assert base['abstract'] is True
+    assert 'class BaseEvaluator(ABC)' in base['source']
+    evaluator_dir = Path(sr_harness.__file__).parent / 'evaluator'
+    assert base['source'] == (evaluator_dir / 'base_evaluator.py').read_text()
+    default = next(item for item in configuration.json()['evaluators'] if item['id'] == 'default')
+    assert default['abstract'] is False
+    assert 'class DefaultEvaluator(BaseEvaluator)' in default['source']
+    assert default['source'] == (evaluator_dir / 'default_evaluator.py').read_text()
+    assert configuration.json()['custom_template'] == (evaluator_dir / 'template_custom_evaluator.py').read_text()
+
+    custom_source = '''from sr_harness import DefaultEvaluator
+
+class CustomEvaluator(DefaultEvaluator):
+    pass
+'''
+    configured = client.put('/api/evaluator', json={
+        'selected': 'custom', 'source': custom_source,
+    })
+    assert configured.status_code == 200, configured.text
+    assert configured.json()['selected'] == 'custom'
+    assert type(session.context.evaluator).__name__ == 'CustomEvaluator'
+    forbidden = client.put('/api/evaluator', json={
+        'selected': 'custom',
+        'source': 'import os\nclass CustomEvaluator(DefaultEvaluator):\n    pass\n',
+    })
+    assert forbidden.status_code == 400
+    assert 'scientific SRHarness modules' in forbidden.text
+
+    client.post('/api/data/demo')
+    session.context.commit_context_data(
+        ContextDataLoader(session.workspace / 'context.data').load(),
+    )
+    session.context.update_selection(target='y', features=['x1', 'x2'])
+    tested = client.post('/api/evaluator/test', json={
+        'selected': 'custom',
+        'source': custom_source,
+        'formula': "param('scale') * x1",
+    })
+    assert tested.status_code == 200, tested.text
+    assert 'complexity' in tested.json()['result']['data_split_results']['train']['metrics']
+
+    class RestrictedAPI:
+        def __init__(self):
+            self.requests = 0
+
+        def __call__(self, messages, **kwargs):
+            self.requests += 1
+
+            def generate():
+                if self.requests == 1:
+                    call = ToolCall(
+                        'update_evaluator', {'source': custom_source}, id='update-evaluator',
+                    )
+                    yield {
+                        'content': '', 'tool_call': [call],
+                        'message': {'role': 'assistant', 'content': ''},
+                    }
+                elif self.requests == 2:
+                    call = ToolCall(
+                        'evaluate_formula',
+                        {'f': "param('scale') * x1", 'fit': True, 'show_diagnostics': False},
+                        id='test-evaluator',
+                    )
+                    yield {
+                        'content': '', 'tool_call': [call],
+                        'message': {'role': 'assistant', 'content': ''},
+                    }
+                else:
+                    yield {
+                        'content': 'The evaluator is ready.',
+                        'tool_call': [],
+                        'message': {'role': 'assistant', 'content': 'The evaluator is ready.'},
+                    }
+                return {'usage': {'token': {}, 'price': {}}, 'contents': [], 'tool_calls': []}
+
+            return APICallResult(generate())
+
+    created = {}
+
+    def create_api(provider, **kwargs):
+        created.update(provider=provider, **kwargs)
+        return RestrictedAPI()
+
+    monkeypatch.setattr(BaseAPI, 'create', create_api)
+    assisted = client.post('/api/evaluator/agent', json={
+        'message': 'Check this evaluator.',
+        'source': custom_source,
+    })
+    assert assisted.status_code == 200, assisted.text
+    assert assisted.json()['message'] == 'The evaluator is ready.'
+    assert [event['tool'] for event in assisted.json()['tool_events']] == [
+        'update_evaluator', 'evaluate_formula',
+    ]
+    assert all(event['ok'] for event in assisted.json()['tool_events'])
+    assert {tool.metadata.name for tool in created['tool_list']} == {
+        'update_evaluator', 'evaluate_formula',
+    }
+
 
 def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monkeypatch):
     client, session = platform
@@ -819,7 +1155,7 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
     assert api_options['model'] == 'data-preparation-model'
     assert session.data_agent.llm_max_tokens == 1234
     assert session.context.target == '人口数量'
-    assert session.context.features == ['年份', 'GDP']
+    assert list(session.context.feature_names()) == ['年份', 'GDP']
     data_events = session.controller.events()
     data_event_kinds = [event['kind'] for event in data_events]
     assert 'data_user' in data_event_kinds
@@ -920,7 +1256,9 @@ def test_question_reconnect_and_stop():
     assert results == ['yes']
     with pytest.raises(ValueError):
         controller.reply(question, 'duplicate')
-    controller.command('message', 'guidance')
+    controller.command('pause')
+    status = controller.command('message', 'guidance')
+    assert status['paused'] is False
     controller.wait_until_running()
     assert controller.checkpoint() == ['guidance']
     controller.command('stop')
@@ -1038,6 +1376,50 @@ def test_advance_to_next_branch_and_restart(platform, monkeypatch):
         {'R': 1, 'C': 2, 'L': 1},
         {'R': 2, 'C': 1, 'L': 1},
     ]
+
+
+def test_tool_free_search_response_waits_for_web_guidance(platform, monkeypatch):
+    client, session = platform
+    prompts = []
+
+    class YieldingAPI:
+        tool_description_json = []
+
+        def __call__(self, prompt, **kwargs):
+            prompts.append(prompt)
+            turn = len(prompts)
+            if turn == 2:
+                session.controller.command('next_r')
+
+            def generate():
+                message = {'role': 'assistant', 'content': f'round {turn}'}
+                yield {'content': message['content'], 'tool_call': [], 'message': message}
+                return {'usage': {'token': {}, 'price': {}}, 'responses': []}
+
+            return APICallResult(generate())
+
+    monkeypatch.setattr(BaseAPI, 'create', lambda *args, **kwargs: YieldingAPI())
+    response = client.post('/api/session/start', json={'max_refinement_depth': 3})
+    assert response.status_code == 200, response.text
+    deadline = time.monotonic() + 5
+    while not session.controller.status()['questions'] and time.monotonic() < deadline:
+        time.sleep(.01)
+    questions = session.controller.status()['questions']
+    assert len(questions) == 1
+    question_id, question = next(iter(questions.items()))
+    assert 'replied without calling a tool' in question
+
+    reply = client.post(
+        f'/api/control/reply/{question_id}', json={'message': 'Try a power law.'},
+    )
+    assert reply.status_code == 200, reply.text
+    session.thread.join(10)
+    assert not session.thread.is_alive()
+    assert session.state == 'completed'
+    assert any(
+        message.get('content', '').endswith('Try a power law.')
+        for message in prompts[1]
+    )
 
 
 def test_csv_input_and_failure_state(platform, monkeypatch):

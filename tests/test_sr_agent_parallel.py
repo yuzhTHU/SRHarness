@@ -4,7 +4,13 @@ import json
 import numpy as np
 from types import SimpleNamespace
 
-from sr_harness.core import CandidateRecord, ToolCall, ToolCallResult, ToolMetadata
+from sr_harness.core import (
+    AgentContext,
+    CandidateRecord,
+    ToolCall,
+    ToolCallResult,
+    ToolMetadata,
+)
 from sr_harness.agents.sr_agent import SRAgent
 from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
 from sr_harness.tools.base_tool import BaseTool
@@ -19,7 +25,7 @@ class UnitParallelTool(BaseTool):
 
     def execute(self, value: int) -> dict:
         """Return a value with inherited context."""
-        return {"value": value, "offset": self.context["offset"]}
+        return {"value": value, "offset": self.context.args.offset}
 
 
 @BaseTool.register("unit_messages_tool")
@@ -28,7 +34,7 @@ class UnitMessagesTool(BaseTool):
 
     def execute(self) -> dict:
         """Return injected messages."""
-        return {"messages": self.context["messages"]}
+        return {"messages": self.context.args.messages}
 
 
 def make_agent(tmp_path):
@@ -67,6 +73,68 @@ def test_interactive_guidance_is_added_before_prompt_construction():
             "compare against a power law"
         ),
     }
+
+
+def test_interactive_agent_waits_for_guidance_after_tool_free_response():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = False
+    agent._perfect_candidate_announced = False
+    agent.best_candidate = lambda: None
+    agent.interaction_manager = SimpleNamespace(
+        should_request_guidance_after_tool_free_response=lambda: True,
+    )
+    prompts = []
+    agent.human_input_callback = lambda prompt: prompts.append(prompt) or "Try a power law."
+    buffer = [{"role": "assistant", "content": "I need more direction."}]
+
+    status = agent.handle_iteration_complete(buffer, R=1, L=2, C=1)
+
+    assert status is None
+    assert prompts == [
+        "The Agent replied without calling a tool and has yielded control. "
+        "Provide further guidance to continue the symbolic-regression search."
+    ]
+    assert buffer[-1] == {
+        "role": "user",
+        "content": (
+            "[Human guidance after the Agent yielded control]\n"
+            "Try a power law."
+        ),
+    }
+
+
+def test_interactive_agent_continues_without_waiting_after_tool_call():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = True
+    agent._perfect_candidate_announced = False
+    agent.best_candidate = lambda: None
+    agent.interaction_manager = SimpleNamespace(
+        should_request_guidance_after_tool_free_response=lambda: True,
+    )
+    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
+        AssertionError("tool-using responses must not pause for guidance")
+    )
+    buffer = []
+
+    assert agent.handle_iteration_complete(buffer, R=1, L=2, C=1) is None
+    assert buffer == []
+
+
+def test_interactive_agent_honors_pending_control_before_automatic_guidance():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = False
+    agent._perfect_candidate_announced = False
+    agent.best_candidate = lambda: None
+    agent.interaction_manager = SimpleNamespace(
+        should_request_guidance_after_tool_free_response=lambda: False,
+    )
+    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
+        AssertionError("pending controls must take precedence")
+    )
+    buffer = []
+
+    assert agent.handle_iteration_complete(buffer, R=1, L=2, C=1) is None
+    assert buffer == []
 
 
 def test_agent_exposes_only_skills_from_enabled_tools(tmp_path):
@@ -131,7 +199,7 @@ def test_get_results_uses_messages_already_injected_into_tool_context(tmp_path):
     agent.tools = [UnitMessagesTool()]
     agent.max_workers = 2
     prompt = [{"role": "system", "content": "Reusable context"}]
-    agent.tools[0].context["messages"] = prompt
+    agent.tools[0].context.args.messages = prompt
     response_list = [
         (
             "",
@@ -267,6 +335,46 @@ def test_split_data_ood_falls_back_to_T_and_prefers_t(tmp_path):
     )
     assert validation_T["T"].tolist() == [500]
     assert validation_t["t"].tolist() == [4]
+
+
+def test_split_data_uses_manifest_structure_metadata_in_network_mode(tmp_path):
+    theta = np.arange(30.0).reshape(10, 3)
+    omega = np.array([0.1, 0.2, 0.3])
+    links = np.array([[0, 1], [1, 2], [2, 0]], dtype=int)
+    target = theta * 2
+    data = {
+        "theta": theta, "omega": omega, "links": links, "dtheta": target,
+        "time": np.arange(10.0), "node": np.arange(3),
+        "edge": np.arange(3), "endpoint": np.arange(2),
+    }
+    context = AgentContext(
+        data=data,
+        target="dtheta",
+        variable_axes={
+            "theta": ("time", "node"),
+            "omega": ("node",),
+            "links": ("edge", "endpoint"),
+            "dtheta": ("time", "node"),
+        },
+        variable_structures={"theta": "links", "dtheta": "links"},
+        num_nodes=3,
+    )
+    agent = SRAgent(
+        llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
+        save_path=str(tmp_path), validation_fraction=0.2, split_by="ood",
+        context=context,
+    )
+
+    train, validation = agent._split_data(
+        {"theta": theta, "omega": omega, "links": links},
+        {"dtheta": target},
+    )
+
+    assert train["theta"].shape == (8, 3)
+    np.testing.assert_array_equal(train["theta"], theta[:8])
+    assert validation["dtheta"].shape == (2, 3)
+    np.testing.assert_array_equal(train["omega"], omega)
+    np.testing.assert_array_equal(validation["links"], links)
 
 
 def test_split_data_ood_falls_back_to_first_input_variable(tmp_path):

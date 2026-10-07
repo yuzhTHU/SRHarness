@@ -1,418 +1,212 @@
-# Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""Shared mutable context for agents and tools."""
+"""Shared runtime context for agents, evaluators, and tools."""
 from __future__ import annotations
 
+import argparse
 import threading
-from collections.abc import Iterator, MutableMapping
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .context_data import ContextData
 
+class AgentContext:
+    """One authoritative context containing data, metadata, and runtime arguments."""
 
-class AgentContext(MutableMapping[str, Any]):
-    """Authoritative shared data and resources for cooperating agents.
-
-    The mapping interface keeps existing tools compatible while attribute access
-    exposes the structured state used by agents and the Web session. ``data`` is
-    the complete aligned dataset. Legacy ``context["data"]`` reads the active
-    training split when one has been bound by :class:`SRAgent`.
-    """
-
-    _FIELDS = {
-        "target",
-        "features",
-        "variable_descriptions",
-        "workspace",
-        "evaluation_data",
-        "evaluator",
-        "data_revision",
-        "provenance",
-        "axes",
-        "variable_axes",
-        "data_manifest_path",
-    }
-
-    def __init__(
-        self,
-        data: dict[str, Any] | None = None,
-        target: str | None = None,
-        features: list[str] | None = None,
-        variable_descriptions: dict[str, str] | None = None,
-        workspace: Any = None,
-        evaluation_data: dict[str, Any] | None = None,
-        evaluator: Any = None,
-        data_revision: int = 0,
-        provenance: dict[str, Any] | None = None,
-        **values: Any,
-    ):
-        self.data = self._normalize_data(data or {})
-        self.axes = dict(getattr(self.data, "axes", {}))
-        self.variable_axes = dict(getattr(self.data, "variable_axes", {}))
-        self.data_manifest_path = (
-            str(self.data.directory / "manifest.json")
-            if getattr(self.data, "directory", None) is not None
-            else None
-        )
-        self.training_data: dict[str, np.ndarray] | None = None
-        self.evaluation_data = self._normalize_data(evaluation_data or {})
-        self.evaluator = evaluator
+    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, num_nodes: int | None = None, evaluator: Any = None, workspace: str | Path | Any | None = None):
+        if args is not None and not isinstance(args, argparse.Namespace):
+            raise TypeError("args must be an argparse.Namespace")
+        self.args = args or argparse.Namespace()
+        defaults = {
+            "validation_fraction": 0.0,
+            "split_by": "random",
+            "split_random_state": 42,
+            "split_ood_variable": None,
+        }
+        for name, value in defaults.items():
+            if not hasattr(self.args, name):
+                setattr(self.args, name, value)
+        if workspace is not None and hasattr(workspace, "path"):
+            self.args.workspace_manager = workspace
+            workspace = workspace.path
+        self.workspace = Path(workspace).resolve() if workspace is not None else Path.cwd().resolve()
+        if any(not isinstance(name, str) or not name for name in (data or {})):
+            raise TypeError("data keys must be non-empty strings")
+        self.data = {name: np.asarray(value) for name, value in (data or {}).items()}
         self.target = target
-        self.features = list(features or self._default_features(self.data, target))
-        self.variable_descriptions = dict(
-            variable_descriptions or getattr(self.data, "descriptions", {})
-        )
-        self.workspace = workspace
-        self.data_revision = int(data_revision)
-        self.provenance = dict(provenance or {})
-        self.last_change: dict[str, Any] | None = None
-        self._values = dict(values)
+        if variable_descriptions is None:
+            self.variable_descriptions = {name: "" for name in self.data}
+        else:
+            self.variable_descriptions = dict(variable_descriptions)
+        if variable_axes is None:
+            self.variable_axes = {name: () for name in self.data}
+        else:
+            self.variable_axes = {name: tuple(axes) for name, axes in variable_axes.items()}
+        self.variable_structures = dict(variable_structures or {})
+        self.num_nodes = num_nodes
+        if evaluator is None:
+            from ..evaluator import DefaultEvaluator, GraphEvaluator
+            evaluator = GraphEvaluator() if self.variable_structures else DefaultEvaluator()
+        self.evaluator = evaluator
+        self._split_cache: dict[str, dict[str, np.ndarray]] | None = None
         self._lock = threading.RLock()
+        self._validate(allow_incomplete=not self.data or self.target is None)
 
-    @staticmethod
-    def _normalize_data(data: dict[str, Any]) -> ContextData:
-        if isinstance(data, ContextData):
-            return data
-        return ContextData({str(name): np.asarray(value) for name, value in data.items()})
+    def _validate(self, *, allow_incomplete: bool = False) -> None:
+        names = set(self.data)
+        if not allow_incomplete and self.target not in names:
+            raise ValueError("target must name an entry in data")
+        if set(self.variable_descriptions) != names:
+            raise ValueError("variable_descriptions keys must equal data keys")
+        if any(not isinstance(value, str) for value in self.variable_descriptions.values()):
+            raise TypeError("variable descriptions must be strings")
+        if any(
+            not isinstance(axis, str) or not axis
+            for dimensions in self.variable_axes.values()
+            for axis in dimensions
+        ):
+            raise TypeError("variable_axes values must contain non-empty axis names")
+        non_axes = set(self.variable_axes)
+        axes = {axis for dimensions in self.variable_axes.values() for axis in dimensions}
+        if non_axes & axes or non_axes | axes != names:
+            raise ValueError("variable_axes keys and values must partition data keys")
+        for axis in axes:
+            if self.data[axis].ndim != 1:
+                raise ValueError(f"axis variable {axis!r} must be one-dimensional")
+        if (self.num_nodes is None) != (not self.variable_structures):
+            raise ValueError("variable_structures and num_nodes must appear together")
+        if self.num_nodes is not None and (
+            isinstance(self.num_nodes, bool)
+            or not isinstance(self.num_nodes, int)
+            or self.num_nodes < 1
+        ):
+            raise ValueError("num_nodes must be a positive integer")
+        for variable, structure in self.variable_structures.items():
+            if variable not in names or structure not in names:
+                raise ValueError("variable_structures must reference entries in data")
+            if variable == structure:
+                raise ValueError("a structured variable cannot reference itself")
+            relation = self.data[structure]
+            if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
+                raise ValueError(f"structure variable {structure!r} must have shape (E, 2) or (H, 3)")
+            if self.data[variable].ndim == 0 or self.data[variable].shape[-1] != relation.shape[0]:
+                raise ValueError(f"structured variable {variable!r} must end in the relation dimension")
+            if relation.dtype.kind not in "iu":
+                raise ValueError(f"structure variable {structure!r} must contain integer endpoints")
+            if np.any(relation < 0) or np.any(relation >= self.num_nodes):
+                raise ValueError(f"structure variable {structure!r} endpoints must be in [0, {self.num_nodes})")
 
-    @staticmethod
-    def _default_features(data: dict[str, Any], target: str | None) -> list[str]:
-        return [name for name in data if name != target]
-
-    @property
-    def tool_data(self) -> dict[str, np.ndarray]:
-        """Return the active training split or the complete dataset.
-
-        Returns:
-            Data arrays exposed to scientific tools.
-        """
-        return self.training_data if self.training_data is not None else self.data
-
-    @property
-    def workspace_dir(self) -> str | None:
-        """Return the active workspace directory.
-
-        Returns:
-            Workspace path, or ``None`` when no workspace is configured.
-        """
-        if self.workspace is None:
-            return self._values.get("workspace_dir")
-        return str(self.workspace.path)
-
-    def commit_data(
-        self,
-        data: dict[str, Any],
-        *,
-        target: str,
-        features: list[str] | None = None,
-        variable_descriptions: dict[str, str] | None = None,
-        provenance: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Validate and atomically replace the structured dataset.
-
-        Args:
-            data: Data arrays keyed by variable name.
-            target: Target name or target values.
-            features: Ordered feature-column names; all non-target columns by default.
-            variable_descriptions: Human-readable descriptions keyed by column name.
-            provenance: Source and transformation metadata for the dataset.
-
-        Returns:
-            A description of the committed revision and column changes.
-        """
-        normalized = self._normalize_data(data)
-        if not normalized:
-            raise ValueError("data must contain at least one column")
-        if target not in normalized:
-            raise ValueError(f"target column does not exist: {target}")
-        lengths = {len(value) for value in normalized.values()}
-        if len(lengths) != 1:
-            raise ValueError(f"all data columns must have equal length, got {sorted(lengths)}")
-        if next(iter(lengths)) == 0:
-            raise ValueError("data must contain at least one row")
-        selected_features = list(features or self._default_features(normalized, target))
-        if not selected_features:
-            raise ValueError("at least one feature is required")
-        if target in selected_features:
-            raise ValueError("target cannot also be a feature")
-        missing = [name for name in selected_features if name not in normalized]
-        if missing:
-            raise ValueError(f"feature columns do not exist: {missing}")
-
+    def invalidate_splits(self) -> None:
         with self._lock:
-            previous_columns = list(self.data)
-            previous_target = self.target
-            self.data = normalized
-            self.axes = {}
-            self.variable_axes = {}
-            self.data_manifest_path = None
-            self.target = target
-            self.features = selected_features
-            self.variable_descriptions = dict(variable_descriptions or {})
-            self.provenance = dict(provenance or {})
-            self.training_data = None
-            self.evaluation_data = {}
-            self.data_revision += 1
-            self.last_change = {
-                "revision": self.data_revision,
-                "target": target,
-                "features": list(selected_features),
-                "columns": list(normalized),
-                "rows": next(iter(lengths)),
-                "added_columns": [name for name in normalized if name not in previous_columns],
-                "removed_columns": [name for name in previous_columns if name not in normalized],
-                "target_changed": previous_target not in {None, target},
-            }
-            return dict(self.last_change)
+            self._split_cache = None
 
-    def add_features(
-        self,
-        features: dict[str, Any],
-        *,
-        descriptions: dict[str, str] | None = None,
-        provenance: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Add aligned feature columns and create a new data revision.
+    def _splits(self) -> dict[str, dict[str, np.ndarray]]:
+        with self._lock:
+            if self._split_cache is None:
+                if self.evaluator is None:
+                    raise ValueError("context.evaluator is required to split data")
+                splits = self.evaluator.split_data(self)
+                if set(splits) != {"train", "evaluation"}:
+                    raise ValueError("BaseEvaluator.split_data() must return train and evaluation mappings")
+                self._split_cache = splits
+            return self._split_cache
 
-        Args:
-            features: New aligned columns keyed by name.
-            descriptions: Descriptions for the new columns.
-            provenance: Source and transformation metadata to merge.
+    def train_data(self) -> dict[str, np.ndarray]:
+        return self._splits()["train"]
 
-        Returns:
-            A description of the committed revision and column changes.
-        """
-        if not self.data or self.target is None:
-            raise ValueError("structured data must be committed before adding features")
-        normalized = self._normalize_data(features)
-        collisions = sorted(set(normalized) & set(self.data))
-        if collisions:
-            raise ValueError(f"feature columns already exist: {collisions}")
-        row_count = len(next(iter(self.data.values())))
-        mismatched = {name: len(value) for name, value in normalized.items() if len(value) != row_count}
-        if mismatched:
-            raise ValueError(f"new features must contain {row_count} rows, got {mismatched}")
-        merged_descriptions = self.variable_descriptions | dict(descriptions or {})
-        merged_provenance = self.provenance | dict(provenance or {})
-        return self.commit_data(
-            self.data | normalized,
-            target=self.target,
-            features=[*self.features, *normalized],
-            variable_descriptions=merged_descriptions,
-            provenance=merged_provenance,
+    def evaluation_data(self) -> dict[str, np.ndarray]:
+        return self._splits()["evaluation"]
+
+    def _split_context(self, data: dict[str, np.ndarray]) -> AgentContext:
+        return AgentContext(
+            args=self.args, data=data, target=self.target,
+            variable_descriptions={name: self.variable_descriptions[name] for name in data},
+            variable_axes={name: axes for name, axes in self.variable_axes.items() if name in data},
+            variable_structures={name: structure for name, structure in self.variable_structures.items() if name in data and structure in data},
+            num_nodes=self.num_nodes, evaluator=self.evaluator, workspace=self.workspace,
         )
 
-    def commit_context_data(self, data: ContextData) -> dict[str, Any]:
-        """Replace structured variables with a validated manifest-backed collection.
+    def train_split(self) -> AgentContext:
+        return self._split_context(self.train_data())
 
-        Existing target and feature selections are retained only while their
-        variables still exist. Axis metadata remains attached to ``data`` and is
-        also exposed directly on the context for tools that need it.
+    def evaluation_split(self) -> AgentContext:
+        return self._split_context(self.evaluation_data())
 
-        Args:
-            data: Validated variables and axes loaded by ``ContextDataStore``.
+    def axis_names(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(axis for axes in self.variable_axes.values() for axis in axes))
 
-        Returns:
-            A description of the committed revision and variable changes.
-        """
-        if not isinstance(data, ContextData) or not data:
-            raise ValueError("context data must contain at least one validated variable")
+    def variable_names(self) -> tuple[str, ...]:
+        return tuple(self.variable_axes)
+
+    def feature_names(self) -> tuple[str, ...]:
+        return tuple(name for name in self.variable_axes if name != self.target)
+
+    def commit_context_data(self, loaded: dict[str, Any]) -> dict[str, Any]:
+        values = {str(name): np.asarray(value) for name, value in loaded["data"].items()}
+        self.data = values
+        self.variable_descriptions = dict(loaded["variable_descriptions"])
+        self.variable_axes = {
+            name: tuple(axes) for name, axes in loaded["variable_axes"].items()
+        }
+        self.variable_structures = dict(loaded["variable_structures"])
+        self.num_nodes = loaded["num_nodes"]
+        self.target = self.target if self.target in values else None
+        self.invalidate_splits()
+        self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+        self._validate(allow_incomplete=True)
+        return {"revision": self.args.data_revision, "variables": list(values)}
+
+    def commit_data(self, data: dict[str, Any], *, target: str, features: list[str] | None = None, variable_descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        selected = list(dict.fromkeys([*(features or []), target]))
+        if target not in data:
+            raise ValueError(f"target column does not exist: {target}")
+        arrays = {name: np.asarray(data[name]) for name in selected}
         with self._lock:
-            previous = list(self.data)
-            self.data = data
-            self.axes = dict(data.axes)
-            self.variable_axes = dict(data.variable_axes)
-            self.variable_descriptions = {
-                **dict(data.descriptions),
-                **{
-                    name: axis.description
-                    for name, axis in data.axes.items()
-                    if axis.description
-                },
-            }
-            self.data_manifest_path = (
-                str(data.directory / "manifest.json") if data.directory is not None else None
-            )
-            available = set(data) | set(data.axes)
-            if self.target not in available:
-                self.target = None
-            self.features = [
-                name for name in self.features
-                if name in available and name != self.target
-            ]
-            self.training_data = None
-            self.evaluation_data = ContextData({})
-            self.data_revision += 1
-            self.last_change = {
-                "revision": self.data_revision,
-                "variables": list(data),
-                "added_variables": [name for name in data if name not in previous],
-                "removed_variables": [name for name in previous if name not in data],
-                "manifest": self.data_manifest_path,
-            }
-            return dict(self.last_change)
-
-    def bind_split(
-        self,
-        training_data: dict[str, Any],
-        evaluation_data: dict[str, Any],
-    ) -> None:
-        """Bind the split consumed by symbolic-regression tools.
-
-        Args:
-            training_data: Data exposed to fitting tools.
-            evaluation_data: Held-out data exposed to evaluation tools.
-        """
-        with self._lock:
-            self.training_data = self._normalize_data(training_data)
-            self.evaluation_data = self._normalize_data(evaluation_data)
-
-    def update_selection(
-        self,
-        *,
-        target: str,
-        features: list[str],
-        variable_descriptions: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        """Update the variables consumed by symbolic regression.
-
-        Args:
-            target: Name of the selected target variable or axis.
-            features: Ordered names of selected feature variables or axes.
-            variable_descriptions: Updated human-readable descriptions.
-
-        Returns:
-            A description of the resulting data revision.
-        """
-        selected_features = list(dict.fromkeys(features))
-        if not target or not selected_features:
-            raise ValueError("a target and at least one feature are required")
-        if target in selected_features:
-            raise ValueError("target cannot also be a feature")
-
-        def value(name: str) -> np.ndarray | None:
-            if name in self.data:
-                return np.asarray(self.data[name])
-            axis = self.axes.get(name)
-            return None if axis is None else np.asarray(axis.values)
-
-        selected = {name: value(name) for name in [*selected_features, target]}
-        missing = [name for name, array in selected.items() if array is None]
-        if missing:
-            raise ValueError(f"selected variables or axes do not exist: {missing}")
-
-        descriptions = dict(variable_descriptions or {})
-        available = set(self.data) | set(self.axes)
-        unknown_descriptions = sorted(set(descriptions) - available)
-        if unknown_descriptions:
-            raise ValueError(
-                f"descriptions reference unknown variables or axes: {unknown_descriptions}"
-            )
-        with self._lock:
-            changed = (
-                self.target != target
-                or self.features != selected_features
-                or any(
-                    self.variable_descriptions.get(name, "") != description
-                    for name, description in descriptions.items()
-                )
-            )
+            self.data = arrays
             self.target = target
-            self.features = selected_features
-            self.variable_descriptions.update(descriptions)
-            if changed:
-                self.training_data = None
-                self.evaluation_data = ContextData({})
-                self.data_revision += 1
-            self.last_change = {
-                "revision": self.data_revision,
-                "target": target,
-                "features": list(selected_features),
-                "selection_changed": changed,
-            }
-            return dict(self.last_change)
+            self.variable_descriptions = {name: str((variable_descriptions or {}).get(name, "")) for name in arrays}
+            self.variable_axes = {name: () for name in arrays}
+            self.variable_structures = {}
+            self.num_nodes = None
+            self.invalidate_splits()
+            self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+            self._validate()
+        return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "columns": list(arrays), "rows": len(arrays[target])}
+
+    def add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        descriptions = self.variable_descriptions | {
+            name: (descriptions or {}).get(name, "") for name in features
+        }
+        return self.commit_data(self.data | features, target=self.target, features=[*self.feature_names(), *features], variable_descriptions=descriptions)
+
+    def update_selection(self, *, target: str, features: list[str], variable_descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        keep_variables = set(features) | {target}
+        keep_axes = {axis for name, axes in self.variable_axes.items() if name in keep_variables for axis in axes}
+        keep = keep_variables | keep_axes
+        self.data = {name: value for name, value in self.data.items() if name in keep}
+        self.target = target
+        descriptions = self.variable_descriptions | dict(variable_descriptions or {})
+        self.variable_descriptions = {name: descriptions.get(name, "") for name in self.data}
+        self.variable_axes = {name: axes for name, axes in self.variable_axes.items() if name in keep_variables}
+        self.variable_structures = {name: structure for name, structure in self.variable_structures.items() if name in self.data and structure in self.data}
+        if not self.variable_structures:
+            self.num_nodes = None
+        self.invalidate_splits()
+        self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+        self._validate()
+        return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "selection_changed": True}
 
     def schema(self) -> dict[str, Any]:
-        """Return the current structured-data schema.
-
-        Returns:
-            Column names, roles, row count, revision, descriptions, and provenance.
-        """
-        with self._lock:
-            rows = len(next(iter(self.data.values()))) if self.data else 0
-            variables = {
-                name: {
-                    "shape": list(value.shape),
-                    "dtype": str(value.dtype),
-                    "axes": list(self.variable_axes.get(name, ())),
-                    "description": self.variable_descriptions.get(name, ""),
-                }
-                for name, value in self.data.items()
-            }
-            axes = {
-                name: {
-                    "size": len(axis.values),
-                    "dtype": str(axis.values.dtype),
-                    "description": axis.description,
-                    "storage": axis.storage,
-                }
-                for name, axis in self.axes.items()
-            }
-            return {
-                "revision": self.data_revision,
-                "target": self.target,
-                "features": list(self.features),
-                "columns": list(self.data),
-                "rows": rows,
-                "variable_descriptions": dict(self.variable_descriptions),
-                "provenance": dict(self.provenance),
-                "variables": variables,
-                "axes": axes,
-                "manifest": self.data_manifest_path,
-            }
-
-    def __getitem__(self, key: str) -> Any:
-        if key == "data":
-            return self.tool_data
-        if key == "workspace_dir":
-            value = self.workspace_dir
-            if value is None:
-                raise KeyError(key)
-            return value
-        if key in self._FIELDS:
-            return getattr(self, key)
-        return self._values[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        if key == "data":
-            self.data = self._normalize_data(value)
-            self.axes = dict(getattr(self.data, "axes", {}))
-            self.variable_axes = dict(getattr(self.data, "variable_axes", {}))
-            self.training_data = None
-        elif key == "workspace_dir":
-            self._values[key] = value
-        elif key in self._FIELDS:
-            setattr(self, key, value)
-        else:
-            self._values[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        if key in {"data", *self._FIELDS}:
-            raise KeyError(f"cannot delete structured context field: {key}")
-        del self._values[key]
-
-    def __iter__(self) -> Iterator[str]:
-        keys = ["data", *sorted(self._FIELDS)]
-        if self.workspace_dir is not None:
-            keys.append("workspace_dir")
-        yield from dict.fromkeys([*keys, *self._values])
-
-    def __len__(self) -> int:
-        return sum(1 for _ in self)
+        axes = set(self.axis_names())
+        return {
+            "revision": int(getattr(self.args, "data_revision", 0)), "num_nodes": self.num_nodes,
+            "target": self.target, "features": list(self.feature_names()), "columns": list(self.data),
+            "rows": len(self.data[self.target]) if self.target in self.data else 0,
+            "variable_descriptions": dict(self.variable_descriptions),
+            "variables": {name: {"shape": list(value.shape), "dtype": str(value.dtype), "axes": list(self.variable_axes.get(name, ())), "description": self.variable_descriptions[name]} for name, value in self.data.items() if name not in axes},
+            "axes": {name: {"size": len(self.data[name]), "dtype": str(self.data[name].dtype), "description": self.variable_descriptions[name]} for name in axes},
+        }
 
     def __getstate__(self) -> dict[str, Any]:
-        """Make tool contexts serializable for joblib worker processes."""
         state = self.__dict__.copy()
         state.pop("_lock", None)
         return state

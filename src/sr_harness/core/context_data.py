@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,48 +12,14 @@ class ContextManifestError(ValueError):
     """Raised when a context-data manifest cannot be validated."""
 
 
-@dataclass(frozen=True)
-class ContextAxis:
-    """One named axis shared by one or more structured variables.
-
-    Args:
-        name: Logical axis name used by variable declarations.
-        values: Coordinate values, including generated positional coordinates.
-        description: Human-readable meaning and units.
-        storage: Manifest representation: ``values``, ``file``, or ``size``.
-    """
-
-    name: str
-    values: np.ndarray
-    description: str
-    storage: str
-
-
-class ContextData(dict[str, np.ndarray]):
-    """Array mapping enriched with variable descriptions and named axes."""
-
-    def __init__(
-        self,
-        values: dict[str, np.ndarray],
-        *,
-        axes: dict[str, ContextAxis] | None = None,
-        variable_axes: dict[str, tuple[str, ...]] | None = None,
-        descriptions: dict[str, str] | None = None,
-        directory: Path | None = None,
-    ):
-        super().__init__(values)
-        self.axes = dict(axes or {})
-        self.variable_axes = dict(variable_axes or {})
-        self.descriptions = dict(descriptions or {})
-        self.directory = directory
-
-
-class ContextDataStore:
-    """Validate and load a flat NPY collection described by ``manifest.json``."""
+class ContextDataLoader:
+    """Short-lived validator and loader for one manifest-backed NPY collection."""
 
     MANIFEST_NAME = "manifest.json"
-    ROOT_FIELDS = {"variables", "axes"}
-    VARIABLE_FIELDS = {"file", "description", "axes"}
+    REQUIRED_ROOT_FIELDS = {"variables", "axes"}
+    OPTIONAL_ROOT_FIELDS = {"num_nodes"}
+    REQUIRED_VARIABLE_FIELDS = {"file", "description", "axes"}
+    OPTIONAL_VARIABLE_FIELDS = {"structure"}
     AXIS_SOURCE_FIELDS = {"values", "file", "size"}
     AXIS_FIELDS = {"description", *AXIS_SOURCE_FIELDS}
 
@@ -76,6 +41,7 @@ class ContextDataStore:
             "path": str(self.directory),
             "errors": errors,
             "warnings": warnings,
+            "num_nodes": loaded["num_nodes"] if loaded is not None else None,
             "variables": {},
             "axes": {},
         }
@@ -85,27 +51,32 @@ class ContextDataStore:
                     "file": manifest["variables"][name]["file"],
                     "shape": list(value.shape),
                     "dtype": str(value.dtype),
-                    "axes": list(loaded.variable_axes[name]),
-                    "description": loaded.descriptions[name],
+                    "axes": list(loaded["variable_axes"][name]),
+                    **(
+                        {"structure": loaded["variable_structures"][name]}
+                        if name in loaded["variable_structures"] else {}
+                    ),
+                    "description": loaded["variable_descriptions"][name],
                 }
-                for name, value in loaded.items()
+                for name, value in loaded["data"].items()
+                if name in manifest["variables"]
             }
             report["axes"] = {
                 name: {
-                    "size": len(axis.values),
-                    "dtype": str(axis.values.dtype),
-                    "storage": axis.storage,
-                    "description": axis.description,
+                    "size": len(loaded["data"][name]),
+                    "dtype": str(loaded["data"][name].dtype),
+                    "storage": axis["storage"],
+                    "description": loaded["variable_descriptions"][name],
                 }
-                for name, axis in loaded.axes.items()
+                for name, axis in loaded["axis_metadata"].items()
             }
         return report
 
-    def load(self) -> ContextData:
+    def load(self) -> dict[str, Any]:
         """Validate and load all variables and axes.
 
         Returns:
-            A mapping of variable names to arrays with attached axis metadata.
+            An AgentContext-ready mapping containing arrays and metadata.
 
         Raises:
             ContextManifestError: If the manifest or referenced arrays are invalid.
@@ -151,10 +122,22 @@ class ContextDataStore:
         manifest: dict[str, Any],
         errors: list[str],
         warnings: list[str],
-    ) -> ContextData | None:
-        self._check_fields("manifest", manifest, self.ROOT_FIELDS, errors)
+    ) -> dict[str, Any] | None:
+        self._check_fields(
+            "manifest",
+            manifest,
+            self.REQUIRED_ROOT_FIELDS,
+            errors,
+            optional=self.OPTIONAL_ROOT_FIELDS,
+        )
         variables = manifest.get("variables")
         axes = manifest.get("axes")
+        num_nodes = manifest.get("num_nodes")
+        if "num_nodes" in manifest and (
+            isinstance(num_nodes, bool) or not isinstance(num_nodes, int) or num_nodes < 1
+        ):
+            errors.append("manifest.num_nodes must be a positive integer")
+            num_nodes = None
         if not isinstance(variables, dict) or not variables:
             errors.append("manifest.variables must be a non-empty object")
             variables = {}
@@ -162,7 +145,7 @@ class ContextDataStore:
             errors.append("manifest.axes must be an object")
             axes = {}
 
-        loaded_axes: dict[str, ContextAxis] = {}
+        loaded_axes: dict[str, dict[str, Any]] = {}
         referenced_files = {self.MANIFEST_NAME}
         for name, spec in axes.items():
             location = f"axes.{name}"
@@ -204,12 +187,13 @@ class ContextDataStore:
                         raise ValueError(f"axis array must be one-dimensional, got shape {values.shape}")
                 if values.ndim != 1:
                     raise ValueError("values must be one-dimensional")
-                loaded_axes[name] = ContextAxis(name, values, description, source)
+                loaded_axes[name] = {"values": values, "description": description, "storage": source}
             except (OSError, ValueError) as exc:
                 errors.append(f"{location}: {exc}")
 
         loaded_values: dict[str, np.ndarray] = {}
         variable_axes: dict[str, tuple[str, ...]] = {}
+        variable_structures: dict[str, str] = {}
         descriptions: dict[str, str] = {}
         used_axes: set[str] = set()
         for name, spec in variables.items():
@@ -220,8 +204,18 @@ class ContextDataStore:
             if not isinstance(spec, dict):
                 errors.append(f"{location} must be an object")
                 continue
-            self._check_fields(location, spec, self.VARIABLE_FIELDS, errors)
+            self._check_fields(
+                location,
+                spec,
+                self.REQUIRED_VARIABLE_FIELDS,
+                errors,
+                optional=self.OPTIONAL_VARIABLE_FIELDS,
+            )
             description = self._description(location, spec, errors)
+            structure = spec.get("structure")
+            if structure is not None and not self._valid_name(structure):
+                errors.append(f"{location}.structure must name an A or T variable")
+                structure = None
             expected = f"{name}.npy"
             if spec.get("file") != expected:
                 errors.append(f"{location}.file must be {expected!r}")
@@ -249,34 +243,71 @@ class ContextDataStore:
                 )
                 continue
             mismatches = [
-                f"{axis}={len(loaded_axes[axis].values)} (data={value.shape[index]})"
+                f"{axis}={len(loaded_axes[axis]['values'])} (data={value.shape[index]})"
                 for index, axis in enumerate(declared_axes)
-                if axis in loaded_axes and len(loaded_axes[axis].values) != value.shape[index]
+                if axis in loaded_axes and len(loaded_axes[axis]["values"]) != value.shape[index]
             ]
             if mismatches:
                 errors.append(f"{location}: axis length mismatch: {', '.join(mismatches)}")
                 continue
             loaded_values[name] = value
             variable_axes[name] = tuple(declared_axes)
+            if structure is not None:
+                variable_structures[name] = structure
             descriptions[name] = description
             used_axes.update(declared_axes)
 
         unused_axes = sorted(set(axes) - used_axes)
         if unused_axes:
             errors.append(f"manifest.axes contains unreferenced axes: {unused_axes}")
+
+        if bool(variable_structures) != (num_nodes is not None):
+            errors.append("manifest.num_nodes and variable structure metadata must appear together")
+        for variable, structure in variable_structures.items():
+            location = f"variables.{variable}.structure"
+            if variable == structure:
+                errors.append(f"{location}: a structured variable cannot reference itself")
+                continue
+            if structure not in loaded_values:
+                errors.append(f"{location} references missing variable {structure!r}")
+                continue
+            relation = loaded_values[structure]
+            if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
+                errors.append(
+                    f"{location}: {structure!r} must have shape (E, 2) or (H, 3), "
+                    f"got {relation.shape}"
+                )
+                continue
+            dependent = loaded_values.get(variable)
+            if dependent is not None and (
+                dependent.ndim == 0 or dependent.shape[-1] != relation.shape[0]
+            ):
+                errors.append(
+                    f"{location}: {variable!r} must end in a dimension of "
+                    f"length {relation.shape[0]}"
+                )
+            if relation.dtype.kind not in "iu":
+                errors.append(f"{location}: relation endpoints must use an integer dtype")
+            elif num_nodes is not None and (
+                np.any(relation < 0) or np.any(relation >= num_nodes)
+            ):
+                errors.append(f"{location}: relation endpoints must be in [0, {num_nodes})")
         actual_npy = {path.name for path in self.directory.glob("*.npy") if path.is_file()}
         untracked = sorted(actual_npy - referenced_files)
         if untracked:
             warnings.append(f"unreferenced NPY files: {untracked}")
         if errors:
             return None
-        return ContextData(
-            loaded_values,
-            axes=loaded_axes,
-            variable_axes=variable_axes,
-            descriptions=descriptions,
-            directory=self.directory,
-        )
+        data = {**{name: axis["values"] for name, axis in loaded_axes.items()}, **loaded_values}
+        all_descriptions = {name: axis["description"] for name, axis in loaded_axes.items()} | descriptions
+        return {
+            "data": data,
+            "variable_descriptions": all_descriptions,
+            "variable_axes": variable_axes,
+            "variable_structures": variable_structures,
+            "num_nodes": num_nodes,
+            "axis_metadata": loaded_axes,
+        }
 
     def _load_array(self, filename: str) -> np.ndarray:
         path = self.directory / filename
@@ -314,9 +345,12 @@ class ContextDataStore:
         value: dict[str, Any],
         expected: set[str],
         errors: list[str],
+        *,
+        optional: set[str] | None = None,
     ) -> None:
+        optional = optional or set()
         missing = sorted(expected - set(value))
-        extra = sorted(set(value) - expected)
+        extra = sorted(set(value) - expected - optional)
         if missing:
             errors.append(f"{location} is missing fields: {missing}")
         if extra:

@@ -36,8 +36,8 @@ class EditSkill(BaseTool):
         """
         name = name.strip()
         replacements = self._parse_patch(patch)
-        assert "skill_manager" in self.context, "skill_manager must be provided in context."
-        manager = self.context["skill_manager"]
+        assert hasattr(self.context.args, "skill_manager"), "skill_manager must be provided in context.args."
+        manager = self.context.args.skill_manager
         if name not in manager.load_skills():
             raise ValueError(f"Skill '{name}' does not exist and cannot be edited.")
         elif (skill := manager.get_skill(name)).readonly:

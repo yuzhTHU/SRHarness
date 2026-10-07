@@ -24,7 +24,7 @@ class AskHumanTool(BaseTool):
                 what the best result is so far, and what we have learned), then asks a clear question
                 about what direction to explore next. A human expert will read this summary and reply with guidance.
         """
-        if (callback := self.context.get("human_input_callback")) is None:
+        if (callback := getattr(self.context.args, "human_input_callback", None)) is None:
             return {"human_available": False, "human_response": None}
         else:
             return {"human_available": True, "human_response": callback(message)}

@@ -37,8 +37,9 @@ class CommitDataTool(BaseTool):
             variable_descriptions: Optional human-readable descriptions keyed by column name.
             provenance_note: Short note describing source and transformations.
         """
-        workspace = self.context.workspace
-        if workspace is None or (source := workspace.resolve(path)) is None or not source.is_file():
+        workspace = getattr(self.context.args, "workspace_manager", None)
+        source = workspace.resolve(path) if workspace is not None else (self.context.workspace / path).resolve()
+        if not source.is_file() or self.context.workspace not in source.parents:
             raise ValueError("path must identify an existing workspace file")
         suffix = source.suffix.lower()
         if suffix == ".csv":
@@ -62,14 +63,14 @@ class CommitDataTool(BaseTool):
         values = numeric.to_numpy(dtype=float)
         if not np.isfinite(values).all():
             raise ValueError("selected columns must contain finite values without missing data")
-        if self.context.get("sr_active", False) and self.context.data:
+        if getattr(self.context.args, "sr_active", False) and self.context.data:
             if target != self.context.target:
                 raise ValueError("cannot change the target while symbolic regression is active")
             if len(numeric) != len(next(iter(self.context.data.values()))):
                 raise ValueError("cannot change row alignment while symbolic regression is active")
-            removed = [name for name in self.context.features if name not in features]
+            removed = [name for name in self.context.feature_names() if name not in features]
             changed = [
-                name for name in [self.context.target, *self.context.features]
+                name for name in [self.context.target, *self.context.feature_names()]
                 if name in numeric
                 and not np.array_equal(
                     numeric[name].to_numpy(dtype=float),
@@ -83,14 +84,11 @@ class CommitDataTool(BaseTool):
                     f"removed={removed}, changed={changed}"
                 )
         descriptions = self.context.variable_descriptions | dict(variable_descriptions or {})
-        history = list(self.context.provenance.get("history", []))
-        history.append({"source_path": path, "note": provenance_note.strip()})
         change = self.context.commit_data(
             {name: numeric[name].to_numpy(dtype=float) for name in selected},
             target=target,
             features=list(features),
             variable_descriptions=descriptions,
-            provenance={"history": history},
         )
         return {"data_committed": True, **change}
 

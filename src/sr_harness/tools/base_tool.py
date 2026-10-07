@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 import re
+import argparse
 import time
 import warnings
 import numpy as np
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, get_args, get
 from ..utils import FactoryMixin, log_exception
 from ..core import AgentContext
 from ..core.tool import ToolCallResult, ToolMetadata
+from ..evaluator import regression_metrics
 if TYPE_CHECKING:
     from ..skills import SkillManager
 
@@ -57,9 +59,30 @@ class BaseTool(ABC, FactoryMixin):
 
     def __init__(self, context: AgentContext | None = None, **values):
         """ context 中传入一些工具执行时需要的上下文信息，如数据、模型等，这些信息不适合放在 execute 的参数列表中让 LLM 生成 """
-        self.context = context if context is not None else values
-        if context is not None and values:
-            self.context.update(values)
+        if isinstance(context, AgentContext):
+            self.context = context
+            for name, value in values.items():
+                setattr(self.context.args, name, value)
+            return
+        supplied = dict(context or {}) | values
+        data = supplied.pop("data", {})
+        target = supplied.pop("target", next(iter(data), None))
+        evaluation_data = supplied.pop("evaluation_data", None)
+        evaluator = supplied.pop("evaluator", None)
+        if evaluator is None:
+            from ..evaluator import DefaultEvaluator
+            evaluator = DefaultEvaluator()
+        workspace = supplied.pop("workspace", supplied.pop("workspace_dir", None))
+        supplied.setdefault("validation_fraction", 0)
+        args = argparse.Namespace(**supplied)
+        self.context = AgentContext(
+            args=args, data=data, target=target, evaluator=evaluator, workspace=workspace,
+        )
+        if evaluation_data is not None:
+            self.context._split_cache = {
+                "train": self.context.data,
+                "evaluation": {name: np.asarray(value) for name, value in evaluation_data.items()},
+            }
 
     @classmethod
     def get_doc(cls) -> dict[str, str] | None:
@@ -511,59 +534,14 @@ class BaseTool(ABC, FactoryMixin):
 
         Returns:
             Fit, correlation, information-criterion, and complexity metrics."""
-        try:
-            y_pred, y_true = np.broadcast_arrays(np.asarray(y_pred), np.asarray(y_true))
-        except ValueError as exc:
-            raise ValueError(
-                f"Prediction shape {np.shape(y_pred)} and target shape {np.shape(y_true)} "
-                "cannot be broadcast to a common shape."
-            ) from exc
-        y_pred = y_pred.astype(float, copy=False).flatten()
-        y_true = y_true.astype(float, copy=False).flatten()
-
-        residuals = y_pred - y_true
-        mse = float(np.mean(residuals ** 2))
-        rmse = float(np.sqrt(mse))
-        mae = float(np.mean(np.abs(residuals)))
-        if np.any(non_zero := ~np.isclose(y_true, 0.0)):
-            mape = float(np.mean(np.abs(residuals[non_zero] / y_true[non_zero])))
-        else:
-            mape = 0.0 if np.allclose(y_pred, y_true) else float("inf")
-        ss_res = float(np.sum(residuals ** 2))
-        ss_tot = float(np.sum((y_true - np.mean(y_true)) ** 2))
-        r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
-        n_samples = int(y_true.size)
-        n_parameters = engine.count_parameters(f)
-        if np.isfinite(ss_res) and ss_res > 0:
-            log_likelihood = -n_samples / 2 * (
-                np.log(2 * np.pi) + np.log(ss_res / n_samples) + 1
-            )
-            aic = float(2 * n_parameters - 2 * log_likelihood)
-            bic = float(n_parameters * np.log(n_samples) - 2 * log_likelihood)
-        elif ss_res == 0:
-            aic = bic = float("-inf")
-        else:
-            aic = bic = float("nan")
-
-        pearson_r, spearman_r = cls.correlation_coefficients(y_true, y_pred)
-        return {
-            "mse": mse,
-            "rmse": rmse,
-            "mae": mae,
-            "mape": mape,
-            "r2": r2,
-            "aic": aic,
-            "bic": bic,
-            "pearson_r": pearson_r,
-            "spearman_r": spearman_r,
-            "complexity": len(f),
-        }
+        return regression_metrics(f, y_true, y_pred)
 
     def evaluate(
         self,
         f: engine.Expression,
         y: engine.Expression,
         show_diagnostics: bool = True,
+        parameters: dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """Evaluate a symbolic prediction against a symbolic target.
 
@@ -573,6 +551,7 @@ class BaseTool(ABC, FactoryMixin):
             f: Symbolic prediction expression.
             y: Symbolic target expression.
             show_diagnostics: Whether to include residual diagnostics.
+            parameters: Parameters fitted by a custom evaluator, if any.
 
         Returns:
             Candidate eligibility and metrics for each available data split."""
@@ -583,39 +562,61 @@ class BaseTool(ABC, FactoryMixin):
             'train': {'metrics': None, 'diagnostics': None},
             'validation': {'metrics': None, 'diagnostics': None},
         }
-        if data := self.context.get("data"):
-            y_pred = f.eval(data)
-            y_true = y.eval(data)
-            data_split_results['train']['metrics'] = self.calculate_metrics(f, y_true, y_pred)
-            if show_diagnostics:
-                data_split_results['train']['diagnostics'] = self.residual_diagnostics(
-                    y_true=np.asarray(y_true),
-                    y_pred=np.asarray(y_pred),
-                    data=data,
-                    target_expression=y.to_str(),
-                    max_samples=10,
-                )
-            else:
-                data_split_results['train'].pop('diagnostics')
-        else:
-            raise ValueError("Training data is missing in context['data'] for evaluation.")
-        if data := self.context.get("evaluation_data"):
-            y_pred = f.eval(data)
-            y_true = y.eval(data)
-            data_split_results['validation']['metrics'] = self.calculate_metrics(f, y_true, y_pred)
-            if show_diagnostics:
-                data_split_results['validation']['diagnostics'] = self.residual_diagnostics(
-                    y_true=np.asarray(y_true),
-                    y_pred=np.asarray(y_pred),
-                    data=data,
-                    target_expression=y.to_str(),
-                )
-            else:
-                data_split_results['validation'].pop('diagnostics')
-        else:
-            data_split_results.pop('validation')
+        evaluator = self.context.evaluator
+        def evaluate_split(data, *, split_context=None, max_samples=None):
+            num_nodes = split_context.num_nodes if split_context is not None else None
+            y_true = y.eval(data, num_nodes=num_nodes)
+            if evaluator is not None:
+                result = evaluator.evaluate(f, split_context, y_true)
+                if not isinstance(result, dict):
+                    raise TypeError("BaseEvaluator.evaluate() must return a dictionary.")
+                metrics = {name: value for name, value in result.items() if name != "diagnostics"}
+                diagnostics = result.get("diagnostics")
+                if not isinstance(metrics, dict):
+                    raise TypeError("BaseEvaluator metrics must be a dictionary.")
+                metrics = dict(metrics)
+                metrics.setdefault("complexity", len(f))
+                split = {"metrics": metrics}
+                if show_diagnostics:
+                    if diagnostics is None:
+                        diagnostics = self.residual_diagnostics(
+                            y_true=np.asarray(y_true),
+                            y_pred=np.asarray(f.evaluate(data, num_nodes=num_nodes)),
+                            data=data,
+                            target_expression=y.to_str(),
+                            **(
+                                {"max_samples": max_samples}
+                                if max_samples is not None else {}
+                            ),
+                        )
+                    split["diagnostics"] = diagnostics
+                return split
 
-        target = self.context["target"]
+            y_pred = f.eval(data, num_nodes=num_nodes)
+            split = {"metrics": self.calculate_metrics(f, y_true, y_pred)}
+            if show_diagnostics:
+                split["diagnostics"] = self.residual_diagnostics(
+                    y_true=np.asarray(y_true),
+                    y_pred=np.asarray(y_pred),
+                    data=data,
+                    target_expression=y.to_str(),
+                    **({"max_samples": max_samples} if max_samples is not None else {}),
+                )
+            return split
+
+        if isinstance(self.context, AgentContext):
+            train_context = self.context.train_split()
+            evaluation_context = self.context.evaluation_split()
+            data_split_results['train'] = evaluate_split(
+                train_context.data, split_context=train_context, max_samples=10
+            )
+            if evaluation_context.data:
+                data_split_results['validation'] = evaluate_split(
+                    evaluation_context.data, split_context=evaluation_context
+                )
+            else:
+                data_split_results.pop('validation')
+            target = self.context.target
         var_names = {var.name for var in f.iter_preorder() if isinstance(var, engine.Variable)}
         ineligibility_reasons = []
         if y.to_str() != target:
@@ -666,17 +667,16 @@ class BaseTool(ABC, FactoryMixin):
             'train': {'metrics': None},
             'validation': {'metrics': None},
         }
-        if data := self.context.get("data"):
+        if isinstance(self.context, AgentContext):
             data_split_results['train']['metrics'] = empty_metrics
-        else:
-            raise ValueError("Training data is missing in context['data'] for evaluation.")
-        if data := self.context.get("evaluation_data"):
-            data_split_results['validation']['metrics'] = empty_metrics
-        else:
-            data_split_results.pop('validation')
+            if not self.context.evaluation_data():
+                data_split_results.pop('validation')
+            else:
+                data_split_results['validation']['metrics'] = empty_metrics
+            target = self.context.target
         return {
             "formula": formula,
-            "target_expression": self.context["target"],
+            "target_expression": target,
             "is_candidate": False,
             "candidate_ineligibility_reasons": ["no valid formula was produced"],
             "data_split_results": data_split_results,

@@ -91,6 +91,28 @@ def count_parameters(
     return count
 
 
+def parameter_values(expression: Expression) -> dict[str, Any]:
+    """Collect parameter values already bound into an expression."""
+    values: dict[str, Any] = {}
+    for node in iter_preorder(expression):
+        if isinstance(node, Parameter) and node.value is not None:
+            values[node.name] = float(node.value)
+        elif isinstance(node, GroupedParameter) and node.value is not None:
+            values[grouped_parameter_key(node)] = dict(node.value)
+    return values
+
+
+def unbound_parameters(expression: Expression) -> list[str]:
+    """Return stable names for parameter nodes that have no fitted value."""
+    names = []
+    for node in iter_preorder(expression):
+        if isinstance(node, Parameter) and node.value is None:
+            names.append(node.name)
+        elif isinstance(node, GroupedParameter) and node.value is None:
+            names.append(grouped_parameter_key(node))
+    return list(dict.fromkeys(names))
+
+
 def _finite_scalar(value: Any) -> bool:
     array = np.asarray(value)
     return array.ndim == 0 and bool(np.isfinite(array))

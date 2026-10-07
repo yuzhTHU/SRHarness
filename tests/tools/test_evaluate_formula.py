@@ -70,7 +70,8 @@ class TestEvaluateTool:
         assert np.isnan(result["data_split_results"]["train"]["metrics"]["mse"])
         assert result["is_candidate"] is False
         assert result["candidate_ineligibility_reasons"] == [
-            "the formula does not produce a finite MSE on the train set"
+            "the formula does not produce a finite MSE on the train set",
+            "the formula does not produce a finite MSE on the validation set",
         ]
 
     def test_multiple_features(self):
@@ -122,8 +123,8 @@ class TestEvaluateTool:
         y = np.array([2.1, 3.9, 6.2, 7.9, 10.1])  # y ≈ 2*x，带有噪声
 
         tool = self.make_tool(X, y)
-        # 可拟合参数是 Number 节点（如 1.0），不是符号变量（如 a）
-        result = tool.execute("1.0 * x1", fit=True)
+        # DefaultEvaluator 只拟合 Expression 中显式声明的 param。
+        result = tool.execute("param('slope', value=1.0) * x1", fit=True)
 
         # 拟合后应该能得到较好的结果
         assert result["data_split_results"]["train"]["metrics"]["r2"] > 0.95

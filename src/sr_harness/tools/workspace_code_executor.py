@@ -334,6 +334,25 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
             readonly_mounts: Read-only workspace names mapped to source paths.
             result_queue: The result queue value.
         """
+        # Short-lived sandbox workers must not create a host-sized BLAS pool.
+        # Such pools can exhaust a process/thread quota before the worker can
+        # even start the multiprocessing queue's result-feeder thread.
+        for variable in (
+            "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+        ):
+            os.environ[variable] = "1"
+        try:
+            from threadpoolctl import threadpool_limits
+        except ImportError:
+            threadpool_limits = None
+        _thread_limiter = None
+        if threadpool_limits is not None:
+            # Enter before installing restricted file hooks: threadpoolctl may
+            # inspect shared libraries through absolute system paths.
+            _thread_limiter = threadpool_limits(limits=1)
+            _thread_limiter.__enter__()
+
         cls.prepare_sandbox_runtime(
             stdin_text=stdin_text,
             timeout_seconds=timeout_seconds,
@@ -392,10 +411,9 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
         """
         # 准备 stdin (已被弃用)
-        data_revision = getattr(self.context, "data_revision", None)
+        data_revision = getattr(self.context.args, "data_revision", None)
         if not hasattr(self, 'stdin_text') or getattr(self, "_stdin_data_revision", None) != data_revision:
-            assert 'data' in self.context
-            data = self.context['data']
+            data = self.context.data
             data_dict = self.serialization(data)
             stdin_text = self.stdin_text = json.dumps(data_dict, ensure_ascii=False)
             self._stdin_data_revision = data_revision
@@ -408,9 +426,8 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
             raise Exception(f"Code security check failed since: {validation_result['error_msg']}")
 
         # 准备子进程
-        assert 'workspace_dir' in self.context
-        workspace_dir = self.context['workspace_dir']
-        workspace = self.context.get("workspace")
+        workspace_dir = str(self.context.workspace)
+        workspace = getattr(self.context.args, "workspace_manager", None)
         readonly_mounts = {
             logical.name: str(source)
             for logical, source in getattr(workspace, "readonly_mounts", {}).items()

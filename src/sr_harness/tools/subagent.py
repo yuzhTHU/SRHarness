@@ -59,7 +59,7 @@ class SubagentTool(BaseTool):
         if mode not in self.MODES:
             raise ValueError(f"mode must be one of: {', '.join(self.MODES)}")
         messages = self._messages(objective, mode, candidate_formulas or [], evidence)
-        callback = self.context.get("subagent_callback")
+        callback = getattr(self.context.args, "subagent_callback", None)
         if callback is not None:
             response = callback(messages)
             return {
@@ -72,11 +72,11 @@ class SubagentTool(BaseTool):
         from ..api import BaseAPI
 
         api = BaseAPI.create(
-            self.context.get("subagent_llm_provider") or self.context.get("llm_provider"),
-            model=self.context.get("subagent_llm_model") or self.context.get("llm_model"),
+            getattr(self.context.args, "subagent_llm_provider", None) or getattr(self.context.args, "llm_provider", None),
+            model=getattr(self.context.args, "subagent_llm_model", None) or getattr(self.context.args, "llm_model", None),
             tool_list=None,
         )
-        result = api(messages, n=1, max_tokens=self.context.get("llm_max_tokens", 4096))
+        result = api(messages, n=1, max_tokens=getattr(self.context.args, "llm_max_tokens", 4096))
         content = ""
         for content, _, _ in result:
             pass
@@ -94,7 +94,7 @@ class SubagentTool(BaseTool):
         candidate_formulas: List[str],
         evidence: str,
     ) -> list[dict[str, str]]:
-        tool_catalog = self.context.get("tool_catalog") or BaseTool.load_tool_classes()
+        tool_catalog = getattr(self.context.args, "tool_catalog", None) or BaseTool.load_tool_classes()
         tool_names = ", ".join(
             sorted(
                 tool.metadata.name
@@ -127,8 +127,8 @@ class SubagentTool(BaseTool):
         ]
 
     def _data_summary(self) -> str:
-        data = self.context.get("data") or {}
-        target = self.context.get("target")
+        data = self.context.data
+        target = self.context.target
         target_values = self._finite_vector(data.get(target)) if target in data else None
         lines = []
         for name, values in data.items():

@@ -49,8 +49,8 @@ class DataPreparationAgent(Agent):
         self.tool_parser = tool_parser
         self.llm_max_tokens = llm_max_tokens
         self.turn_count = 0
-        skill_manager = context.get("skill_manager") or SkillManager()
-        context["skill_manager"] = skill_manager
+        skill_manager = getattr(context.args, "skill_manager", None) or SkillManager()
+        context.args.skill_manager = skill_manager
         self.skills = (
             list(skills)
             if skills is not None
@@ -78,11 +78,17 @@ class DataPreparationAgent(Agent):
                 "workspace_code_executor for reproducible transformations.\n\n"
                 "Store general structured results in the flat workspace directory context.data/. Put each "
                 "variable and each file-backed axis in <name>.npy, using NumPy arrays "
-                "that load with allow_pickle=False. The directory must contain manifest.json with exactly "
-                "two top-level objects: variables and axes. Each variable entry must contain exactly file, "
-                "description, and axes; its file must be <variable>.npy and its axes list must follow array "
+                "that load with allow_pickle=False. The directory must contain manifest.json with variables "
+                "and axes objects. For network or hypergraph data, also add a positive integer num_nodes at "
+                "the manifest root; omit it for ordinary element-wise data. Each variable entry must contain "
+                "file, description, and axes; its file must be <variable>.npy and its axes list must follow array "
                 "dimension order. Each axis entry must contain description and exactly one of: values for a "
                 "short inline JSON array, file for <axis>.npy, or size for a positive positional length. "
+                "For each variable whose final dimension depends on an edge list A or hyperedge list T, "
+                "set that variable's structure field to the name of A or T. The referenced relation must "
+                "be an integer (E, 2) or (H, 3) array whose endpoints are in [0, num_nodes), and the "
+                "dependent variable must have shape (..., E) or (..., H). Do not add structure to A or T "
+                "itself, and never infer a relation from a variable name. "
                 "Do not add format, version, revision, problem, attributes, shape, or dtype fields. Describe "
                 "units and other meaning in description. Preserve existing variable files unless the user "
                 "asks to replace them. NPY variables may contain numeric, Boolean, or string values. Preserve "
@@ -115,7 +121,7 @@ class DataPreparationAgent(Agent):
         Args:
             context: Shared agent and tool context.
         """
-        context["enabled_skills"] = self.skills
+        context.args.enabled_skills = self.skills
         super().initialize_tools(context)
 
     def run(self, instruction: str) -> dict[str, Any]:
@@ -130,11 +136,9 @@ class DataPreparationAgent(Agent):
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("instruction must not be empty")
-        self.context.update({
-            "llm_provider": self.llm_provider,
-            "llm_model": self.llm_model,
-            "llm_max_tokens": self.llm_max_tokens,
-        })
+        self.context.args.llm_provider = self.llm_provider
+        self.context.args.llm_model = self.llm_model
+        self.context.args.llm_max_tokens = self.llm_max_tokens
         self.buffer.append({"role": "user", "content": instruction})
         self._publish("data_user", {"content": instruction})
         committed = False

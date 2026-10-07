@@ -52,8 +52,8 @@ def llm_judge_equivalence(
     messages.append({'role': 'user', 'content': (
         f"Ground truth: {f_true.to_str()}\n"
         f"Predicted: {f_pred.to_str()}\n"
-        f"Variable ranges:\n"
-        f"{"\n".join(f"- {name}: [{lo}, {hi}]" for name, (lo, hi) in ranges.items())}"
+        "Variable ranges:\n"
+        + "\n".join(f"- {name}: [{lo}, {hi}]" for name, (lo, hi) in ranges.items())
     )})
     api = BaseAPI.create(llm_provider, model=llm_model)
     total_usage = {'token': {}, 'price': {}}

@@ -193,34 +193,26 @@ context.add_features(
 
 ## 自定义评估协议 {#custom-evaluator}
 
-当普通单步回归指标不适合任务时，可以实现 `Evaluator`。接口只依赖公式字符串、普通字典和目标数据，不要求了解搜索树或 Web 会话：
+评测协议以 `BaseEvaluator(ABC)` 为抽象基类：它定义静态的 `fit()`、`evaluate()`、`split_data()` 协议，并提供 `calc_mse()`、`calc_rmse()`、`calc_mae()`、`calc_mape()`、`calc_r2()`、`calc_aic()`、`calc_bic()` 等独立指标函数。`DefaultEvaluator(BaseEvaluator)` 面向所有变量均为 `(N,)` 的普通表格数据；`GraphEvaluator(DefaultEvaluator)` 处理可广播的图或超图数组。具体任务可以继承 `DefaultEvaluator` 或 `GraphEvaluator` 只改写部分行为，差异较大时也可以直接继承 `BaseEvaluator`。
+
+上下文通过 `context.data` 暴露当前 data split，通过 `context.target` 和 `context.num_nodes` 暴露数据元信息；`context.args` 是只保存运行控制参数的 `argparse.Namespace`。实现应先取出最少参数，再把这些参数传给辅助方法；不要把整个 `context` 或 `context.args` 继续向下透传：
 
 ```python
-from typing import Any
-from sr_harness import Evaluator
+from sr_harness import DefaultEvaluator
 
-class TrajectoryEvaluator(Evaluator):
-    def fit(
-        self,
-        formula: str,
-        data: dict[str, Any],
-        target: Any,
-    ) -> dict[str, Any]:
-        # Fit parameters with a user-selected optimizer.
-        return {"alpha": 0.3}
+class TrajectoryEvaluator(DefaultEvaluator):
+    @staticmethod
+    def fit(expression, context, target):
+        return expression.fit(context.data, target).expression
 
-    def evaluate(
-        self,
-        formula: str,
-        data: dict[str, Any],
-        target: Any,
-        parameters: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    @staticmethod
+    def evaluate(expression, context, target):
         # Integrate an ODE and compare its trajectory with observations.
-        return {"trajectory_rmse": 0.01}
+        prediction = expression.evaluate(context.data)
+        return {"trajectory_rmse": 0.01, "complexity": len(expression)}
 ```
 
-把实例传给 `SRAgent(evaluator=...)` 后，它会进入共享上下文，供相应的科学工具调用。
+`fit()` 必须返回可直接求值且所有参数均已绑定的 `Expression`；`evaluate()` 返回当前 split 的扁平 metrics 字典。`complexity` 与 MSE、R² 等指标统一位于每个 train/validation split 的 `metrics` 中。把实例传给 `SRAgent(evaluator=...)` 后，它会进入共享上下文，供相应的科学工具调用。
 
 ## 工具与 Skill
 
@@ -244,7 +236,7 @@ class ColumnRangeTool(BaseTool):
         Returns:
             dict[str, Any]: Minimum and maximum values.
         """
-        values = self.context["data"][column]
+        values = self.context.data[column]
         return {"minimum": float(values.min()), "maximum": float(values.max())}
 ```
 
@@ -1582,32 +1574,34 @@ Tool calls returned by the provider.
 
 ### `sr_harness.core.context.AgentContext`
 
-Authoritative shared data and resources for cooperating agents.
+Authoritative shared context for agents, evaluators, and tools. Runtime options
+live in ``args: argparse.Namespace``. Scientific state lives directly in
+``data``, ``target``, ``variable_descriptions``, ``variable_axes``, optional
+``variable_structures``/``num_nodes``, ``evaluator``, and ``workspace``.
+Axes are ordinary one-dimensional arrays in ``data``. ``variable_axes`` keys
+are non-axis variables and its values collectively name every axis variable.
+The two groups are disjoint and partition ``data``. Context is not a mapping;
+use ``context.data`` rather than ``context["data"]``.
 
-The mapping interface keeps existing tools compatible while attribute access
-exposes the structured state used by agents and the Web session. ``data`` is
-the complete aligned dataset. Legacy ``context["data"]`` reads the active
-training split when one has been bound by :class:`SRAgent`.
+#### `AgentContext.train_data(self) -> dict[str, np.ndarray]`
 
-#### `AgentContext.tool_data(self) -> dict[str, np.ndarray]`
+Return the cached training mapping. On the first train/evaluation request, both
+mappings are obtained from ``context.evaluator.split_data(context)``.
 
-Return the active training split or the complete dataset.
+#### `AgentContext.evaluation_data(self) -> dict[str, np.ndarray]`
 
+Return the cached held-out evaluation mapping.
 
-**Returns**
+#### `AgentContext.train_split(self) -> AgentContext`
 
-    Data arrays exposed to scientific tools.
+Create a context view over ``train_data()`` while sharing arguments, evaluator,
+workspace, and NumPy arrays.
 
-#### `AgentContext.workspace_dir(self) -> str | None`
+#### `AgentContext.evaluation_split(self) -> AgentContext`
 
-Return the active workspace directory.
+Create the corresponding context view over ``evaluation_data()``.
 
-
-**Returns**
-
-    Workspace path, or ``None`` when no workspace is configured.
-
-#### `AgentContext.commit_data(self, data: dict[str, Any], *, target: str, features: list[str] | None=None, variable_descriptions: dict[str, str] | None=None, provenance: dict[str, Any] | None=None) -> dict[str, Any]`
+#### `AgentContext.commit_data(self, data: dict[str, Any], *, target: str, features: list[str] | None=None, variable_descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
 Validate and atomically replace the structured dataset.
 
@@ -1618,14 +1612,13 @@ Validate and atomically replace the structured dataset.
 - `target`: Target name or target values.
 - `features`: Ordered feature-column names; all non-target columns by default.
 - `variable_descriptions`: Human-readable descriptions keyed by column name.
-- `provenance`: Source and transformation metadata for the dataset.
 
 
 **Returns**
 
     A description of the committed revision and column changes.
 
-#### `AgentContext.add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None=None, provenance: dict[str, Any] | None=None) -> dict[str, Any]`
+#### `AgentContext.add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
 Add aligned feature columns and create a new data revision.
 
@@ -1634,40 +1627,28 @@ Add aligned feature columns and create a new data revision.
 
 - `features`: New aligned columns keyed by name.
 - `descriptions`: Descriptions for the new columns.
-- `provenance`: Source and transformation metadata to merge.
 
 
 **Returns**
 
     A description of the committed revision and column changes.
 
-#### `AgentContext.commit_context_data(self, data: ContextData) -> dict[str, Any]`
+#### `AgentContext.commit_context_data(self, data: dict[str, Any]) -> dict[str, Any]`
 
 Replace structured variables with a validated manifest-backed collection.
 
-Existing target and feature selections are retained only while their
-variables still exist. Axis metadata remains attached to ``data`` and is
-also exposed directly on the context for tools that need it.
+The loaded bundle contains arrays, descriptions, axis declarations, structural
+relationships, and optional node count without introducing another data class.
 
 
 **Args**
 
-- `data`: Validated variables and axes loaded by ``ContextDataStore``.
+- `data`: Validated variables and axes loaded by ``ContextDataLoader``.
 
 
 **Returns**
 
     A description of the committed revision and variable changes.
-
-#### `AgentContext.bind_split(self, training_data: dict[str, Any], evaluation_data: dict[str, Any]) -> None`
-
-Bind the split consumed by symbolic-regression tools.
-
-
-**Args**
-
-- `training_data`: Data exposed to fitting tools.
-- `evaluation_data`: Held-out data exposed to evaluation tools.
 
 #### `AgentContext.update_selection(self, *, target: str, features: list[str], variable_descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
@@ -1700,27 +1681,11 @@ Return the current structured-data schema.
 
 Raised when a context-data manifest cannot be validated.
 
-### `sr_harness.core.context_data.ContextAxis`
-
-One named axis shared by one or more structured variables.
-
-
-**Args**
-
-- `name`: Logical axis name used by variable declarations.
-- `values`: Coordinate values, including generated positional coordinates.
-- `description`: Human-readable meaning and units.
-- `storage`: Manifest representation: ``values``, ``file``, or ``size``.
-
-### `sr_harness.core.context_data.ContextData`
-
-Array mapping enriched with variable descriptions and named axes.
-
-### `sr_harness.core.context_data.ContextDataStore`
+### `sr_harness.core.context_data.ContextDataLoader`
 
 Validate and load a flat NPY collection described by ``manifest.json``.
 
-#### `ContextDataStore.inspect(self) -> dict[str, Any]`
+#### `ContextDataLoader.inspect(self) -> dict[str, Any]`
 
 Validate the store and return diagnostics without raising.
 
@@ -1729,14 +1694,14 @@ Validate the store and return diagnostics without raising.
 
     A serializable report containing errors, warnings, and array summaries.
 
-#### `ContextDataStore.load(self) -> ContextData`
+#### `ContextDataLoader.load(self) -> dict[str, Any]`
 
 Validate and load all variables and axes.
 
 
 **Returns**
 
-    A mapping of variable names to arrays with attached axis metadata.
+    An AgentContext-ready bundle of arrays and metadata.
 
 
 **Raises**
@@ -2090,47 +2055,7 @@ Run the ``get`` operation.
 
 ## `sr_harness.evaluator`
 
-### `sr_harness.evaluator.Evaluator`
-
-Fit and score one candidate formula under a user-defined protocol.
-
-Implementations may use regression, numerical integration, trajectory
-matching, network simulation, or another scientific protocol. The
-interface deliberately uses formula strings and ordinary dictionaries so
-custom evaluators do not depend on SRHarness agent internals.
-
-#### `Evaluator.fit(self, formula: str, data: dict[str, Any], target: Any) -> dict[str, Any]`
-
-Fit formula parameters and return their values or other fit state.
-
-
-**Args**
-
-- `formula`: Symbolic formula string.
-- `data`: Data arrays keyed by variable name.
-- `target`: Target name or target values.
-
-
-**Returns**
-
-    Fitted parameters and any reusable evaluator state.
-
-#### `Evaluator.evaluate(self, formula: str, data: dict[str, Any], target: Any, parameters: dict[str, Any] | None=None) -> dict[str, Any]`
-
-Return metrics and diagnostics for a formula on the supplied data.
-
-
-**Args**
-
-- `formula`: Symbolic formula string.
-- `data`: Data arrays keyed by variable name.
-- `target`: Target name or target values.
-- `parameters`: Fitted parameter values keyed by parameter name.
-
-
-**Returns**
-
-    Metrics and diagnostics for candidate ranking and inspection.
+评测器模块导出抽象基类 `BaseEvaluator`、普通一维数据实现 `DefaultEvaluator`、图与超图实现 `GraphEvaluator`，以及仅包含 `pass` 的编辑起点 `TemplateCustomEvaluator`。完整协议和示例见[自定义评估协议](#custom-evaluator)。
 
 ## `sr_harness.interaction.manager`
 

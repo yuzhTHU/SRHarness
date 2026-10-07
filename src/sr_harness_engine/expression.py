@@ -62,7 +62,8 @@ class Expression:
         """Evaluate this expression with NumPy values.
 
         Args:
-            values: Values keyed by symbol name.
+            values: Values keyed by symbol name, or a context exposing ``data``
+                and optional ``num_nodes`` metadata.
             parameters: Fitted parameter values keyed by parameter name.
             time: Optional sample times.
             delay_resolver: Optional callback that resolves delayed values.
@@ -71,7 +72,10 @@ class Expression:
         Returns:
             The evaluated scalar or array.
         """
+        from .context import resolve_context
         from .evaluation import evaluate
+
+        values, _, num_nodes = resolve_context(values, num_nodes=num_nodes)
 
         return evaluate(
             self,
@@ -184,7 +188,7 @@ class Expression:
     def fit(
         self,
         values: Mapping[str, Any],
-        target: Any,
+        target: Any = None,
         *,
         initial: Mapping[str, Any] | None = None,
         method: str = "BFGS",
@@ -194,8 +198,9 @@ class Expression:
         """Fit named and grouped parameters against a target array.
 
         Args:
-            values: Values keyed by symbol name.
-            target: Target name or target values.
+            values: Values keyed by symbol name, or a context exposing ``data``,
+                ``target``, and optional ``num_nodes`` metadata.
+            target: Target name or target values. Omit when supplied by context.
             initial: Optional initial parameter values.
             method: Optimization method name.
             options: Optional optimizer settings.
@@ -204,7 +209,12 @@ class Expression:
         Returns:
             The fitted expression, parameter values, predictions, and loss.
         """
+        from .context import resolve_context
         from .optimize import fit
+
+        values, target, num_nodes = resolve_context(values, target, num_nodes)
+        if target is None:
+            raise ValueError("A target array or a context target is required for fitting.")
 
         return fit(
             self, values, target, initial=initial, method=method,

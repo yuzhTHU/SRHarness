@@ -45,8 +45,8 @@ class HarmonicInteractionFitTool(BaseTool):
             grid_size: Number of initial frequency-grid points, from 64 through 2048.
             show_diagnostics: Include residual diagnostics in the returned evaluation.
         """
-        target_name = (y or self.context["target"]).strip().strip('"').strip("'")
-        data = self.context["data"]
+        target_name = (y or self.context.target).strip().strip('"').strip("'")
+        data = self.context.data
         carrier_symbol = self.parse_formula(carrier)
         oscillator_symbol = self.parse_formula(oscillator)
         target_symbol = self.parse_formula(target_name)

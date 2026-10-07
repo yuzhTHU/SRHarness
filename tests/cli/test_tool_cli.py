@@ -21,9 +21,9 @@ def test_load_context_from_explicit_data_field(tmp_path):
 
     context = load_context(path)
 
-    assert context["target"] == "y"
-    assert set(context["data"]) == {"x1", "y"}
-    np.testing.assert_allclose(context["data"]["x1"], [1.0, 2.0, 3.0])
+    assert context.target == "y"
+    assert set(context.data) == {"x1", "y"}
+    np.testing.assert_allclose(context.data["x1"], [1.0, 2.0, 3.0])
 
 
 def test_load_context_from_variable_fields(tmp_path):
@@ -37,8 +37,8 @@ def test_load_context_from_variable_fields(tmp_path):
 
     context = load_context(path)
 
-    assert context["target"] == "y"
-    assert set(context["data"]) == {"x1", "y"}
+    assert context.target == "y"
+    assert set(context.data) == {"x1", "y"}
 
 
 def test_load_params_merges_file_then_inline_json(tmp_path):

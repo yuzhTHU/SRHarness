@@ -48,8 +48,8 @@ class PolynomialFitTool(BaseTool):
                 the remaining coefficients. Enabled by default.
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
-        data = self.context["data"]
-        y = y or self.context["target"]
+        data = self.context.data
+        y = y or self.context.target
         y = y.strip().strip('"').strip("'")
         x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []

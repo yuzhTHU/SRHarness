@@ -45,7 +45,7 @@ class EICTool(BaseTool):
             raise ValueError("zero_epsilon must be positive")
         repeats = max(1, min(int(repeats), 100))
         formula = self.parse_formula(f)
-        data = self.context["data"]
+        data = self.context.data
         paths = self._collect_paths(formula)
         samples: dict[tuple[int, ...], list[float]] = defaultdict(list)
         finite: dict[tuple[int, ...], list[float]] = defaultdict(list)
@@ -116,8 +116,8 @@ class EICTool(BaseTool):
             "implementation": "recursive operator-noise Monte Carlo with subtree diagnostics",
             "source": "https://github.com/tsinghua-fib-lab/EIC",
         }
-        target = self.context.get("target")
-        if target and self.context.get("data"):
+        target = self.context.target
+        if target and self.context.data:
             result |= self.evaluate(
                 f=formula,
                 y=self.parse_formula(target),

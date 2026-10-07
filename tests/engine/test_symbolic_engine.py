@@ -28,7 +28,24 @@ def test_named_parameter_default_and_fit():
 
     assert result.success
     assert np.allclose(result.predict({"x": x}), 2.0 * x + 1.0, atol=1e-4)
+    assert np.allclose(result.expression.evaluate({"x": x}), 2.0 * x + 1.0, atol=1e-4)
     assert set(result.parameters) == {"alpha", "beta"}
+
+
+def test_expression_fit_and_evaluate_accept_a_context_directly():
+    x = np.linspace(-2.0, 2.0, 21)
+    context = {
+        "data": {"x": x},
+        "target": 3.0 * x - 1.0,
+    }
+
+    fitted = engine.parse("param('slope') * x + param('bias')").fit(context).expression
+
+    assert engine.parameter_values(fitted) == {
+        "slope": pytest.approx(3.0),
+        "bias": pytest.approx(-1.0),
+    }
+    assert np.allclose(fitted.evaluate(context), context["target"], atol=1e-5)
 
 
 def test_grouped_parameter_fit():
@@ -42,6 +59,7 @@ def test_grouped_parameter_fit():
     assert result.success
     assert result.parameters["grouped:s"] == pytest.approx({"A": 2.0, "B": 3.0})
     assert np.allclose(result.predict(values), [2.0, 4.0, 3.0, 6.0])
+    assert np.allclose(result.expression.evaluate(values), [2.0, 4.0, 3.0, 6.0])
 
 
 def test_explicit_network_indices():

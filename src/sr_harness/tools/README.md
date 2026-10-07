@@ -46,9 +46,9 @@ class MyTool(BaseTool):
 ## 运行时上下文
 
 工具实例化时传入的上下文可通过 `self.context` 访问，用于存放数据、模型、缓存等不应放在参数列表中由 Agent 生成的值。目前包含以下字段：
-- `self.context["data"]`: 原始数据 DataFrame，{变量名: np.ndarray} 的字典格式。
-- `self.context["target"]`: 目标变量名称字符串。除目标变量外的其他变量都可以作为公式中的自变量。
-- `self.context["evaluation_data"]`: 可选的隐藏验证集 `{变量名: np.ndarray}` 字典。工具只应在 `data`（训练集）上拟合；`evaluate()` 会自动在训练集和验证集上重新求值。
+- `self.context.data`: 原始数据，格式为 `{变量名: np.ndarray}`。
+- `self.context.target`: 目标变量名称字符串。除目标变量外的其他非轴变量都可以作为公式中的自变量。
+- `self.context.train_data()` / `self.context.evaluation_data()`: 由 Evaluator 首次切分并缓存的数据映射。拟合应使用 `train_split()`，评测应分别使用训练和评测视图。
 
 ## 公式处理
 
@@ -71,7 +71,7 @@ return self.evaluate(
 )
 ```
 
-`BaseTool.evaluate()` 会在目标恰为 `self.context["target"]` 且公式不包含目标变量时自动设置 `is_candidate=True`。
+`BaseTool.evaluate()` 会在目标恰为 `self.context.target` 且公式不包含目标变量时自动设置 `is_candidate=True`。
 特殊工具可在获得结果后覆盖字段，例如公式展示文本不是 `f.to_str()` 时：
 
 ```python
@@ -144,9 +144,12 @@ LLM 会选择一种类型：
 
 ## 自定义评估器与数据划分
 
-SRHarness 提供公开的 `sr_harness.Evaluator` 抽象接口。用户可以实现 `fit()` 与
-`evaluate()`，再通过 `SRAgent(evaluator=...)` 注入自己的参数优化、数值积分或评价协议。
-评估器只接收公式字符串、普通数据字典、目标和参数字典，不依赖 Agent、Web UI 或搜索状态。
+SRHarness 提供公开的抽象 `sr_harness.BaseEvaluator` 接口、普通一维数据实现
+`sr_harness.DefaultEvaluator` 和图数据实现 `sr_harness.GraphEvaluator`。用户可以用静态方法覆盖 `fit()` 与 `evaluate()`，从
+`context.args` 提取所需参数后，再通过 `SRAgent(evaluator=...)` 注入自己的参数优化、
+数值积分或评价协议。
+评估器直接接收结构化 `Expression` 和当前数据划分的只读上下文；`fit()` 返回已绑定参数、
+可直接求值的 `Expression`，`evaluate()` 返回当前 split 的 metrics 字典。
 它适合 ODE 轨迹积分、网络动力学和其它不能用逐点回归评价的任务。
 
 内置公式工具仍通过 `BaseTool.evaluate()` 复用统一的 train/validation 指标与残差诊断。

@@ -91,14 +91,47 @@ def mount_platform(app, session: InteractiveSession):
         except Exception as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post('/api/session/test')
+    def test_model(payload: dict = Body(...)):
+        try:
+            return session.test_model(payload)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.get('/api/evaluator')
+    def evaluator_configuration():
+        return session.evaluator_configuration()
+
+    @app.put('/api/evaluator')
+    def configure_evaluator(payload: dict = Body(...)):
+        try:
+            return session.configure_evaluator(payload)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/evaluator/test')
+    def test_evaluator(payload: dict = Body(...)):
+        try:
+            return session.test_evaluator(payload)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/evaluator/agent')
+    def assist_evaluator(payload: dict = Body(...)):
+        try:
+            return session.assist_evaluator(payload)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get('/api/data/context')
     def data_context(rows: int = 300):
         rows = max(1, min(rows, 1000))
         with session.lock:
             schema = session.context.schema()
+            all_axis_names = set(session.context.axis_names())
             groups = {}
             for name, value in session.context.data.items():
-                if value.ndim != 1:
+                if name in all_axis_names or value.ndim != 1:
                     continue
                 key = tuple(session.context.variable_axes.get(name, (f"length:{len(value)}",)))
                 groups.setdefault(key, []).append(name)
@@ -113,14 +146,7 @@ def mount_platform(app, session: InteractiveSession):
                 for name in names
                 for axis in session.context.variable_axes.get(name, ())
             ))
-            matching_axes = [
-                name for name, axis in session.context.axes.items()
-                if (
-                    axis.values.ndim == 1
-                    and len(axis.values) == total
-                    and name not in session.context.data
-                )
-            ]
+            matching_axes = [name for name in all_axis_names if len(session.context.data[name]) == total]
             axis_names = [
                 name for name in referenced_axes if name in matching_axes
             ] + [
@@ -128,11 +154,11 @@ def mount_platform(app, session: InteractiveSession):
             ]
             preview_columns = [*axis_names, *names]
             columns = [
-                *session.context.axes,
-                *(name for name in session.context.data if name not in session.context.axes),
+                *session.context.axis_names(),
+                *(name for name in session.context.data if name not in all_axis_names),
             ]
             arrays = {
-                **{name: session.context.axes[name].values for name in axis_names},
+                **{name: session.context.data[name] for name in axis_names},
                 **{name: session.context.data[name] for name in names},
             }
             count = min(total, rows)
@@ -141,24 +167,16 @@ def mount_platform(app, session: InteractiveSession):
                 for index in range(count)
             ]
             descriptions = {
-                **{
-                    name: session.context.variable_descriptions.get(
-                        name, axis.description,
-                    )
-                    for name, axis in session.context.axes.items()
-                },
-                **{
-                    name: session.context.variable_descriptions.get(name, "")
-                    for name in session.context.data
-                },
+                name: session.context.variable_descriptions.get(name, "")
+                for name in session.context.data
             }
         return {
             **json_value(schema),
             "columns": columns,
             "preview_columns": preview_columns,
             "column_kinds": {
-                **{name: "axis" for name in session.context.axes},
-                **{name: "variable" for name in session.context.data},
+                **{name: "axis" for name in all_axis_names},
+                **{name: "variable" for name in session.context.data if name not in all_axis_names},
             },
             "rows": total,
             "variable_descriptions": descriptions,

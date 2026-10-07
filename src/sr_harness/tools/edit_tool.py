@@ -35,8 +35,8 @@ class EditTool(BaseTool):
                 complete SKILL.md file. ``name`` is the skill directory name,
                 not the tool's metadata.name.
         """
-        assert "skill_manager" in self.context, "skill_manager must be provided in context."
-        manager = self.context["skill_manager"]
+        assert hasattr(self.context.args, "skill_manager"), "skill_manager must be provided in context.args."
+        manager = self.context.args.skill_manager
         skill = manager.get_skill(name.strip())
         if skill.readonly:
             raise ValueError(f"Skill '{name}' is read-only and cannot be edited.")

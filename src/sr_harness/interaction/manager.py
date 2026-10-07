@@ -82,6 +82,14 @@ class InteractionManager(ABC):
         """
         raise RuntimeError("This interaction manager cannot ask a user for input.")
 
+    def should_request_guidance_after_tool_free_response(self) -> bool:
+        """Return whether a tool-free response should yield to the human.
+
+        Frontends may suppress the automatic yield when a stronger control
+        action, such as pause or branch transition, is already pending.
+        """
+        return True
+
     def publish(self, kind: str, payload: Any) -> None:
         """Publish an observable event to the frontend.
 

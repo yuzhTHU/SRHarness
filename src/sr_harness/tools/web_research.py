@@ -58,7 +58,7 @@ class WebSearchTool(BaseTool):
         if not query.strip():
             raise ValueError("query must not be empty")
         max_results = max(1, min(int(max_results), 10))
-        callback = self.context.get("web_search_callback")
+        callback = getattr(self.context.args, "web_search_callback", None)
         if callback is not None:
             results = callback(query, max_results)
             return {"query": query, "results": list(results)[:max_results], "provider": "callback"}

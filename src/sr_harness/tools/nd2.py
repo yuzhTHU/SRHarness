@@ -78,8 +78,8 @@ class ND2Tool(BaseTool):
         episode_limit = max(1, min(int(episode_limit), 1_000_000))
         beam_size = max(1, min(int(beam_size), 100))
         max_coeff_num = max(0, min(int(max_coeff_num), 20))
-        data = self._prepare_data(self.context["data"])
-        y = (y or self.context["target"]).strip()
+        data = self._prepare_data(self.context.data)
+        y = (y or self.context.target).strip()
         if y not in data:
             raise ValueError(f"Target {y!r} is missing from the ND2 data.")
 
@@ -218,7 +218,7 @@ class ND2Tool(BaseTool):
             raise RuntimeError("ND2 completed without producing a formula.")
 
         validation_metrics = None
-        if validation_data := self.context.get("evaluation_data"):
+        if validation_data := self.context.evaluation_data():
             validation_data = self._prepare_data(validation_data)
             validator = self._make_rewarder(
                 RewardSolver, validation_data, y, vars_node, vars_edge

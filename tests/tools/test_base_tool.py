@@ -47,7 +47,7 @@ class UnitSampleTool(BaseTool):
         return {
             "required_text": required_text,
             "count": count,
-            "context": self.context,
+            "context": vars(self.context.args),
         }
 
 
@@ -239,7 +239,13 @@ class TestBaseToolExportAndCall:
         assert result.result == {
             "required_text": "hello",
             "count": 3,
-            "context": {"session_id": "abc"},
+            "context": {
+                "session_id": "abc",
+                "validation_fraction": 0,
+                "split_by": "random",
+                "split_random_state": 42,
+                "split_ood_variable": None,
+            },
         }
         assert result.result_str == str(result.result)
         assert result.meta_data["tool"] == "unit_sample_tool"
@@ -356,7 +362,7 @@ class TestBaseToolEvaluate:
         y = engine.parse("y")
 
         metrics = tool.evaluate(f=f, y=y, show_diagnostics=False)["data_split_results"]["train"]["metrics"]
-        residuals = f.eval(tool.context["data"]) - y_values
+        residuals = f.eval(tool.context.data) - y_values
         ss_res = float(np.sum(residuals**2))
         expected_log_likelihood = -len(x) / 2 * (
             np.log(2 * np.pi) + np.log(ss_res / len(x)) + 1
@@ -385,7 +391,7 @@ class TestBaseToolEvaluate:
         wrong_lhs_text = tool.format_evaluation_result(wrong_lhs, title="Best fitted rational formula")
         target_leak_text = tool.format_evaluation_result(target_leak, title="Best fitted rational formula")
         assert "Best fitted rational formula:\n    y = " in eligible_text
-        assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | N/A;" in eligible_text
+        assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | 0.00;" in eligible_text
         assert "Error extremes (Top-10 sorted by |residual|):\n    (x | z | y | residual)" in eligible_text
         assert "not eligible for submission" not in eligible_text
         assert "the left-hand side of the equation is not y" in wrong_lhs_text

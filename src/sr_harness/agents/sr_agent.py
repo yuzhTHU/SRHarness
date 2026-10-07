@@ -24,7 +24,7 @@ from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, To
 from .agent import Agent
 
 if TYPE_CHECKING:
-    from ..evaluator import Evaluator
+    from ..evaluator import BaseEvaluator
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
@@ -59,7 +59,7 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
-        evaluator: Evaluator | None = None,
+        evaluator: BaseEvaluator | None = None,
     ):
         """初始化 Agent。
 
@@ -218,9 +218,13 @@ class SRAgent(Agent):
         self.money_counter = ParallelTimer(unit='$') # 费用统计
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
+        from ..evaluator import DefaultEvaluator
         self.context = context if context is not None else AgentContext()
-        if evaluator is not None:
-            self.context.evaluator = evaluator
+        self.context.evaluator = evaluator or self.context.evaluator or DefaultEvaluator()
+        self.context.args.validation_fraction = validation_fraction
+        self.context.args.split_by = split_by
+        self.context.args.split_random_state = split_random_state
+        self.context.invalidate_splits()
         self.evaluator = self.context.evaluator
         self.run_state = SearchRunState(
             save_path=save_path,
@@ -263,8 +267,7 @@ class SRAgent(Agent):
         def existing_value(name: str):
             if name in self.context.data:
                 return self.context.data[name]
-            axis = self.context.axes.get(name)
-            return None if axis is None else axis.values
+            return None
 
         data_changed = not self.context.data or any(
             (current := existing_value(name)) is None
@@ -277,23 +280,18 @@ class SRAgent(Agent):
                 target=target,
                 features=list(X),
                 variable_descriptions=self.context.variable_descriptions,
-                provenance=self.context.provenance,
             )
         else:
             self.context.target = target
-            self.context.features = list(X)
-        train_data, validation_data = self._split_data(X, y)
-        self.context.bind_split(train_data, validation_data)
+        self.context.invalidate_splits()
         self._active_X = X
         self._active_y = y
-        self._data_revision = self.context.data_revision
-        self.context.update({
-            "llm_provider": self.llm_provider,
-            "llm_model": self.llm_model,
-            "llm_max_tokens": self.llm_max_tokens,
-            "skill_manager": self.skill_manager,
-            "enabled_skills": sorted(self.enabled_skills),
-        })
+        self._data_revision = int(getattr(self.context.args, "data_revision", 0))
+        self.context.args.llm_provider = self.llm_provider
+        self.context.args.llm_model = self.llm_model
+        self.context.args.llm_max_tokens = self.llm_max_tokens
+        self.context.args.skill_manager = self.skill_manager
+        self.context.args.enabled_skills = sorted(self.enabled_skills)
         with self.prepare_tool_context(self.context) as tool_context:
             self.initialize_tools(tool_context)
             if self.tool_parser == 'openai':
@@ -444,59 +442,35 @@ class SRAgent(Agent):
 
     def _split_data(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray]):
         """Split aligned arrays into train and validation data mappings."""
+        self.context.args.validation_fraction = self.validation_fraction
+        self.context.args.split_by = self.split_by
+        self.context.args.split_random_state = self.split_random_state
+        target = next(iter(y))
         data = X | y
-        arrays = {name: np.asarray(value) for name, value in data.items()}
-        n_samples = len(arrays[next(iter(y))])
-        n_validation = int(round(n_samples * self.validation_fraction))
-        if self.validation_fraction == 0:
-            n_train = n_samples # 当不使用 validation_fraction 时, 训练集就是验证集
-            n_validation = n_samples
-        elif n_validation == 0:
-            n_validation = 1
-            n_train = n_samples - n_validation
-            _logger.warning(f"Validation fraction {self.validation_fraction} is too small for {n_samples} samples; using 1 validation sample.")
-        elif n_validation >= n_samples:
-            n_validation = n_samples - 1
-            n_train = n_samples - n_validation
-            _logger.warning(f"Validation fraction {self.validation_fraction} is too large for {n_samples} samples; using {n_samples - 1} validation samples.")
-        else:
-            n_train = n_samples - n_validation
-
-        if self.split_by == "random":
-            indices = np.random.default_rng(self.split_random_state).permutation(n_samples)
-            train_indices = indices[:n_train]
-            validation_indices = indices[-n_validation:]
-        else:
-            split_variable = "t" if "t" in X else "T" if "T" in X else list(X.keys())[0]
-            split_values = arrays[split_variable]
-            _logger.debug(f"Splitting data by '{split_variable}' values: {split_values}")
-            indices = np.argsort(split_values, kind="stable")
-            train_indices = indices[:n_train]
-            validation_indices = indices[-n_validation:]
-
-        if (network_data := "A" in arrays or "G" in arrays):
-            temporal_names = {
-                name for name, value in arrays.items()
-                if name not in {"A", "G"} and value.ndim > 0 and len(value) == n_samples
-            }
-            if mismatched_targets := [name for name in y if name not in temporal_names]:
-                raise ValueError(
-                    f"Network-dynamics targets must use time as their first axis: {mismatched_targets}"
-                )
-        elif len(lengths := {len(value) for value in arrays.values()}) != 1:
-            raise ValueError(
-                f"All X and y arrays must have the same length, got lengths={sorted(lengths)}."
-            )
-        else:
-            temporal_names = set(arrays)
-
-        def select(selected):
-            return {
-                name: value[selected] if name in temporal_names else value
-                for name, value in arrays.items()
-            }
-
-        return select(train_indices), select(validation_indices) if n_validation else {}
+        variable_axes = {
+            name: axes for name, axes in self.context.variable_axes.items() if name in data
+        }
+        for axis in {axis for axes in variable_axes.values() for axis in axes}:
+            if axis in self.context.data:
+                data.setdefault(axis, self.context.data[axis])
+        variable_structures = {
+            name: structure
+            for name, structure in self.context.variable_structures.items()
+            if name in data and structure in data
+        }
+        split_context = AgentContext(
+            args=self.context.args,
+            data=data,
+            target=target,
+            variable_descriptions={name: self.context.variable_descriptions.get(name, "") for name in data},
+            variable_axes=variable_axes or None,
+            variable_structures=variable_structures,
+            num_nodes=self.context.num_nodes if variable_structures else None,
+            evaluator=self.context.evaluator,
+            workspace=self.context.workspace,
+        )
+        splits = split_context.evaluator.split_data(split_context)
+        return splits["train"], splits["evaluation"]
 
     def build_initial_prompt(self, problem_description, X, y, restart_records):
         """Build initial prompt.
@@ -647,32 +621,29 @@ class SRAgent(Agent):
         """
         if not hasattr(self, "context") or not hasattr(self, "_data_revision"):
             return False
-        if self.context.data_revision == self._data_revision:
+        revision = int(getattr(self.context.args, "data_revision", 0))
+        if revision == self._data_revision:
             return False
-        if self.context.target is None or not self.context.features:
+        if self.context.target is None or not self.context.feature_names():
             raise ValueError("The updated context does not define a target and features")
 
         def selected_value(name: str) -> np.ndarray:
             if name in self.context.data:
                 return self.context.data[name]
-            axis = self.context.axes.get(name)
-            if axis is None:
-                raise ValueError(f"The selected variable or axis no longer exists: {name}")
-            return axis.values
+            raise ValueError(f"The selected variable or axis no longer exists: {name}")
 
-        X = {name: selected_value(name) for name in self.context.features}
+        X = {name: selected_value(name) for name in self.context.feature_names()}
         y = {self.context.target: selected_value(self.context.target)}
-        train_data, validation_data = self._split_data(X, y)
-        self.context.bind_split(train_data, validation_data)
+        self.context.invalidate_splits()
         self._active_X.clear()
         self._active_X.update(X)
         self._active_y.clear()
         self._active_y.update(y)
         previous_revision = self._data_revision
-        self._data_revision = self.context.data_revision
+        self._data_revision = revision
         descriptions = [
             f"- {name}: {description}"
-            for name in [self.context.target, *self.context.features]
+            for name in [self.context.target, *self.context.feature_names()]
             if (description := self.context.variable_descriptions.get(name, "").strip())
         ]
         buffer.append({
@@ -681,7 +652,7 @@ class SRAgent(Agent):
                 "[Structured data updated by the data-preparation agent]\n"
                 f"Data revision changed from {previous_revision} to {self._data_revision}. "
                 f"The target is {self.context.target!r}; available features are "
-                f"{self.context.features}. Reassess earlier evidence against the updated variables "
+                f"{list(self.context.feature_names())}. Reassess earlier evidence against the updated variables "
                 "and continue the investigation."
                 + ("\nVariable descriptions:\n" + "\n".join(descriptions) if descriptions else "")
             ),

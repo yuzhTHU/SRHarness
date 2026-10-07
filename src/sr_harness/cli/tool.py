@@ -8,6 +8,7 @@ import numpy as np
 import sr_harness.tools
 from pathlib import Path
 from typing import Any
+from sr_harness.core import AgentContext
 from sr_harness.tools import BaseTool
 
 
@@ -58,7 +59,7 @@ def decode_npz_value(value: np.ndarray) -> Any:
     return value
 
 
-def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
+def load_context(path: str | Path, target: str | None = None) -> AgentContext:
     """Load a BaseTool context from context.npz.
 
     Args:
@@ -85,7 +86,7 @@ def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
         if "target" not in context:
             raise ValueError('context.npz with a "data" field must also contain a "target" field.')
         context["target"] = str(context["target"])
-        return context
+        return AgentContext(data=data, target=str(context["target"]))
 
     if "target" not in context:
         raise ValueError(
@@ -103,7 +104,7 @@ def load_context(path: str | Path, target: str | None = None) -> dict[str, Any]:
         raise ValueError(
             f'Target variable "{target_name}" is not present as an array field in context.npz.'
         )
-    return {"data": data, "target": target_name}
+    return AgentContext(data=data, target=target_name)
 
 
 def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.ArgumentParser:
@@ -180,7 +181,7 @@ def main(args: argparse.Namespace) -> int:
         tool_cls = tool_class(args.tool)
         context = load_context(args.context, target=args.target)
         params = load_params(args.params, args.params_file)
-        result = tool_cls(**context)(**params)
+        result = tool_cls(context=context)(**params)
         print(result.result_str)
         if not result.ok:
             return 1

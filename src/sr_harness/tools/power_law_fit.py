@@ -37,12 +37,12 @@ class PowerLawFitTool(BaseTool):
             n_stability_folds: Number of disjoint folds for leave-one-fold-out exponent confidence intervals (2-20).
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
-        data = self.context["data"]
+        data = self.context.data
         if y is not None and not isinstance(y, str):
             return {"exceptions": [f"y must be a string expression, got {type(y).__name__}."]}
         if x is not None and (not isinstance(x, list) or any(not isinstance(item, str) for item in x)):
             return {"exceptions": ["x must be a list of string expressions."]}
-        target_name = (y or self.context["target"]).strip().strip('"').strip("'")
+        target_name = (y or self.context.target).strip().strip('"').strip("'")
         x = x or [name for name, value in data.items() if name != target_name and is_numeric_array(value)]
         y_symbol = self.parse_formula(target_name)
         target = np.asarray(y_symbol.eval(data), dtype=float).flatten()
@@ -217,7 +217,7 @@ class PowerLawFitTool(BaseTool):
 
     def _validation_r2(self, features, y_symbol, exponents, scale):
         """Score an exponent candidate on the same complete, positive validation rows."""
-        data = self.context.get("evaluation_data")
+        data = self.context.evaluation_data()
         if not data:
             return None
         try:

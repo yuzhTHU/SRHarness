@@ -217,7 +217,7 @@ custom_python_function(x)
 
 ## 自定义评估器边界
 
-Engine 描述 RHS；数据划分、ODE 积分、轨迹损失、网络模拟和任务指标由 `sr_harness.Evaluator` 决定。这样同一个公式语言可以服务于静态回归、ODE、时延系统和网络动力学，而不会把任务协议塞进表达式 AST。
+Engine 描述 RHS；数据划分、ODE 积分、轨迹损失、网络模拟和任务指标由 `sr_harness.BaseEvaluator` 协议及其实现决定。这样同一个公式语言可以服务于静态回归、ODE、时延系统和网络动力学，而不会把任务协议塞进表达式 AST。
 
 Evaluator 示例见 [SRHarness 文档的自定义评估协议](index.md#custom-evaluator)。
 
@@ -329,9 +329,9 @@ Compile ``aggr/targ/sour`` nodes into indexed reductions.
 
 ## `sr_harness_engine.evaluation`
 
-### `sr_harness_engine.evaluation.Evaluator`
+### `sr_harness_engine.evaluation.evaluate`
 
-NumPy expression-tree evaluator.
+使用 NumPy 对表达式树求值的公开函数。
 
 ### `sr_harness_engine.evaluation.grouped_parameter_key(node: GroupedParameter) -> str`
 

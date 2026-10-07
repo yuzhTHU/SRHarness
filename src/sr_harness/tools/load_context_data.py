@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core import ContextDataStore
+from ..core import ContextDataLoader
 from .base_tool import BaseTool, ToolMetadata
 
 
@@ -28,13 +28,14 @@ class LoadContextDataTool(BaseTool):
             Validation diagnostics and the committed context revision when valid.
         """
         workspace = self.context.workspace
-        if workspace is None or (directory := workspace.resolve(path)) is None:
+        directory = (workspace / path).resolve()
+        if workspace not in directory.parents and directory != workspace:
             raise ValueError("path must identify a directory inside the workspace")
-        store = ContextDataStore(directory)
-        report = store.inspect()
+        loader = ContextDataLoader(directory)
+        report = loader.inspect()
         if not report["valid"]:
             return {"data_committed": False, **report}
-        change = self.context.commit_context_data(store.load())
+        change = self.context.commit_context_data(loader.load())
         return {"data_committed": True, **report, **change}
 
     @classmethod
@@ -54,6 +55,10 @@ class LoadContextDataTool(BaseTool):
             return "\n".join(lines)
         variables = ", ".join(result.get("variables", {}))
         axes = ", ".join(result.get("axes", {}))
+        structure = (
+            f" num_nodes={result['num_nodes']}."
+            if result.get("num_nodes") is not None else ""
+        )
         warnings = result.get("warnings", [])
         suffix = "" if not warnings else " Warnings: " + "; ".join(warnings)
-        return f"Loaded context.data variables [{variables}] with axes [{axes}].{suffix}"
+        return f"Loaded context.data variables [{variables}] with axes [{axes}].{structure}{suffix}"

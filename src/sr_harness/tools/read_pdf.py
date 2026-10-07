@@ -77,7 +77,7 @@ class PDFReadTool(BaseTool):
                     raise ValueError("PDF exceeds the 25 MiB download limit.")
             return bytes(data)
         path = Path(source).expanduser().resolve()
-        allowed_root = Path(self.context.get("workspace_dir") or Path.cwd()).resolve()
+        allowed_root = self.context.workspace
         try:
             path.relative_to(allowed_root)
         except ValueError as exc:

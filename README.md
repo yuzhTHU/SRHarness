@@ -253,8 +253,9 @@ runtime read-only skills by each tool's `get_doc()` method.
 
 `Agent` contains the common API, parser, and tool-execution mechanics used by
 `DataPreparationAgent` and `SRAgent`; `SRAgentInteractive` specializes the shared `SRAgent` search
-loop with human control and frontend events. `AgentContext` owns the structured data, active split,
-workspace, variable descriptions, provenance, and data revision shared by cooperating agents.
+loop with human control and frontend events. `AgentContext` owns the structured data and metadata,
+evaluator, runtime arguments, and workspace shared by cooperating agents. Train/evaluation mappings
+are lazily produced by the evaluator and cached by the context.
 
 `SRAgentInteractive` accepts an `InteractionManager` that connects its shared search loop to a
 frontend. Its default `TerminalInteractionManager` handles `ask_human` in a terminal. The Web

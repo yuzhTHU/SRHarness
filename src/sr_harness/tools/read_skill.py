@@ -37,8 +37,8 @@ class ReadSkill(BaseTool):
 
     def __init__(self, **context):
         super().__init__(**context)
-        self.skill_manager = context.get("skill_manager") or self.default_skill_manager
-        enabled = context.get("enabled_skills")
+        self.skill_manager = getattr(self.context.args, "skill_manager", None) or self.default_skill_manager
+        enabled = getattr(self.context.args, "enabled_skills", None)
         skills = self.skill_manager.load_skills()
         self.enabled_skills = set(enabled) if enabled is not None else set(skills)
         description = _format_description({

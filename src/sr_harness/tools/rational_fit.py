@@ -40,8 +40,8 @@ class RationalFitTool(BaseTool):
             complexity_penalty: Penalty per fitted coefficient added to validation RMSE after target-scale normalization.
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
-        data = self.context["data"]
-        target_name = (y or self.context["target"]).strip().strip('"').strip("'")
+        data = self.context.data
+        target_name = (y or self.context.target).strip().strip('"').strip("'")
         x = x or [name for name, value in data.items() if name != target_name and is_numeric_array(value)]
         p_degrees = sorted(set(
             max(0, min(int(value), 8))
@@ -69,7 +69,7 @@ class RationalFitTool(BaseTool):
                 exceptions.append(f"Failed to compute '{expression}': {exc}")
         if not symbols:
             raise ValueError("No valid input variables available for fitting.")
-        helper = PolynomialFitTool(data=data, target=self.context["target"])
+        helper = PolynomialFitTool(data=data, target=self.context.target)
         allowed = helper._get_allowed_interactions(symbols, include_interactions, None, None)
         finite_target = np.isfinite(target)
         finite_indices = np.flatnonzero(finite_target)

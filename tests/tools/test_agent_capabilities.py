@@ -8,7 +8,7 @@ import pytest
 from sr_harness.runtime import InteractionController
 from sr_harness.web.app import create_app
 from sr_harness.runtime import ModelRouter
-from sr_harness.core import SearchRunState, ToolCall
+from sr_harness.core import AgentContext, SearchRunState, ToolCall
 from sr_harness import SRAgent
 from sr_harness.tools.evaluate_formula import EvaluateTool
 from sr_harness.utils import ParallelTimer
@@ -258,6 +258,12 @@ def test_network_split_preserves_graph_axes():
     adjacency = np.array([[0, 1], [1, 0]])
     edges = np.array([[0, 1], [1, 0]])
     x = np.arange(16.0).reshape(8, 2)
+    agent.context = AgentContext(
+        data={"A": adjacency, "G": edges, "x": x, "dx": x + 1},
+        target="dx",
+        variable_structures={"x": "A", "dx": "A"},
+        num_nodes=2,
+    )
     train, validation = agent._split_data(
         {"A": adjacency, "G": edges, "x": x},
         {"dx": x + 1},
@@ -266,6 +272,41 @@ def test_network_split_preserves_graph_axes():
     assert validation["x"].shape == (2, 2)
     assert np.array_equal(train["A"], adjacency)
     assert np.array_equal(validation["G"], edges)
+
+
+def test_interaction_controller_keeps_only_the_latest_stream_snapshot():
+    controller = InteractionController()
+    controller.publish("data_assistant_start", {"response_id": "reply-1"})
+    controller.publish(
+        "data_assistant_delta",
+        {"response_id": "reply-1", "content": "first"},
+    )
+    controller.publish("activity", {"phase": "model"})
+    controller.publish(
+        "data_assistant_delta",
+        {"response_id": "reply-1", "content": "latest"},
+    )
+
+    events = controller.events()
+
+    assert [event["kind"] for event in events] == [
+        "data_assistant_start",
+        "activity",
+        "data_assistant_delta",
+    ]
+    assert events[-1]["payload"]["content"] == "latest"
+
+    controller.publish(
+        "data_assistant",
+        {"response_id": "reply-1", "content": "complete"},
+    )
+
+    events = controller.events()
+    assert [event["kind"] for event in events] == [
+        "data_assistant_start",
+        "activity",
+        "data_assistant",
+    ]
 
 
 def test_model_router_uses_base_for_simple_task_and_strong_for_complex_task():

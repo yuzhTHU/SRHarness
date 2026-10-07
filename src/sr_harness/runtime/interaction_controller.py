@@ -12,6 +12,14 @@ from typing import Any
 class InteractionController:
     """Coordinate pause/resume/stop, injected guidance, events, and replies."""
 
+    _STREAM_DELTA_KINDS = {"assistant_delta", "data_assistant_delta"}
+    _STREAM_TERMINAL_KINDS = {
+        "assistant",
+        "assistant_error",
+        "data_assistant",
+        "data_assistant_error",
+    }
+
     def __init__(self):
         self._condition = threading.Condition(threading.RLock())
         self._paused = False
@@ -67,6 +75,7 @@ class InteractionController:
                 if not message.strip():
                     raise ValueError("message command requires non-empty message")
                 self._guidance.append(message.strip())
+                self._paused = False
             elif action in {"next_c", "next_r"}:
                 self._search_transitions.clear()
                 self._search_transitions.append(action)
@@ -192,5 +201,26 @@ class InteractionController:
             "timestamp": time.time(),
             "payload": payload,
         }
+        response_id = payload.get("response_id")
+        if response_id and kind in self._STREAM_DELTA_KINDS:
+            # Stream callbacks contain cumulative snapshots. Keeping every
+            # snapshot makes a page reload replay and render the same growing
+            # response hundreds of times, while also evicting useful events.
+            self._remove_stream_events(response_id, {kind})
+        elif response_id and kind in self._STREAM_TERMINAL_KINDS:
+            self._remove_stream_events(response_id, self._STREAM_DELTA_KINDS)
         self._events.append(event)
         return dict(event)
+
+    def _remove_stream_events(self, response_id: str, kinds: set[str]) -> None:
+        """Remove obsolete stream snapshots for one model response."""
+        self._events = deque(
+            (
+                event for event in self._events
+                if not (
+                    event["kind"] in kinds
+                    and event.get("payload", {}).get("response_id") == response_id
+                )
+            ),
+            maxlen=self._events.maxlen,
+        )

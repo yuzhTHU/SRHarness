@@ -1,12 +1,7 @@
 """Dependency-light domain types and runtime state for SRHarness."""
 from .api import APICallResult
 from .context import AgentContext
-from .context_data import (
-    ContextAxis,
-    ContextData,
-    ContextDataStore,
-    ContextManifestError,
-)
+from .context_data import ContextDataLoader, ContextManifestError
 from .search import (
     CandidateRecord,
     ParentLink,

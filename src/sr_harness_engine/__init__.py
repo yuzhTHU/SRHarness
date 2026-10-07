@@ -24,9 +24,10 @@ from .expression import (
     sour,
     targ,
 )
-from .analysis import count_parameters, fold_constants
+from .analysis import count_parameters, fold_constants, parameter_values, unbound_parameters
 from .desugar import desugar
-from .optimize import FitResult, fit
+from .evaluation import evaluate
+from .optimize import FitResult, bind_parameters, fit
 from .indexed_evaluation import RelationField
 from .parser import parse
 from .render import render
@@ -78,8 +79,9 @@ __all__ = [
     "Index", "Indexed", "Number", "Parameter", "Reduction", "RelationField",
     "RelationLift", "Symbol",
     "Variable", "abs", "aggr", "arccos", "arcsin", "arctan", "cos", "cosh",
-    "cot", "count_parameters", "csc", "delay", "desugar", "exp", "fit",
+    "bind_parameters", "cot", "count_parameters", "csc", "delay", "desugar", "evaluate", "exp", "fit",
     "fold_constants", "function", "gather", "grouped_param", "inv", "log", "log10",
-    "param", "parse", "reduction", "render", "sec", "sech", "sigmoid", "sign", "sin",
-    "sinh", "sour", "sqrt", "tan", "tanh", "targ",
+    "param", "parameter_values", "parse", "reduction", "render", "sec", "sech",
+    "sigmoid", "sign", "sin",
+    "sinh", "sour", "sqrt", "tan", "tanh", "targ", "unbound_parameters",
 ]

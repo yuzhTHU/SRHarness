@@ -33,8 +33,8 @@ class RelationshipAnalysisTool(BaseTool):
             n_folds: Number of disjoint cross-validation folds (2-20). Default: 5.
             collapse_model: One-dimensional predictor fitted on each training fold: "bins", "spline", or "isotonic".
         """
-        data = self.context["data"]
-        target_name = (y or self.context["target"]).strip().strip('"').strip("'")
+        data = self.context.data
+        target_name = (y or self.context.target).strip().strip('"').strip("'")
         n_bins = max(2, min(int(n_bins), 100))
         n_folds = max(2, min(int(n_folds), 20))
         if binning not in {"quantile", "equal_width"}:

@@ -136,8 +136,8 @@ class PropertyPredictorTool(BaseTool):
         but neither x1 nor x2 alone appears periodic).
         No arguments needed — the tool automatically uses the data provided to the agent.
         """
-        data = self.context["data"]
-        target_name = self.context["target"]
+        data = self.context.data
+        target_name = self.context.target
         exceptions = []
 
         ## 加载模型 checkpoint

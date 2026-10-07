@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 import numpy as np
@@ -10,6 +10,22 @@ from scipy.optimize import minimize
 
 from .evaluation import grouped_parameter_key, walk
 from .expression import Expression, GroupedParameter, Parameter
+
+
+def bind_parameters(expression: Expression, parameters: Mapping[str, Any]) -> Expression:
+    """Return an expression whose parameter nodes contain fitted values."""
+    from .tree import transform
+
+    def bind(node: Expression) -> Expression:
+        if isinstance(node, Parameter) and node.name in parameters:
+            return replace(node, value=float(parameters[node.name]))
+        if isinstance(node, GroupedParameter):
+            key = grouped_parameter_key(node)
+            if key in parameters:
+                return replace(node, value=dict(parameters[key]))
+        return node
+
+    return transform(expression, bind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +45,7 @@ class FitResult:
         """Evaluate the supplied model or expression.
 
         Args:
-            values: Values keyed by symbol name.
+            values: Values keyed by symbol name or an evaluation context.
             time: Optional sample times.
             delay_resolver: Optional callback that resolves delayed values.
             num_nodes: Explicit node count for indexed expressions.
@@ -139,9 +155,10 @@ def fit(
         method=method,
         options=dict(options or {}),
     )
+    parameters = unpack(result.x)
     return FitResult(
-        expression=expression,
-        parameters=unpack(result.x),
+        expression=bind_parameters(expression, parameters),
+        parameters=parameters,
         loss=float(result.fun),
         success=bool(result.success),
         message=str(result.message),

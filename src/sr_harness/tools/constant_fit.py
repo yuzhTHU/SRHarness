@@ -63,11 +63,11 @@ class ConstantFitTool(BaseTool):
             ], "numbers": numbers}
 
         target_expression = y if y is not None else (
-            original.to_str() if use_eq_as_y else self.context["target"]
+            original.to_str() if use_eq_as_y else self.context.target
         )
         target_symbol = self.parse_formula(target_expression)
-        train = self.context["data"]
-        validation = self.context.get("evaluation_data")
+        train = self.context.train_data()
+        validation = self.context.evaluation_data()
         train_target = self._values(target_symbol, train)
         validation_target = self._values(target_symbol, validation) if validation else None
 

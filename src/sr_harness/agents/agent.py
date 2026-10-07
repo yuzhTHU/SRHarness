@@ -66,7 +66,7 @@ class Agent(ABC, FactoryMixin):
         Args:
             messages: Conversation messages in provider-compatible order.
         """
-        self.context["messages"] = deepcopy(messages)
+        self.context.args.messages = deepcopy(messages)
 
     def execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult | None]:
         """Execute tool calls serially.

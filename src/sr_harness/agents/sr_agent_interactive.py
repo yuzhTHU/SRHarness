@@ -130,6 +130,7 @@ class SRAgentInteractive(SRAgent):
         self.interaction_manager = interaction_manager or TerminalInteractionManager()
         self.interaction_manager.bind_run_state(self.run_state)
         self.human_input_callback = human_input_callback or self.interaction_manager.ask_human
+        self._last_iteration_had_tool_calls = True
 
     @contextmanager
     def prepare_tool_context(self, tool_context: AgentContext):
@@ -138,13 +139,14 @@ class SRAgentInteractive(SRAgent):
         Args:
             tool_context: Shared context used to initialize tools.
         """
-        tool_context["human_input_callback"] = self.human_input_callback
+        tool_context.args.human_input_callback = self.human_input_callback
         if not self.use_workspace:
             yield tool_context
             return
 
-        if tool_context.workspace is not None:
-            self.interaction_manager.bind_workspace(tool_context.workspace)
+        workspace_manager = getattr(tool_context.args, "workspace_manager", None)
+        if workspace_manager is not None:
+            self.interaction_manager.bind_workspace(workspace_manager)
             yield tool_context
             return
 
@@ -152,7 +154,8 @@ class SRAgentInteractive(SRAgent):
 
         with Workspace(self.workspace_files, self.save_path) as workspace:
             _logger.note(f"Workspace initialized at: {workspace.path}")
-            tool_context.workspace = workspace
+            tool_context.workspace = workspace.path
+            tool_context.args.workspace_manager = workspace
             yield tool_context
 
     def before_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
@@ -249,14 +252,14 @@ class SRAgentInteractive(SRAgent):
                     raise ValueError(
                         "force_initial_diagnostics requires the discover-symbolic-laws skill"
                     )
-            train_data, validation_data = self._split_data(self._active_X, self._active_y)
-            self.context.bind_split(train_data, validation_data)
-            self.context.update({
-                "llm_provider": self.llm_provider,
-                "llm_model": self.llm_model,
-                "llm_max_tokens": self.llm_max_tokens,
-                "enabled_skills": sorted(self.enabled_skills),
-            })
+            self.context.args.validation_fraction = self.validation_fraction
+            self.context.args.split_by = self.split_by
+            self.context.args.split_random_state = self.split_random_state
+            self.context.invalidate_splits()
+            self.context.args.llm_provider = self.llm_provider
+            self.context.args.llm_model = self.llm_model
+            self.context.args.llm_max_tokens = self.llm_max_tokens
+            self.context.args.enabled_skills = sorted(self.enabled_skills)
             self.initialize_tools(self.context)
             self.model_router.base_provider = self.llm_provider
             self.model_router.base_model = self.llm_model
@@ -272,7 +275,7 @@ class SRAgentInteractive(SRAgent):
             self.emit("settings_error", {"error": str(exc)})
 
     def handle_iteration_complete(self, buffer, R: int, L: int, C: int) -> str | None:
-        """Keep interactive runs open after finding an exact candidate.
+        """Keep interactive runs open and yield tool-free responses to the human.
 
         Args:
             buffer: Conversation history buffer.
@@ -296,6 +299,21 @@ class SRAgentInteractive(SRAgent):
                     "Congratulations! You've found a formula with MSE=0. "
                     "Please conclude the search and call ask_human with a summary "
                     "of your discovery and the final formula."
+                ),
+            })
+        if (
+            not self._last_iteration_had_tool_calls
+            and self.interaction_manager.should_request_guidance_after_tool_free_response()
+        ):
+            guidance = self.human_input_callback(
+                "The Agent replied without calling a tool and has yielded control. "
+                "Provide further guidance to continue the symbolic-regression search."
+            )
+            buffer.append({
+                "role": "user",
+                "content": (
+                    "[Human guidance after the Agent yielded control]\n"
+                    f"{guidance}"
                 ),
             })
         return None
@@ -389,7 +407,7 @@ class SRAgentInteractive(SRAgent):
             "content": user_content
         })
         for tool in self.tools:
-            if (workspace := tool.context.get("workspace")) is not None:
+            if (workspace := getattr(tool.context.args, "workspace_manager", None)) is not None:
                 self.interaction_manager.bind_workspace(workspace)
                 break
         return self.interaction_manager.prepare_initial_prompt(
@@ -475,6 +493,9 @@ class SRAgentInteractive(SRAgent):
                     "error": str(exc),
                 })
             raise
+        self._last_iteration_had_tool_calls = any(
+            calls for _, calls, _ in responses
+        )
         self.emit("activity", {"phase": "processing", "coord": coord})
         cumulative_usage = {
             "token": self.token_counter.named_count,

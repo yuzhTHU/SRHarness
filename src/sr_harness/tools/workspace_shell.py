@@ -413,7 +413,7 @@ class WorkspaceShellTool(BaseTool):
                 Examples: "ls", "cat data.csv | head -5", "gunzip data.csv.gz".
             output_limit_bytes: Maximum stdout size returned by each command segment.
         """
-        workspace: Workspace = self.context.get("workspace")
+        workspace: Workspace = getattr(self.context.args, "workspace_manager", None)
         if workspace is None:
             return self._error("Workspace not initialized.")
         output_limit_bytes = self._bounded_output_limit(output_limit_bytes)

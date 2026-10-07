@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -17,16 +17,25 @@ import numpy as np
 from dotenv import dotenv_values, set_key, unset_key
 
 from ..agents.data_preparation_agent import DataPreparationAgent
+from ..agents.evaluator_construction_agent import EvaluatorConstructionAgent
 from ..agents.sr_agent_interactive import SRAgentInteractive
 from ..api import BaseAPI
-from ..core import AgentContext, ContextDataStore, ToolMetadata, json_value
+from ..core import AgentContext, ContextDataLoader, ToolMetadata, json_value
 from ..interaction import InteractionManager, WebInteractionManager
 from ..runtime import InteractionController
 from ..interaction.web import add_variable_descriptions
 from ..runtime import ModelRouter
 from ..skills import SkillManager
 from ..tools import BaseTool
+from ..tools.evaluate_formula import EvaluateTool
 from ..tools.workspace_shell import Workspace
+from .evaluator_config import (
+    CUSTOM_TEMPLATE,
+    compile_custom_evaluator,
+    create_builtin_evaluator,
+    evaluator_catalog,
+    evaluator_source,
+)
 
 
 RUNTIME_SETTING_NAMES = (
@@ -84,6 +93,34 @@ class _ModelTestTool(BaseTool):
         return {"answer": answer}
 
 
+class _UpdateEvaluatorTool(BaseTool):
+    """Restricted tool for replacing the custom evaluator source."""
+
+    metadata = ToolMetadata(
+        name="update_evaluator",
+        description="Validate and activate a complete CustomEvaluator Python source file.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "Complete Python source defining exactly one BaseEvaluator subclass.",
+                },
+            },
+            "required": ["source"],
+            "additionalProperties": False,
+        },
+    )
+
+    def execute(self, source: str):
+        """Validate and activate custom evaluator source.
+
+        Args:
+            source: Complete source defining exactly one BaseEvaluator subclass.
+        """
+        return self.context.args.update(source)
+
+
 class InteractiveSession:
     """Own one run for the lifetime of the server; no account/session registry."""
     def __init__(
@@ -101,6 +138,7 @@ class InteractiveSession:
         self.controller = controller or InteractionController()
         self.lock = threading.RLock()
         self.model_test_lock = threading.Lock()
+        self.evaluator_agent_lock = threading.Lock()
         self.run_id = uuid.uuid4().hex
         self.run_dir = (
             Path(run_dir).expanduser().resolve()
@@ -114,8 +152,11 @@ class InteractiveSession:
         )
         self.workspace = self.workspace_manager.path
         self.context = AgentContext(workspace=self.workspace_manager)
+        self.evaluator_id = "default"
+        self.evaluator_source = evaluator_source(self.evaluator_id)
+        self.context.evaluator = create_builtin_evaluator(self.evaluator_id)
         self._capability_skill_manager = SkillManager()
-        self.context["skill_manager"] = self._capability_skill_manager
+        self.context.args.skill_manager = self._capability_skill_manager
         self.env_path = Path(env_path or Path.cwd() / ".env").resolve()
         env_values = dotenv_values(self.env_path) if self.env_path.exists() else {}
         configured_proxy = (
@@ -199,9 +240,100 @@ class InteractiveSession:
                     "context_ready": bool(self.context.data),
                     "workspace": str(self.workspace), "data_state": self.data_state,
                     "data_agent_settings": self.data_agent_settings.copy(),
+                    "evaluator_id": self.evaluator_id,
                     "data_result": json_value(self.data_result),
                     "data_context": json_value(self.context.schema()),
                     **self.controller.status()}
+
+    def evaluator_configuration(self):
+        """Return the selected evaluator, source, and built-in catalog."""
+        return {
+            "selected": self.evaluator_id,
+            "source": self.evaluator_source,
+            "custom_template": CUSTOM_TEMPLATE,
+            "evaluators": evaluator_catalog(),
+        }
+
+    def configure_evaluator(self, payload):
+        """Validate and select an evaluator before symbolic regression starts."""
+        if self.state != "idle":
+            raise ValueError("The evaluator cannot be changed after the run has started")
+        evaluator_id = str(payload.get("selected", "")).strip()
+        if evaluator_id == "custom":
+            source = str(payload.get("source", ""))
+            evaluator = compile_custom_evaluator(source)
+        else:
+            evaluator = create_builtin_evaluator(evaluator_id)
+            source = evaluator_source(evaluator_id)
+        with self.lock:
+            self.evaluator_id = evaluator_id
+            self.evaluator_source = source
+            self.context.evaluator = evaluator
+            self.context.invalidate_splits()
+        return self.evaluator_configuration()
+
+    def test_evaluator(self, payload):
+        """Run ``evaluate_formula`` with an unsaved evaluator draft."""
+        evaluator_id = str(payload.get("selected", self.evaluator_id)).strip()
+        evaluator = (
+            compile_custom_evaluator(str(payload.get("source", "")))
+            if evaluator_id == "custom"
+            else create_builtin_evaluator(evaluator_id)
+        )
+        if not self.context.data or not self.context.target or not self.context.feature_names():
+            raise ValueError("Prepare data and select a target plus at least one feature first")
+        test_context = AgentContext(
+            args=self.context.args,
+            data=self.context.data,
+            target=self.context.target,
+            variable_descriptions=self.context.variable_descriptions,
+            variable_axes=self.context.variable_axes,
+            variable_structures=self.context.variable_structures,
+            num_nodes=self.context.num_nodes,
+            evaluator=evaluator,
+            workspace=self.context.workspace,
+        )
+        formula = str(payload.get("formula") or self.context.feature_names()[0]).strip()
+        result = EvaluateTool(context=test_context)(
+            f=formula,
+            fit=True,
+            show_diagnostics=False,
+        )
+        if not result.ok:
+            raise ValueError(result.result_str)
+        return {"formula": formula, "result": json_value(result.result)}
+
+    def assist_evaluator(self, payload):
+        """Let a restricted agent construct, exercise, and repair an evaluator."""
+        if self.state != "idle":
+            raise ValueError("EvaluatorConstructionAgent is only available before a run starts")
+        instruction = str(payload.get("message", "")).strip()
+        if not instruction:
+            raise ValueError("Evaluator construction instruction must not be empty")
+        draft = str(payload.get("source", self.evaluator_source))
+
+        def update(source):
+            configuration = self.configure_evaluator({"selected": "custom", "source": source})
+            return {"updated": True, "selected": configuration["selected"]}
+
+        update_tool = _UpdateEvaluatorTool(update=update)
+        evaluate_tool = EvaluateTool(context=self.context)
+        tools = [update_tool, evaluate_tool]
+        with self.evaluator_agent_lock:
+            result = EvaluatorConstructionAgent(
+                llm_provider=self.settings["llm_provider"],
+                llm_model=self.settings["llm_model"],
+                context=self.context,
+                tools=tools,
+                current_source=draft,
+                tool_parser=self.settings["tool_parser"],
+                llm_max_tokens=self.settings["llm_max_tokens"],
+            ).run(instruction)
+        return {
+            **result,
+            "source": self.evaluator_source,
+            "selected": self.evaluator_id,
+        }
 
     def capabilities(self, agent: str = "search"):
         """Describe configurable tools and user-facing skills for the Web UI.
@@ -470,7 +602,7 @@ class InteractiveSession:
                 y = {target: frame[target].to_numpy(dtype=float)}
             elif self.context.data:
                 target = str(payload.get("target") or self.context.target)
-                features = payload.get("features") or self.context.features
+                features = payload.get("features") or list(self.context.feature_names())
                 X, y = self._select_context_columns(target, features)
                 self.context.variable_descriptions = self.variable_descriptions.copy()
             else:
@@ -612,7 +744,7 @@ class InteractiveSession:
             y = {target: np.empty(1)}
         elif self.context.data:
             target = str(payload.get("target") or self.context.target or "")
-            features = payload.get("features") or self.context.features
+            features = payload.get("features") or list(self.context.feature_names())
             X, y = self._select_context_columns(target, features)
         else:
             X, y = {"x": np.empty(1)}, {"y": np.empty(1)}
@@ -656,10 +788,7 @@ class InteractiveSession:
             raise ValueError("Select a target and at least one distinct feature")
 
         def array(name: str) -> np.ndarray | None:
-            if name in self.context.data:
-                return self.context.data[name]
-            axis = self.context.axes.get(name)
-            return None if axis is None else axis.values
+            return self.context.data.get(name)
 
         selected = {name: array(name) for name in [*features, target]}
         missing = [name for name, value in selected.items() if value is None]
@@ -748,15 +877,15 @@ class InteractiveSession:
                 (staging / "manifest.json").write_text(
                     json.dumps(manifest, indent=2), encoding="utf-8",
                 )
-                ContextDataStore(staging).load()
+                ContextDataLoader(staging).load()
                 staging.replace(path)
-                self.context.commit_context_data(ContextDataStore(path).load())
+                self.context.commit_context_data(ContextDataLoader(path).load())
             finally:
                 shutil.rmtree(staging, ignore_errors=True)
             return path
 
     def _run(self, X, y, description):
-        self.context["sr_active"] = True
+        self.context.args.sr_active = True
         try:
             options = dict(self.settings)
             save_path = options.pop("save_path", str(self.run_dir))
@@ -784,7 +913,7 @@ class InteractiveSession:
         with self.lock:
             self.result = json_value(result)
             self.state = result.get("status", "completed")
-            self.context["sr_active"] = False
+            self.context.args.sr_active = False
         self.controller.publish("lifecycle", {"state": self.state, "result": self.result})
         self.controller.publish("activity", {"phase": self.state})
 
@@ -904,8 +1033,28 @@ class InteractiveSession:
         updates = self.validate_data_agent_settings(payload)
         self.validate_capabilities(updates, agent="data")
         settings = {**self.data_agent_settings, **updates}
+        return self._test_model(settings, proxy=settings.get("proxy", ""))
+
+    def test_model(self, payload):
+        """Test the symbolic-regression model settings without applying them.
+
+        Args:
+            payload: Runtime settings currently entered in the Web UI.
+
+        Returns:
+            Connectivity and parsed tool-call diagnostics.
+        """
+        updates = self.validate_settings(payload, initial=self.state == "idle")
+        self.validate_capabilities(updates)
+        settings = {**self.settings, **updates}
+        self.validate_setting_dependencies(settings)
+        return self._test_model(settings)
+
+    def _test_model(self, settings, *, proxy=None):
+        """Run the shared plain-response and tool-call model probes."""
         probe_tool = _ModelTestTool(context=self.context)
-        with self.model_test_lock, self.temporary_proxy(settings.get("proxy", "")):
+        proxy_context = self.temporary_proxy(proxy) if proxy is not None else nullcontext()
+        with self.model_test_lock, proxy_context:
             api = BaseAPI.create(
                 settings["llm_provider"],
                 model=settings["llm_model"],

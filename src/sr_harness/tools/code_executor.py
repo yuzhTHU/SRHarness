@@ -626,8 +626,7 @@ class CodeExecutorTool(BaseTool):
         """
         # 准备 stdin
         if not hasattr(self, 'stdin_text'):
-            assert 'data' in self.context
-            data = self.context['data']
+            data = self.context.data
             data_dict = self.serialization(data)
             stdin_text = self.stdin_text = json.dumps(data_dict, ensure_ascii=False)
         else:
@@ -729,7 +728,7 @@ class CodeExecutorTool(BaseTool):
         if result["stdout"]:
             parts.append(result["stdout"].rstrip())
         if result["stderr"]:
-            parts.append(f"Program stderr:\n{result["stderr"].rstrip()}")
+            parts.append(f"Program stderr:\n{result['stderr'].rstrip()}")
         if not parts:
             parts.append("Program completed successfully and printed no output.")
         parts.append(f"(Execution duration: {result['duration']:.3f} seconds.)")

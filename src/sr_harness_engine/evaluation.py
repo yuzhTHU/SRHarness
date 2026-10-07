@@ -36,7 +36,7 @@ class _RelationScope:
         return {name: self.table[:, column] for column, name in enumerate(self.indices)}
 
 
-class Evaluator:
+class _ExpressionEvaluator:
     """NumPy expression-tree evaluator."""
     def __init__(
         self,
@@ -420,4 +420,4 @@ def evaluate(
     Returns:
         The evaluated scalar or NumPy array.
     """
-    return Evaluator(values, parameters, time, delay_resolver, expression, num_nodes)(expression)
+    return _ExpressionEvaluator(values, parameters, time, delay_resolver, expression, num_nodes)(expression)

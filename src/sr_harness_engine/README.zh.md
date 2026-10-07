@@ -86,10 +86,10 @@ param('alpha', value=0.3) * x1 / (1 - param('alpha')) + param('beta')
 
 ```python
 fit = expression.fit(data, target, initial={"beta": 0.0})
-value = expression.evaluate(data, parameters=fit.parameters)
+value = fit.expression.evaluate(data)
 ```
 
-拟合目前以均方误差为目标，并通过 `scipy.optimize.minimize` 优化。`fit()` 返回 `FitResult`，不会修改原表达式。
+拟合目前以均方误差为目标，并通过 `scipy.optimize.minimize` 优化。`fit()` 返回 `FitResult`，不会修改原表达式；其中的 `fit.expression` 已绑定全部拟合参数，可直接求值。如果上下文包含 `data`、`target` 和可选的 `num_nodes`，也可以直接写 `expression.fit(context).expression` 与 `expression.evaluate(context)`。
 
 `expression.count_parameters(data)` 返回模型中独立待拟合数值的数量。同名 `param` 只计一次，固定数值不计入；`grouped_param` 在类别数据可用时按不同类别的数量计数。
 
@@ -265,31 +265,22 @@ custom_python_function(x)
 
 ## SRHarness 评估器接口
 
-符号引擎负责 RHS 表达式，实验协议由 `sr_harness.Evaluator` 定义。用户可以继承这个类，实现自己的参数拟合和评价方法：
+符号引擎负责 RHS 表达式，实验协议由 `sr_harness.BaseEvaluator` 定义，并由 `DefaultEvaluator` 提供普通 `(N,)` 数据的默认实现。用户可以继承默认实现，按需改写参数拟合和评价方法：
 
 ```python
-from typing import Any
-
-from sr_harness import Evaluator
+from sr_harness import DefaultEvaluator
 
 
-class MyEvaluator(Evaluator):
-    def fit(
-        self,
-        formula: str,
-        data: dict[str, Any],
-        target: Any,
-    ) -> dict[str, Any]:
-        ...
+class MyEvaluator(DefaultEvaluator):
+    @staticmethod
+    def fit(expression, context, target):
+        return expression.fit(context.data, target).expression
 
-    def evaluate(
-        self,
-        formula: str,
-        data: dict[str, Any],
-        target: Any,
-        parameters: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        ...
+    @staticmethod
+    def evaluate(expression, context, target):
+        prediction = expression.evaluate(context.data)
+        return {"mse": float(((prediction - target) ** 2).mean()),
+                "complexity": len(expression)}
 ```
 
-这个接口只要求公式字符串、普通字典和目标数据，不要求用户了解 Agent、搜索状态或 Web UI。ODE 评估器可以在其中积分轨迹，网络评估器可以读取关系表，特殊任务也可以自行决定拟合参数和返回哪些指标。候选模型本身仍然是受符号语法约束的字符串。
+这个接口接收结构化表达式、包含当前数据划分的上下文和目标数组，不要求用户了解 Agent、搜索状态或 Web UI。`fit()` 返回的表达式必须已经绑定所有参数值，可以直接通过 `expression.evaluate(context.data)` 求值；`evaluate()` 返回包含 MSE、R²、复杂度等项目的 split metrics。ODE 评估器可以在其中积分轨迹，`GraphEvaluator` 可以读取关系表，特殊任务也可以自行决定拟合参数和返回哪些指标。

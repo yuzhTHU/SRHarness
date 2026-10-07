@@ -66,9 +66,9 @@ class EvaluateCodeTool(BaseTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
             show_diagnostics: Whether metrics should include compact residual diagnostics.
         """
-        data = self.context['data']
-        evaluation_data = self.context.get("evaluation_data", {})
-        y = y or self.context['target']
+        data = self.context.train_data()
+        evaluation_data = self.context.evaluation_data()
+        y = y or self.context.target
         y = y.strip().strip('"').strip("'")
         eq_y = self.parse_formula(y)
 
@@ -84,7 +84,7 @@ class EvaluateCodeTool(BaseTool):
         process = mp_context.Process(target=self.sandbox_worker, args=(
             prepared_model_code, model_func_name,
             prepared_predict_code, predict_func_name,
-            data, evaluation_data, self.context['target'],
+            data, evaluation_data, self.context.target,
             timeout_seconds, memory_limit_mb, output_limit_bytes,
             result_queue,
         ))
@@ -152,7 +152,7 @@ class EvaluateCodeTool(BaseTool):
 
         evaluation = {
             "formula": result["model_str"],
-            "is_candidate": result["is_candidate"] and eq_y.to_str() == self.context["target"],
+            "is_candidate": result["is_candidate"] and eq_y.to_str() == self.context.target,
             "data_split_results": data_split_results,
         }
         return evaluation

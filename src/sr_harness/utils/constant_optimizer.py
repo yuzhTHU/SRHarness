@@ -144,6 +144,7 @@ def fit_constants(
     y: np.ndarray,
     *,
     config: ConstantOptimizerConfig | None = None,
+    num_nodes: int | None = None,
 ) -> engine.Expression:
     """Return a fitted expression without modifying ``f``.
 
@@ -158,7 +159,10 @@ def fit_constants(
     if target.size == 0 or not np.all(np.isfinite(target)):
         raise ValueError("y must contain at least one finite-only sample")
     arrays = {name: np.asarray(value) for name, value in data.items()}
-    if any(np.asarray(value).reshape(-1).size != target.size for value in arrays.values()):
+    if num_nodes is None and any(
+        np.asarray(value).reshape(-1).size != target.size
+        for value in arrays.values()
+    ):
         raise ValueError("all data arrays must have the same number of samples as y")
 
     expression, specs = _parameterize_literals(f.copy(), arrays)
@@ -174,7 +178,12 @@ def fit_constants(
         try:
             with np.errstate(all="ignore"):
                 value = np.asarray(
-                    expression.evaluate(arrays, parameters=_unpack(raw, specs)), dtype=float
+                    expression.evaluate(
+                        arrays,
+                        parameters=_unpack(raw, specs),
+                        num_nodes=num_nodes,
+                    ),
+                    dtype=float,
                 ).reshape(-1)
             if value.size == 1 and target.size != 1:
                 value = np.full(target.size, float(value[0]))

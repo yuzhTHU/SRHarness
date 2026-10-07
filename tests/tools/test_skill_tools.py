@@ -188,7 +188,7 @@ class ExampleProposer(BaseTool):
     metadata = ToolMetadata(name="example_proposer", description="Propose a formula.")
     def execute(self, variable: str):
         """Propose a formula."""
-        return self.evaluate(f=self.parse_formula(variable), y=self.parse_formula(self.context["target"]))
+        return self.evaluate(f=self.parse_formula(variable), y=self.parse_formula(self.context.target))
 '''
 
     def test_execute_creates_instruction_skill(self, tmp_path: Path):
