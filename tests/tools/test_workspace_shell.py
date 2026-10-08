@@ -132,6 +132,19 @@ class TestWorkspace:
         ws.cleanup()
         assert not path.exists()
 
+    def test_unlocked_file_in_locked_directory_can_be_modified_in_place(self):
+        directory = self.ws.path / "context.data"
+        directory.mkdir()
+        manifest = directory / "manifest.json"
+        manifest.write_text("old")
+        self.ws.set_locked("context.data", True)
+        self.ws.set_locked("context.data/manifest.json", False)
+
+        assert self.ws.resolve("context.data/manifest.json", write=True) == manifest
+        assert self.ws.resolve(
+            "context.data/manifest.json", write=True, modify_entry=True,
+        ) is None
+
     def test_context_manager(self):
         """上下文管理器在退出时清理工作区。"""
         with Workspace() as ws:
@@ -180,13 +193,27 @@ class TestWorkspaceShellTool:
         result = self.tool.execute("chmod 777 data.csv")
         assert result.get("success") is False
 
-    def test_locked_file_rejects_destructive_commands(self):
+    def test_readonly_file_can_be_removed_from_writable_directory(self):
         self.ws.set_locked("data.csv", True)
         result = self.tool.execute("rm data.csv")
-        assert result.get("success") is False
-        assert (self.ws.path / "data.csv").exists()
-        self.ws.set_locked("data.csv", False)
-        assert self.tool.execute("rm data.csv").get("success") is True
+        assert result.get("success") is True
+        assert not (self.ws.path / "data.csv").exists()
+
+    def test_cp_overwrites_unlocked_file_inside_locked_directory(self):
+        directory = self.ws.path / "context.data"
+        directory.mkdir()
+        manifest = directory / "manifest.json"
+        manifest.write_text("old")
+        replacement = self.ws.path / "replacement.json"
+        replacement.write_text("new")
+        self.ws.set_locked("context.data", True)
+        self.ws.set_locked("context.data/manifest.json", False)
+
+        result = self.tool.execute("cp replacement.json context.data/manifest.json")
+
+        assert result.get("success") is True, result
+        assert manifest.read_text() == "new"
+        assert self.tool.execute("rm context.data/manifest.json").get("success") is False
 
     def test_rejects_bash(self):
         """bash 被拒绝。"""

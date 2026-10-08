@@ -43,6 +43,7 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         readonly_mounts: dict[str, str] | None = None,
         *,
         write: bool = False,
+        modify_entry: bool = False,
     ) -> str:
         """Validate a path and return its normalized location inside the workspace.
 
@@ -51,6 +52,8 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
             workspace_dir: Workspace root directory.
             readonly_mounts: Read-only workspace names mapped to source paths.
             write: Whether the caller intends to modify the path.
+            modify_entry: Whether the operation modifies the path's directory entry
+                instead of writing an existing file's contents in place.
 
         Returns:
             The normalized absolute path."""
@@ -83,14 +86,14 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
         except ValueError:
             raise PermissionError(f"禁止访问工作区外的路径：{path}")
         if write:
-            probe = resolved
-            while not probe.exists() and probe != workspace:
-                probe = probe.parent
-            for item in (probe, *probe.parents):
-                if item.exists() and not (item.stat().st_mode & stat.S_IWUSR):
-                    raise PermissionError(f"禁止修改已锁定的工作区内容：{path}")
-                if item == workspace:
-                    break
+            if modify_entry or not resolved.exists():
+                probe = resolved.parent
+                while not probe.exists() and probe != workspace:
+                    probe = probe.parent
+            else:
+                probe = resolved
+            if probe.exists() and not (probe.stat().st_mode & stat.S_IWUSR):
+                raise PermissionError(f"禁止修改已锁定的工作区内容：{path}")
         return str(resolved)
 
     @classmethod
@@ -180,12 +183,13 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
 
         readonly_mounts = sandbox_context.get("readonly_mounts")
 
-        def check(path, *, write=False):
+        def check(path, *, write=False, modify_entry=False):
             return cls.check_workspace_path(
                 path,
                 workspace_dir,
                 readonly_mounts,
                 write=write,
+                modify_entry=modify_entry,
             )
 
         def getcwd():
@@ -204,33 +208,33 @@ class WorkspaceSandBoxCodeExecutor(SandBoxCodeExecutor):
             return os.stat(path, **kwargs)
 
         def mkdir(path, mode=0o777, **kwargs):
-            check(path, write=True)
+            check(path, write=True, modify_entry=True)
             return os.mkdir(path, mode, **kwargs)
 
         def makedirs(name, mode=0o777, exist_ok=False):
-            check(name, write=True)
+            check(name, write=True, modify_entry=True)
             return os.makedirs(name, mode, exist_ok=exist_ok)
 
         def remove(path):
-            check(path, write=True)
+            check(path, write=True, modify_entry=True)
             return os.remove(path)
 
         def unlink(path):
-            check(path, write=True)
+            check(path, write=True, modify_entry=True)
             return os.unlink(path)
 
         def rename(src, dst):
-            check(src, write=True)
-            check(dst, write=True)
+            check(src, write=True, modify_entry=True)
+            check(dst, write=True, modify_entry=True)
             return os.rename(src, dst)
 
         def replace(src, dst):
-            check(src, write=True)
-            check(dst, write=True)
+            check(src, write=True, modify_entry=True)
+            check(dst, write=True, modify_entry=True)
             return os.replace(src, dst)
 
         def rmdir(path):
-            check(path, write=True)
+            check(path, write=True, modify_entry=True)
             return os.rmdir(path)
 
         def walk(top, topdown=True, onerror=None, followlinks=False):

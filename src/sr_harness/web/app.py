@@ -11,8 +11,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..runtime import InteractionController
-
+from ..runtime import SRInteractionManager
 
 WEB_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_DIR / "static"
@@ -22,14 +21,12 @@ DEFAULT_LOG_DIR = Path.cwd() / "logs"
 def create_app(
     log_dir: str | Path = DEFAULT_LOG_DIR,
     *,
-    controller: InteractionController,
     session=None,
 ) -> FastAPI:
     """Create app.
 
     Args:
         log_dir: The log dir value.
-        controller: The controller value.
         session: The session value.
 
     Returns:
@@ -37,7 +34,9 @@ def create_app(
     """
     app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
-    app.state.controller = controller
+    app.state.interaction_manager = (
+        session.sr_interaction_manager if session is not None else SRInteractionManager()
+    )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")
@@ -76,29 +75,21 @@ def create_app(
 
     @app.get("/api/control/status")
     def control_status():
-        return app.state.controller.status()
+        return app.state.interaction_manager.status()
 
     @app.get("/api/control/events")
     def control_events(after_seq: int = Query(0, ge=0)):
-        return app.state.controller.event_batch(after_seq)
+        return app.state.interaction_manager.get_recent_events(after_seq)
 
     @app.post("/api/control/command")
     def control_command(payload: dict = Body(...)):
         try:
-            return app.state.controller.command(
+            return app.state.interaction_manager.command(
                 str(payload.get("action", "")),
-                str(payload.get("message", "")),
+                str(payload.get("message", "")) or None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/control/reply/{event_id}")
-    def control_reply(event_id: str, payload: dict = Body(...)):
-        try:
-            app.state.controller.reply(event_id, str(payload.get("message", "")))
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {"ok": True}
 
     @app.get("/api/runs/{run_id}/records")
     def list_records(run_id: str, after_seq: int = Query(0, ge=0), include_detail: bool = False):

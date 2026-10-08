@@ -85,7 +85,7 @@ def test_agent_context_can_cross_worker_process_boundaries():
     assert restored.args.data_revision == 1
 
 
-def test_sr_agent_refreshes_added_features_without_replacing_its_conversation():
+def test_sr_agent_refreshes_added_features_and_returns_a_change_description():
     context = AgentContext()
     context.commit_data({"x": [1, 2, 3], "y": [2, 4, 6]}, target="y", features=["x"])
     agent = object.__new__(SRAgent)
@@ -96,13 +96,16 @@ def test_sr_agent_refreshes_added_features_without_replacing_its_conversation():
     agent.validation_fraction = 0
     agent.split_by = "ood"
     agent.split_random_state = 42
-    buffer = [{"role": "assistant", "content": "Earlier scientific evidence."}]
-
     context.add_features({"z": [3, 2, 1]})
-    assert agent.refresh_data(buffer)
+    change = agent.refresh_data()
 
     assert list(agent._active_X) == ["x", "z"]
-    assert buffer[0]["content"] == "Earlier scientific evidence."
-    assert "available features are ['x', 'z']" in buffer[-1]["content"]
+    assert change == {
+        "previous_revision": 1,
+        "revision": 2,
+        "target": "y",
+        "features": ["x", "z"],
+        "variable_descriptions": {},
+    }
+    assert agent.refresh_data() is None
     assert context.train_split is not None
-

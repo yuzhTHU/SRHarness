@@ -378,6 +378,9 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "if(events.truncated&&seq)notice(_('eventBufferGap'))" in page.text
     assert "events.events[0].seq>seq+1" not in page.text
     assert "if(e.kind==='evaluator_context')" in page.text
+    assert 'function renderDataContextEventCard(e,feed)' in page.text
+    assert 'meta.append(dataContextLink(p.turn))' in page.text
+    assert 'meta.append(el(\'span\',contextPayloadStats(p),\'context-size\'),time)' in page.text
     assert "contextScope:'evaluator'" in page.text
     assert 'function fitProblemDescription()' in page.text
     assert "requestAnimationFrame(fitProblemDescription)" in page.text

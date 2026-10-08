@@ -12,7 +12,7 @@ from typing import Any, Callable, List, Optional
 
 from ..api import BaseAPI
 from ..core import AgentContext
-from ..interaction import InteractionManager, TerminalInteractionManager
+from ..runtime import SRInteractionManager
 from ..tools import BaseTool
 from .sr_agent import SRAgent
 from ..parser import BaseParser
@@ -22,6 +22,8 @@ _logger = logging.getLogger(f'sr_harness.{__name__}')
 
 class SRAgentInteractive(SRAgent):
     """Interactive symbolic-regression agent controlled by an interaction manager."""
+
+    # Construction and frontend event bridge
 
     def __init__(
         self,
@@ -48,8 +50,7 @@ class SRAgentInteractive(SRAgent):
         larger_is_better: bool = False,
         use_workspace: bool = False,
         workspace_files: List[str | Path] | None = None,
-        human_input_callback: Optional[Callable[[str], str]] = None,
-        interaction_manager: InteractionManager | None = None,
+        interaction_manager: SRInteractionManager | None = None,
         force_initial_diagnostics: bool = False,
         auto_routing: bool = True,
         strong_llm_provider: str | None = None,
@@ -83,7 +84,6 @@ class SRAgentInteractive(SRAgent):
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
             use_workspace: 是否使用工作区。
             workspace_files: 初始化到工作区的文件/目录路径列表。
-            human_input_callback: 人类输入回调函数。默认由交互管理器提供。
             interaction_manager: 连接 Agent 与 Web、终端等交互界面的管理器。
             force_initial_diagnostics: 是否在每个分支开始时强制执行初始诊断。
             auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
@@ -133,24 +133,43 @@ class SRAgentInteractive(SRAgent):
         self.workspace_files = workspace_files
 
         # 交互界面
-        self.interaction_manager = interaction_manager or TerminalInteractionManager()
-        self.interaction_manager.bind_run_state(self.run_state)
-        self.human_input_callback = human_input_callback or self.interaction_manager.ask_human
+        self.interaction_manager = interaction_manager or SRInteractionManager()
         self._last_iteration_had_tool_calls = True
         self._forced_interruption_pending = False
-        self._force_stop_event = self.interaction_manager.force_stop_event()
+        self.prompt_overrides: dict[str, str] = {}
+        self.variable_descriptions: dict[str, str] = {}
+        self.runtime_settings_supplier: Callable[[], dict[str, Any] | None] | None = None
+        self.runtime_settings_committer: Callable[[dict[str, Any]], None] | None = None
         self._bind_tool_cancellation()
+
+    def on_buffer_messages_added(self, messages, **coordinate: int) -> None:
+        """Publish each system/user message exactly when it enters the buffer."""
+        for message in messages:
+            if message.get("role") not in {"system", "user"}:
+                continue
+            payload: dict[str, Any] = {"message": message}
+            if coordinate:
+                payload["coord"] = coordinate
+            self.interaction_manager.publish_event("prompt_added", payload)
+
+    # Runtime settings and tool context
+
+    def _take_runtime_settings(self) -> dict[str, Any] | None:
+        return self.runtime_settings_supplier() if self.runtime_settings_supplier else None
+
+    def _commit_runtime_settings(self, settings: dict[str, Any]) -> None:
+        if self.runtime_settings_committer is not None:
+            self.runtime_settings_committer(settings)
 
     def _bind_tool_cancellation(self) -> None:
         """Share the hard-interrupt event with every active tool instance."""
-        if self._force_stop_event is not None:
-            for tool in self.tools or []:
-                tool.cancel_event = self._force_stop_event
+        for tool in self.tools or []:
+            tool.cancel_event = self.interaction_manager.cancellation_signal
 
     def initialize_tools(self, context: AgentContext) -> None:
         """Initialize tools and attach the active hard-interrupt event."""
         super().initialize_tools(context)
-        if hasattr(self, "_force_stop_event"):
+        if hasattr(self, "interaction_manager"):
             self._bind_tool_cancellation()
 
     @contextmanager
@@ -160,14 +179,12 @@ class SRAgentInteractive(SRAgent):
         Args:
             tool_context: Shared context used to initialize tools.
         """
-        tool_context.args.human_input_callback = self.human_input_callback
         if not self.use_workspace:
             yield tool_context
             return
 
         workspace_manager = getattr(tool_context.args, "workspace_manager", None)
         if workspace_manager is not None:
-            self.interaction_manager.bind_workspace(workspace_manager)
             yield tool_context
             return
 
@@ -179,7 +196,9 @@ class SRAgentInteractive(SRAgent):
             tool_context.args.workspace_manager = workspace
             yield tool_context
 
-    def before_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
+    # Interactive search-boundary hooks
+
+    def prepare_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
         """Apply queued human guidance before the prompt is constructed.
 
         Args:
@@ -191,19 +210,45 @@ class SRAgentInteractive(SRAgent):
         Returns:
             str | None: The operation result.
         """
-        if R == C == L == 1:
-            self._perfect_candidate_announced = False
-        self.emit("activity", {"phase": "checkpoint", "coord": {"R": R, "C": C, "L": L}})
-        for message in self.interaction_manager.checkpoint():
-            buffer.append({
-                "role": "user",
-                "content": f"[Human guidance injected during the run]\n{message}",
-            })
-        if self.refresh_data(buffer):
-            self.emit("data_revision", self.context.schema())
-        if settings := self.interaction_manager.take_runtime_settings():
+        self.interaction_manager.publish_event("search_position_changed", {"R": R, "C": C, "L": L})
+        with self.interaction_manager.wait() as messages:
+            if data_change := self.refresh_data():
+                self._append_buffer_messages(
+                    buffer,
+                    [self.build_data_refresh_message(data_change)],
+                    R=R,
+                    C=C,
+                    L=L,
+                )
+            for message in messages:
+                prompt = {
+                    "role": "user",
+                    "content": f"[Human guidance injected during the run]\n{message.content}",
+                }
+                self._append_buffer_messages(buffer, [prompt], R=R, C=C, L=L)
+        if settings := self._take_runtime_settings():
             self._apply_runtime_settings(settings)
-        return self.interaction_manager.take_search_transition()
+        return self.interaction_manager.consume_search_transition()
+
+    @staticmethod
+    def build_data_refresh_message(change: dict[str, Any]) -> dict[str, str]:
+        """Turn a structured data revision into guidance for the next model turn."""
+        descriptions = change["variable_descriptions"]
+        description_text = (
+            "\nVariable descriptions:\n"
+            + "\n".join(f"- {name}: {description}" for name, description in descriptions.items())
+            if descriptions else ""
+        )
+        return {
+            "role": "user",
+            "content": (
+                "[Structured data updated by the data-preparation agent]\n"
+                f"Data revision changed from {change['previous_revision']} to {change['revision']}. "
+                f"The target is {change['target']!r}; available features are {change['features']}. "
+                "Reassess earlier evidence against the updated variables and continue the investigation."
+                f"{description_text}"
+            ),
+        }
 
     def _apply_runtime_settings(self, settings: dict[str, Any]) -> None:
         """Apply frontend-requested model and capability changes at a safe boundary."""
@@ -293,12 +338,12 @@ class SRAgentInteractive(SRAgent):
             self.run_state.ranking_metric = self.ranking_metric
             self.run_state.larger_is_better = self.larger_is_better
             self._strong_api = None
-            self.interaction_manager.commit_runtime_settings(settings)
-            self.emit("settings_applied", settings)
+            self._commit_runtime_settings(settings)
+            self.interaction_manager.publish_event("settings_applied", settings)
         except Exception as exc:
-            self.emit("settings_error", {"error": str(exc)})
+            self.interaction_manager.publish_event("settings_failed", {"error": str(exc)})
 
-    def handle_iteration_complete(self, buffer, R: int, L: int, C: int) -> str | None:
+    def finish_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
         """Keep interactive runs open and yield tool-free responses to the human.
 
         Args:
@@ -310,145 +355,51 @@ class SRAgentInteractive(SRAgent):
         Returns:
             str | None: The operation result.
         """
-        force_event = getattr(self, "_force_stop_event", None)
-        if getattr(self, "_forced_interruption_pending", False) or (
-            force_event is not None and force_event.is_set()
-        ):
-            buffer.append({"role": "user", "content": "用户强制中止"})
+        if getattr(self, "_forced_interruption_pending", False) or self.interaction_manager.is_interrupting:
+            prompt = {"role": "user", "content": "用户强制中止"}
+            self._append_buffer_messages(buffer, [prompt], R=R, C=C, L=L)
             self._forced_interruption_pending = False
-            self.interaction_manager.consume_force_stop()
             return None
-        best_candidate = self.best_candidate()
-        if (
-            best_candidate is not None
-            and best_candidate.metric("mse", "train") == 0.0
-            and not self._perfect_candidate_announced
-        ):
-            self._perfect_candidate_announced = True
-            buffer.append({
-                "role": "user",
-                "content": (
-                    "Congratulations! You've found a formula with MSE=0. "
-                    "Please conclude the search and call ask_human with a summary "
-                    "of your discovery and the final formula."
-                ),
-            })
-        if (
-            not self._last_iteration_had_tool_calls
-            and self.interaction_manager.should_request_guidance_after_tool_free_response()
-        ):
-            if self.interaction_manager.pause_after_tool_free_response():
-                return None
-            guidance = self.human_input_callback(
-                "The Agent replied without calling a tool and has yielded control. "
-                "Provide further guidance to continue the symbolic-regression search."
-            )
-            buffer.append({
-                "role": "user",
-                "content": (
-                    "[Human guidance after the Agent yielded control]\n"
-                    f"{guidance}"
-                ),
-            })
+        if not self._last_iteration_had_tool_calls:
+            self.interaction_manager.request_pause()
         return None
 
-    def build_initial_prompt(self, problem_description, X, y, restart_records):
-        """Build initial prompt.
+    # Initial-prompt customization hooks
 
-        Args:
-            problem_description: Natural-language description of the discovery task.
-            X: Input feature arrays keyed by variable name.
-            y: Target data or target expression.
-            restart_records: Ranked candidates used to seed a restart.
-        """
-        initial_prompt = []
-        self._task_route_score, self._task_route_reasons = self.model_router.assess(
-            problem_description,
-            feature_count=len(X),
-        )
-
-        # 根据是否有历史最优结果来动态设置 MSE 目标
-        if not restart_records:
-            mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-        elif (best_mse := restart_records[0].metric("mse", "train")) > 0:
-            target_mse = best_mse * 0.1
-            mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
-        else:
-            mse_goal = "The previous round already achieved MSE = 0. Try to find a simpler formula."
-
-        # 构建工作区信息
-        available_tools = {tool.metadata.name for tool in self.tools}
+    def create_initial_system_prompt(self, restart_records) -> str:
+        """Create the interactive system prompt with workspace guidance."""
+        mse_goal = self._build_mse_goal(restart_records)
         workspace_info = (
             "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
             "there rather than reconstructing them from workspace files. The workspace contains "
             "supplemental files and reproducible artifacts. Use workspace_shell for bounded file "
             "operations and workspace_code_executor when Python analysis is necessary."
         ) if self.use_workspace else ""
-        human_guidance = (
-            "- Use ask_human when you need guidance, are stuck, or want to report progress.\n"
-            if "ask_human" in available_tools else ""
+
+        return (
+            "You are a Symbolic Regression Agent working with a human researcher. "
+            "Your goal is to discover simple, interpretable mathematical formulas that explain "
+            "the relationship between feature variables and the target variable.\n\n"
+            "Guidelines:\n"
+            "- Explore data thoroughly before proposing formulas.\n"
+            "- Prefer simple, interpretable expressions over complex ones.\n"
+            f"- {mse_goal}"
+            f"{workspace_info}"
         )
 
-        # 构建 system prompt
-        initial_prompt.append({
-            "role": "system",
-            "content": (
-                "You are a Symbolic Regression Agent working with a human researcher. "
-                "Your goal is to discover simple, interpretable mathematical formulas that explain "
-                "the relationship between feature variables and the target variable.\n\n"
-                "Guidelines:\n"
-                "- Explore data thoroughly before proposing formulas.\n"
-                "- Prefer simple, interpretable expressions over complex ones.\n"
-                f"{human_guidance}"
-                f"- {mse_goal}"
-                f"{workspace_info}"
-            ),
-        })
+    def customize_initial_prompts(self, messages, *, X, y):
+        """Apply UI-provided descriptions and prompt overrides."""
+        descriptions = getattr(self, "variable_descriptions", {})
+        rows = [f"- {name}: {descriptions[name]}" for name in [*X, *y] if descriptions.get(name)]
+        if rows:
+            messages[1]["content"] += "\n\nVariable descriptions:\n" + "\n".join(rows)
+        overrides = getattr(self, "prompt_overrides", {})
+        for message in messages:
+            if message.get("role") in overrides:
+                message["content"] = overrides[message["role"]]
+        return messages
 
-        # 构建 user prompt - 告知具体问题和数据信息
-        user_content = (
-            f"{problem_description}\n\n"
-            f"- Feature names: {list(X.keys())}\n"
-            f"- Target name: {next(iter(y))}\n"
-        )
-
-        # 如果有历史最优结果，注入作为参考上下文
-        if restart_records:
-            user_content += (
-                "\n--- Previously Explored Formulas (from best to worst) ---\n"
-                "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
-            )
-            for record in restart_records:
-                formula = record.formula
-                mse = record.metric("mse", "validation")
-                if mse is None:
-                    mse = record.metric("mse", "train")
-                r2 = record.metric("r2", "validation")
-                if r2 is None:
-                    r2 = record.metric("r2", "train")
-                r2_str = f", R²={r2:.6g}" if r2 is not None else ""
-                user_content += f"  • Formula: {formula}\n    MSE={mse:.6g}{r2_str}\n\n"
-            user_content += "---\n\n"
-            user_content += (
-                "Based on the above results, analyze why the previous best formulas may not be perfect, "
-                "and try a different approach or structure to achieve a lower MSE."
-            )
-        else:
-            user_content += "Please start by analyzing the data to understand the relationship between features and target."
-
-        initial_prompt.append({
-            "role": "user",
-            "content": user_content
-        })
-        for tool in self.tools:
-            if (workspace := getattr(tool.context.args, "workspace_manager", None)) is not None:
-                self.interaction_manager.bind_workspace(workspace)
-                break
-        return self.interaction_manager.prepare_initial_prompt(
-            initial_prompt,
-            X=X,
-            y=y,
-        )
+    # Streaming model and tool events
 
     def request_llm(self, prompt, R: int, L: int, C: int):
         """Request the model while publishing frontend-neutral progress events.
@@ -460,18 +411,12 @@ class SRAgentInteractive(SRAgent):
             C: One-based conversation-branch index.
         """
         coord = {"R": R, "C": C, "L": L}
-        self.emit("context", {"messages": prompt, "coord": coord})
+        self.interaction_manager.publish_event("context", {"messages": prompt, "coord": coord})
         route = self.model_router.route(
             task_score=self._task_route_score,
             task_reasons=self._task_route_reasons,
             refinement_step=L,
         )
-        self.emit("activity", {
-            "phase": "model",
-            "coord": coord,
-            "provider": route.provider,
-            "model": route.model,
-        })
         tool_schemas = {
             tool.metadata.name: self.tool_schema(tool.metadata.name)
             for tool in self.tools
@@ -482,7 +427,7 @@ class SRAgentInteractive(SRAgent):
             for K in range(1, self.local_sample_size + 1)
         }
         for K, response_id in response_ids.items():
-            self.emit("assistant_start", {
+            self.interaction_manager.publish_event("assistant_started", {
                 "response_id": response_id,
                 "coord": coord | {"K": K},
                 "tool_schemas": tool_schemas,
@@ -495,7 +440,7 @@ class SRAgentInteractive(SRAgent):
         def stream_callback(update: dict[str, Any]) -> None:
             K = max(1, min(int(update.get("sample", 1)), self.local_sample_size))
             latest_stream_updates[K] = update
-            if self._force_stop_event is not None and self._force_stop_event.is_set():
+            if self.interaction_manager.is_interrupting:
                 raise InterruptedError("用户强制中止")
             now = time.monotonic()
             if (
@@ -504,7 +449,7 @@ class SRAgentInteractive(SRAgent):
             ):
                 return
             last_stream_emit[K] = now
-            self.emit("assistant_delta", {
+            self.interaction_manager.publish_event("assistant_delta", {
                 **update,
                 "response_id": response_ids[K],
                 "coord": coord | {"K": K},
@@ -513,15 +458,19 @@ class SRAgentInteractive(SRAgent):
                 "model": route.model,
             })
 
+        interrupted = False
         try:
-            responses, usage = super().request_llm(
-                prompt,
-                R=R,
-                L=L,
-                C=C,
-                stream_callback=stream_callback,
-            )
+            cancel = getattr(self.api, "cancel", lambda: None)
+            with self.interaction_manager.cancellable(cancel):
+                responses, usage = super().request_llm(
+                    prompt,
+                    R=R,
+                    L=L,
+                    C=C,
+                    stream_callback=stream_callback,
+                )
         except InterruptedError:
+            interrupted = True
             self._forced_interruption_pending = True
             responses = []
             for K in range(1, self.local_sample_size + 1):
@@ -536,7 +485,7 @@ class SRAgentInteractive(SRAgent):
             usage = {"token": {}, "price": {}}
         except Exception as exc:
             for K, response_id in response_ids.items():
-                self.emit("assistant_error", {
+                self.interaction_manager.publish_event("assistant_failed", {
                     **latest_stream_updates.get(K, {}),
                     "response_id": response_id,
                     "coord": coord | {"K": K},
@@ -548,13 +497,14 @@ class SRAgentInteractive(SRAgent):
         self._last_iteration_had_tool_calls = any(
             calls for _, calls, _ in responses
         )
-        self.emit("activity", {"phase": "processing", "coord": coord})
         cumulative_usage = {
             "token": self.token_counter.named_count,
             "price": self.money_counter.named_count,
         }
         for K, (content, calls, message) in enumerate(responses, 1):
-            self.emit("assistant", {
+            self.interaction_manager.publish_event(
+                "assistant_failed" if interrupted else "assistant_completed",
+                {
                 "response_id": response_ids[K],
                 "content": content,
                 "message": message,
@@ -565,7 +515,9 @@ class SRAgentInteractive(SRAgent):
                 "cumulative_usage": cumulative_usage,
                 "provider": route.provider,
                 "model": route.model,
-            })
+                **({"error": "用户强制中止", "interrupted": True} if interrupted else {}),
+                },
+            )
         return responses, usage
 
     def tool_schema(self, name: str) -> dict[str, Any]:
@@ -598,27 +550,19 @@ class SRAgentInteractive(SRAgent):
         results = []
         for action in actions:
             tool_schema = self.tool_schema(action.name)
-            self.emit("activity", {"phase": "tool", "tool": action.name})
-            self.emit("tool_start", {"call": action, "tool_schema": tool_schema})
+            self.interaction_manager.publish_event("tool_started", {"call": action, "tool_schema": tool_schema})
             started_at = time.monotonic()
-            try:
+            tool = next((item for item in self.tools if item.metadata.name == action.name), None)
+            cancel = getattr(tool, "cancel", lambda: None)
+            with self.interaction_manager.cancellable(cancel):
                 result = super().execute_action([action])[0]
-            except BaseException as exc:
-                self.emit("tool_error", {
-                    "call": action,
-                    "tool_schema": tool_schema,
-                    "duration_seconds": time.monotonic() - started_at,
-                    "error": str(exc),
-                })
-                raise
-            self.emit("tool_result", {
+            self.interaction_manager.publish_event("tool_completed", {
                 "call": action,
                 "tool_schema": tool_schema,
                 "duration_seconds": time.monotonic() - started_at,
                 "result": result,
             })
             results.append(result)
-        self.emit("activity", {"phase": "processing"})
         return results
 
     def collect_candidates(self, *args, **kwargs):
@@ -628,9 +572,8 @@ class SRAgentInteractive(SRAgent):
             *args: Parsed command-line arguments.
             **kwargs: The kwargs value.
         """
-        self.emit("activity", {"phase": "ranking"})
         records = super().collect_candidates(*args, **kwargs)
-        self.emit("topk", {"records": [record.display_dict() for record in records]})
+        self.interaction_manager.publish_event("topk_updated", {"records": [record.display_dict() for record in records]})
         return records
 
     def record_tool_calls(self, tool_calls, results, R, L, C, forced=False):
@@ -647,21 +590,12 @@ class SRAgentInteractive(SRAgent):
         super().record_tool_calls(tool_calls, results, R=R, L=L, C=C, forced=forced)
         if forced:
             for call, result in zip(tool_calls, results):
-                self.emit("tool_result", {
+                self.interaction_manager.publish_event("tool_completed", {
                     "call": call,
                     "tool_schema": self.tool_schema(call.name),
                     "result": result,
                     "forced": True,
                 })
-
-    def emit(self, kind: str, payload: Any) -> None:
-        """Publish an event through the configured interaction manager.
-
-        Args:
-            kind: Event or resource kind.
-            payload: Serializable event payload.
-        """
-        self.interaction_manager.publish(kind, payload)
 
     def execute_action_parallel(self, actions, max_workers: int):
         """Execute action parallel.
@@ -672,6 +606,6 @@ class SRAgentInteractive(SRAgent):
         """
         raise NotImplementedError(
             "Parallel execution is not supported in interactive mode, "
-            "since tools like ask_human and workspace_shell cannot guarantee read-only access. "
+            "since workspace tools cannot guarantee read-only access. "
             "Please set max_workers=0 to disable parallel execution when using interactive tools."
         )

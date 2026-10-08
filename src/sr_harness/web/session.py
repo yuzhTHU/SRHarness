@@ -31,10 +31,7 @@ from ..evaluator.load_custom_evaluator import (
     evaluator_filename,
     evaluator_source,
 )
-from ..interaction import InteractionManager, WebInteractionManager
-from ..runtime import InteractionController
-from ..interaction.web import add_variable_descriptions
-from ..runtime import ModelRouter
+from ..runtime import InteractionManager, ModelRouter, SRInteractionManager
 from ..skills import SkillManager
 from ..tools import BaseTool, ModelTestTool, ValidateEvaluatorTool
 from ..tools.workspace_shell import Workspace
@@ -81,7 +78,6 @@ class InteractiveSession:
     def __init__(
         self,
         log_dir,
-        controller=None,
         agent_options=None,
         data=None,
         initial_prompt="",
@@ -90,7 +86,9 @@ class InteractiveSession:
         run_dir=None,
         workspace_path=None,
     ):
-        self.controller = controller or InteractionController()
+        self.sr_interaction_manager = SRInteractionManager()
+        self.data_interaction_manager = InteractionManager()
+        self.evaluator_interaction_manager = InteractionManager()
         self.lock = threading.RLock()
         self.model_test_lock = threading.Lock()
         self.evaluator_agent_lock = threading.Lock()
@@ -185,13 +183,13 @@ class InteractiveSession:
         self.thread = None
         self.data_thread = None
         self.data_state = "idle"
-        self.data_force_stop_requested = False
+        self.data_force_pause_requested = False
         self.data_result = None
         self.data_agent = None
         self.evaluator_agent = None
         self.evaluator_agent_thread = None
         self.evaluator_agent_state = "idle"
-        self.evaluator_force_stop_requested = False
+        self.evaluator_force_pause_requested = False
         self.evaluator_agent_result = None
         self.sr_agent = None
         self._manifest_description_revision = None
@@ -220,16 +218,18 @@ class InteractiveSession:
                     "supplied_data": self.data is not None,
                     "context_ready": bool(self.context.data),
                     "workspace": str(self.workspace), "data_state": self.data_state,
-                    "data_force_stop_requested": self.data_force_stop_requested,
+                    "data_interaction_state": self.data_interaction_manager.state,
+                    "data_force_pause_requested": self.data_force_pause_requested,
                     "data_agent_settings": self.data_agent_settings.copy(),
                     "evaluator_agent_settings": self.evaluator_agent_settings.copy(),
                     "evaluator_agent_state": self.evaluator_agent_state,
-                    "evaluator_force_stop_requested": self.evaluator_force_stop_requested,
+                    "evaluator_interaction_state": self.evaluator_interaction_manager.state,
+                    "evaluator_force_pause_requested": self.evaluator_force_pause_requested,
                     "evaluator_agent_result": json_value(self.evaluator_agent_result),
                     "evaluator_id": self._evaluator_metadata()["selected"],
                     "data_result": json_value(self.data_result),
                     "data_context": json_value(self.context.schema()),
-                    **self.controller.status()}
+                    **self.sr_interaction_manager.status()}
 
     def _sync_manifest_descriptions(self) -> None:
         """Reflect externally edited manifest descriptions in the live context."""
@@ -336,11 +336,10 @@ class InteractiveSession:
         """Return whether evaluator mutation is safe for the active search."""
         if self.state == "idle":
             return True
-        control = self.controller.status()
+        control = self.sr_interaction_manager.status()
         return (
             self.state in {"starting", "running"}
-            and control["paused"]
-            and control["waiting_at_boundary"]
+            and control["interaction_state"] == "paused"
         )
 
     def configure_evaluator(self, payload):
@@ -461,7 +460,6 @@ class InteractiveSession:
         instruction = str(payload.get("message", "")).strip()
         if not instruction:
             raise ValueError("Evaluator construction instruction must not be empty")
-        self.controller.publish("evaluator_user", {"content": instruction})
         instruction = (
             instruction
             + "\n\nKeep evaluator scripts inside context.evaluator/ and validate the final file. "
@@ -484,12 +482,10 @@ class InteractiveSession:
                     tools=tools,
                     tool_parser=settings["tool_parser"],
                     llm_max_tokens=settings["llm_max_tokens"],
-                    event_callback=self.controller.publish,
+                    interaction_manager=self.evaluator_interaction_manager,
                 )
                 with self.lock:
                     self.evaluator_agent = agent
-                    if self.evaluator_agent_state == "stopping":
-                        agent.request_stop(force=self.evaluator_force_stop_requested)
                 try:
                     result = agent.run(instruction)
                 finally:
@@ -519,10 +515,19 @@ class InteractiveSession:
     def start_evaluator_assistance(self, payload):
         """Start evaluator construction in a cancellable background thread."""
         with self.lock:
-            if self.evaluator_agent_state in {"running", "stopping"}:
+            if self.evaluator_interaction_manager.state in {"running", "pausing", "interrupting"}:
                 raise ValueError("EvaluatorConstructionAgent is already running")
+            instruction = str(payload.get("message", "")).strip()
+            if not instruction:
+                raise ValueError("Evaluator construction instruction must not be empty")
+            if self.evaluator_interaction_manager.state == "paused":
+                self.evaluator_interaction_manager.command("message", instruction)
+                self.evaluator_agent_state = "running"
+                self.evaluator_force_pause_requested = False
+                return self.snapshot()
+            self.evaluator_interaction_manager.command("message", instruction)
             self.evaluator_agent_state = "running"
-            self.evaluator_force_stop_requested = False
+            self.evaluator_force_pause_requested = False
             self.evaluator_agent_result = None
             self.evaluator_agent_thread = threading.Thread(
                 target=self._run_evaluator_assistance,
@@ -535,23 +540,19 @@ class InteractiveSession:
     def stop_evaluator_assistance(self):
         """Request cancellation of the active evaluator-construction turn."""
         with self.lock:
-            if self.evaluator_agent_state not in {"running", "stopping"}:
+            if self.evaluator_interaction_manager.state not in {"running", "pausing", "interrupting"}:
                 raise ValueError("EvaluatorConstructionAgent is not running")
-            force = self.evaluator_agent_state == "stopping"
+            force = self.evaluator_interaction_manager.state == "pausing"
+            self.evaluator_interaction_manager.command("force_pause" if force else "pause")
             self.evaluator_agent_state = "stopping"
-            self.evaluator_force_stop_requested = force
-            if self.evaluator_agent is not None:
-                self.evaluator_agent.request_stop(force=force)
-            self.controller.publish("evaluator_user", {
-                "content": (
-                    "用户强制中止" if force else
-                    "已发送停止请求，Agent 将在本轮结束后暂停。重复点击以强制结束本轮"
-                ),
-            })
+            self.evaluator_force_pause_requested = force
         return self.snapshot()
 
     def _run_evaluator_assistance(self, payload) -> None:
         try:
+            queued = self.evaluator_interaction_manager.start_agent_execution()
+            if queued:
+                payload["message"] = queued[-1].content
             result = self.assist_evaluator(payload)
             state = "completed"
         except InterruptedError as exc:
@@ -563,8 +564,13 @@ class InteractiveSession:
         with self.lock:
             self.evaluator_agent_result = result
             self.evaluator_agent_state = state
-            self.evaluator_force_stop_requested = False
-        self.controller.publish("evaluator_complete", {**json_value(result), "status": state})
+            self.evaluator_force_pause_requested = False
+        self.evaluator_interaction_manager.publish_event(
+            "execution_completed" if state == "completed" else "execution_failed",
+            {**json_value(result), "status": state},
+        )
+        if self.evaluator_interaction_manager.state != "paused":
+            self.evaluator_interaction_manager.finish_agent_execution()
 
     def configure_evaluator_agent(self, payload):
         """Validate and persist evaluator-construction agent model settings."""
@@ -809,7 +815,7 @@ class InteractiveSession:
         with self.lock:
             if self.state != "idle":
                 raise ValueError("This server already owns a run. Restart it to begin a new task.")
-            if self.data_state in {"running", "stopping"}:
+            if self.data_interaction_manager.state in {"running", "pausing", "interrupting"}:
                 raise ValueError("Wait for the data-preparation agent to finish before starting")
             options = self.validate_settings(payload, initial=True)
             self.validate_capabilities(options)
@@ -870,9 +876,6 @@ class InteractiveSession:
                 X, y = {"x": x}, {"y": x*x + 2*x + 1}
                 self.create_demo()
             self.state = "starting"
-            if "user" in self.prompt_overrides:
-                self.controller.publish("user", {"content": self.prompt_overrides["user"]})
-            self.controller.publish("activity", {"phase": "initializing"})
             self.thread = threading.Thread(target=self._run, args=(X, y, description), daemon=True)
             self.thread.start()
         return self.snapshot()
@@ -888,18 +891,21 @@ class InteractiveSession:
                 raise ValueError("The data-preparation agent is already running")
             if self.state == "starting":
                 raise ValueError("Wait for symbolic regression to reach a controllable boundary")
-            control_status = self.controller.status()
+            control_status = self.sr_interaction_manager.status()
             if self.state == "running" and not (
-                control_status["questions"]
-                or control_status["paused"] and control_status["waiting_at_boundary"]
+                control_status["interaction_state"] == "paused"
             ):
                 raise ValueError(
                     "Pause symbolic regression and wait for the safe-boundary acknowledgement "
                     "before changing its data"
                 )
             settings = self.data_agent_settings.copy()
+            if self.data_interaction_manager.state == "paused":
+                self.data_interaction_manager.command("message", instruction)
+                self.data_state = "running"
+                self.data_force_pause_requested = False
+                return self.snapshot()
             if self.data_agent is None:
-                manager = WebInteractionManager(self)
                 self.data_agent = DataPreparationAgent(
                     llm_provider=settings["llm_provider"],
                     llm_model=settings["llm_model"],
@@ -908,7 +914,7 @@ class InteractiveSession:
                     tool_parser=settings["tool_parser"],
                     llm_max_tokens=settings["llm_max_tokens"],
                     skills=settings["skills"],
-                    interaction_manager=manager,
+                    interaction_manager=self.data_interaction_manager,
                 )
             else:
                 self.data_agent.llm_provider = settings["llm_provider"]
@@ -918,9 +924,9 @@ class InteractiveSession:
                 self.data_agent.skills = settings["skills"]
                 self.data_agent.tool_cls_list = BaseTool.load_tool_classes(settings["tools"])
                 self.data_agent.initialize_tools(self.context)
-            self.data_agent.reset_stop()
+            self.data_interaction_manager.command("message", instruction)
             self.data_state = "running"
-            self.data_force_stop_requested = False
+            self.data_force_pause_requested = False
             self.data_result = None
             self.data_thread = threading.Thread(
                 target=self._prepare_data,
@@ -937,18 +943,12 @@ class InteractiveSession:
             Updated session state showing that cancellation is pending.
         """
         with self.lock:
-            if self.data_state not in {"running", "stopping"} or self.data_agent is None:
+            if self.data_interaction_manager.state not in {"running", "pausing", "interrupting"}:
                 raise ValueError("The data-preparation agent is not running")
-            force = self.data_state == "stopping"
+            force = self.data_interaction_manager.state == "pausing"
             self.data_state = "stopping"
-            self.data_force_stop_requested = force
-            self.data_agent.request_stop(force=force)
-            self.controller.publish("data_user", {
-                "content": (
-                    "用户强制中止" if force else
-                    "已发送停止请求，Agent 将在本轮结束后暂停。重复点击以强制结束本轮"
-                ),
-            })
+            self.data_force_pause_requested = force
+            self.data_interaction_manager.command("force_pause" if force else "pause")
         return self.snapshot()
 
     def _prepare_data(self, instruction: str) -> None:
@@ -964,7 +964,8 @@ class InteractiveSession:
 
         previous_revision = directory_revision()
         try:
-            result = self.data_agent.run(instruction)
+            queued = self.data_interaction_manager.start_agent_execution()
+            result = self.data_agent.run(queued[-1].content if queued else instruction)
             if directory_revision() != previous_revision and (data_directory / "manifest.json").is_file():
                 self.context.commit_context_data(load_context_data(data_directory))
                 result = {**result, "context": self.context.schema()}
@@ -976,15 +977,17 @@ class InteractiveSession:
                 "context": self.context.schema(),
             }
             state = "stopped"
-            self.controller.publish("data_complete", result)
+            self.data_interaction_manager.publish_event("execution_failed", result)
         except Exception as exc:
             result = {"error": str(exc), "context": self.context.schema()}
             state = "failed"
-            self.controller.publish("data_error", {"error": str(exc)})
+            self.data_interaction_manager.publish_event("execution_failed", {"error": str(exc)})
         with self.lock:
             self.data_result = json_value(result)
             self.data_state = state
-            self.data_force_stop_requested = False
+            self.data_force_pause_requested = False
+        if self.data_interaction_manager.state != "paused":
+            self.data_interaction_manager.finish_agent_execution()
 
     def preview_initial_prompts(self, payload):
         """Run the ``preview initial prompts`` operation.
@@ -1035,25 +1038,24 @@ class InteractiveSession:
         else:
             X, y = {"x": np.empty(1)}, {"y": np.empty(1)}
         settings = self.settings
-        preview_agent = SimpleNamespace(
-            model_router=ModelRouter(
-                enabled=bool(settings.get("auto_routing", False)),
-                base_provider=settings["llm_provider"],
-                base_model=settings["llm_model"],
-                strong_provider=settings.get("strong_llm_provider"),
-                strong_model=settings.get("strong_llm_model"),
-            ),
-            max_refinement_depth=settings["max_refinement_depth"],
-            use_workspace=True,
-            tools=[],
-            interaction_manager=InteractionManager(),
+        preview_agent = object.__new__(SRAgentInteractive)
+        preview_agent.model_router = ModelRouter(
+            enabled=bool(settings.get("auto_routing", False)),
+            base_provider=settings["llm_provider"],
+            base_model=settings["llm_model"],
+            strong_provider=settings.get("strong_llm_provider"),
+            strong_model=settings.get("strong_llm_model"),
         )
-        messages = SRAgentInteractive.build_initial_prompt(
-            preview_agent, description, X, y, [],
-        )
-        add_variable_descriptions(
-            messages, self.validate_variable_descriptions(payload), [*X, *y],
-        )
+        preview_agent.max_refinement_depth = settings["max_refinement_depth"]
+        preview_agent.use_workspace = True
+        preview_agent.tools = []
+        preview_agent.interaction_manager = InteractionManager()
+        preview_agent.variable_descriptions = self.validate_variable_descriptions(payload)
+        preview_agent.prompt_overrides = {}
+        preview_agent.ranking_metric = settings.get("ranking_metric", "mse")
+        preview_agent.larger_is_better = bool(settings.get("larger_is_better", False))
+        preview_agent.run_state = SimpleNamespace(ranked_candidates=lambda: [], pareto_indices=lambda records: [])
+        messages = preview_agent.create_initial_prompt_messages(description, X, y, [])
         return {
             "problem_description": description,
             "system_prompt": next(message["content"] for message in messages if message["role"] == "system"),
@@ -1145,10 +1147,9 @@ class InteractiveSession:
                 raise ValueError("Wait for the data-preparation agent to finish before reloading context.data")
             if self.state == "starting":
                 raise ValueError("Wait for symbolic regression to reach a controllable boundary")
-            control = self.controller.status()
+            control = self.sr_interaction_manager.status()
             if self.state == "running" and not (
-                control["questions"]
-                or control["paused"] and control["waiting_at_boundary"]
+                control["interaction_state"] == "paused"
             ):
                 raise ValueError(
                     "Pause symbolic regression and wait for the safe-boundary acknowledgement "
@@ -1172,16 +1173,21 @@ class InteractiveSession:
                 use_workspace=True,
             )
             options.setdefault("max_workers", 0)
-            manager = WebInteractionManager(self)
+            manager = self.sr_interaction_manager
             agent = SRAgentInteractive(
                 interaction_manager=manager,
                 context=self.context,
                 **options,
             )
+            agent.prompt_overrides = self.prompt_overrides.copy()
+            agent.variable_descriptions = self.variable_descriptions.copy()
+            agent.runtime_settings_supplier = self._take_pending_settings
+            agent.runtime_settings_committer = self._commit_runtime_settings
             self.sr_agent = agent
+            self.run_state = agent.run_state
             with self.lock:
                 self.state = "running"
-            self.controller.publish("lifecycle", {"state": "running"})
+            manager.start_agent_execution()
             result = agent.run(X, y, description)
         except KeyboardInterrupt as exc:
             result = getattr(exc, "partial_result", {}) | {"status": "interrupted"}
@@ -1191,8 +1197,22 @@ class InteractiveSession:
             self.result = json_value(result)
             self.state = result.get("status", "completed")
             self.context.args.sr_active = False
-        self.controller.publish("lifecycle", {"state": self.state, "result": self.result})
-        self.controller.publish("activity", {"phase": self.state})
+        manager.publish_event("execution_completed" if self.state != "failed" else "execution_failed", {
+            "status": self.state,
+            "result": self.result,
+        })
+        if manager.state != "paused":
+            manager.finish_agent_execution()
+
+    def _take_pending_settings(self) -> dict[str, Any] | None:
+        with self.lock:
+            settings = self.pending_settings
+            self.pending_settings = None
+            return settings
+
+    def _commit_runtime_settings(self, settings: dict[str, Any]) -> None:
+        with self.lock:
+            self.settings.update(settings)
 
     @staticmethod
     def validate_settings(payload, initial=False):

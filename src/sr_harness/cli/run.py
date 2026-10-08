@@ -89,7 +89,6 @@ def main(args: argparse.Namespace) -> int:
         raise SystemExit("Please install web dependencies with: pip install -e .[web]") from exc
 
     from sr_harness.web.app import create_app
-    from sr_harness.runtime import InteractionController
     from sr_harness.web.session import InteractiveSession
 
     if args.exp_name is None:
@@ -108,22 +107,19 @@ def main(args: argparse.Namespace) -> int:
 
     workspace_path = _resolve_workspace_path(args.workspace, args.mount)
 
-    controller = InteractionController()
     session = InteractiveSession(
         save_path.parent,
-        controller,
         workspace_files=args.mount,
         run_dir=save_path,
         workspace_path=workspace_path,
     )
-    app = create_app(save_path.parent, controller=controller, session=session)
+    app = create_app(save_path.parent, session=session)
     browser_host = "127.0.0.1" if args.host in ("0.0.0.0", "::") else args.host
     url = f"http://{browser_host}:{args.port}"
     print(f"SRHarness Interactive: {url}", flush=True)
     try:
         uvicorn.run(app, host=args.host, port=args.port)
     finally:
-        controller.command("stop")
         if session.thread:
             session.thread.join(timeout=2)
         session.close()

@@ -4,14 +4,14 @@ from __future__ import annotations
 import json
 import math
 import numbers
-import threading
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any
 
 from ..api import BaseAPI
 from ..core import AgentContext, json_value
 from ..parser import BaseParser
+from ..runtime import InteractionManager
 from ..tools import BaseTool
 from ..utils import ParallelTimer
 from .agent import Agent
@@ -20,20 +20,18 @@ from .agent import Agent
 class EvaluatorConstructionAgent(Agent):
     """Construct and validate evaluator scripts without mutating live context state."""
 
-    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16, event_callback: Callable[[str, dict[str, Any]], Any] | None = None):
+    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16, interaction_manager: InteractionManager | None = None):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser
         self.llm_max_tokens = llm_max_tokens
         self.max_steps = max_steps
         self.context = context
-        self.event_callback = event_callback
-        self._stop_requested = threading.Event()
-        self._pause_requested = threading.Event()
+        self.interaction_manager = interaction_manager or InteractionManager()
         self._force_recorded = False
         self.tools = tools
         for tool in self.tools:
-            tool.cancel_event = self._stop_requested
+            tool.cancel_event = self.interaction_manager.cancellation_signal
         self.tools_counter = ParallelTimer(unit="call")
         self.parser = BaseParser.create(tool_parser, tool_list=tools)
         self.api = BaseAPI.create(
@@ -88,22 +86,22 @@ class EvaluatorConstructionAgent(Agent):
         }]
 
     def _publish(self, kind: str, payload: dict[str, Any]) -> None:
-        if self.event_callback is not None:
-            self.event_callback(kind, payload)
-
-    def request_stop(self, *, force: bool = False) -> None:
-        """Pause after this turn, or force-interrupt its active operation."""
-        self._pause_requested.set()
-        if force:
-            self._stop_requested.set()
+        self.interaction_manager.publish_event(kind, payload)
 
     def _check_stop(self) -> None:
-        if self._stop_requested.is_set():
+        if self.interaction_manager.is_interrupting:
             raise InterruptedError("用户强制中止")
 
-    def _check_pause(self) -> None:
-        if self._pause_requested.is_set():
-            raise InterruptedError("Evaluator construction paused at a safe boundary")
+    def _wait(self) -> bool:
+        with self.interaction_manager.wait() as messages:
+            for pending in messages:
+                self._append_prompt({"role": "user", "content": pending.content})
+        return bool(messages)
+
+    def _append_prompt(self, message: dict[str, Any]) -> None:
+        self.buffer.append(message)
+        if message.get("role") in {"system", "user"}:
+            self._publish("prompt_added", {"message": message})
 
     def _record_force(self, update: dict[str, Any] | None = None) -> None:
         if self._force_recorded:
@@ -113,14 +111,16 @@ class EvaluatorConstructionAgent(Agent):
             if update.get("reasoning"):
                 message["reasoning"] = update["reasoning"]
             self.buffer.append(message)
-        self.buffer.append({"role": "user", "content": "用户强制中止"})
+        self._append_prompt({"role": "user", "content": "用户强制中止"})
         self._force_recorded = True
 
     def run(self, instruction: str) -> dict[str, Any]:
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("Evaluator construction instruction must not be empty")
-        self.buffer.append({"role": "user", "content": instruction})
+        if not any(event["kind"] == "prompt_added" for event in self.interaction_manager.get_recent_events()["events"]):
+            self._publish("prompt_added", {"message": self.buffer[0]})
+        self._append_prompt({"role": "user", "content": instruction})
         tool_events: list[dict[str, Any]] = []
         timeline_events: list[dict[str, Any]] = []
         update_needs_test = False
@@ -169,11 +169,11 @@ class EvaluatorConstructionAgent(Agent):
                 "provider": self.llm_provider,
                 "model": self.llm_model,
             }
-            self._publish("evaluator_context", {
+            self._publish("context", {
                 "messages": json_value(self.buffer),
                 "turn": step,
             })
-            self._publish("evaluator_assistant_start", event_context)
+            self._publish("assistant_started", event_context)
             last_stream_emit = 0.0
             latest_stream_update: dict[str, Any] = {}
 
@@ -185,27 +185,31 @@ class EvaluatorConstructionAgent(Agent):
                 if update.get("type") == "delta" and now - last_stream_emit < 0.08:
                     return
                 last_stream_emit = now
-                self._publish("evaluator_assistant_delta", {**update, **event_context})
+                self._publish("assistant_delta", {**update, **event_context})
 
             try:
-                call_result = self.api(
-                    self.buffer,
-                    n=1,
-                    max_tokens=self.llm_max_tokens,
-                    stream_callback=stream_callback,
-                )
+                cancel = getattr(self.api, "cancel", lambda: None)
+                with self.interaction_manager.cancellable(cancel):
+                    call_result = self.api(
+                        self.buffer,
+                        n=1,
+                        max_tokens=self.llm_max_tokens,
+                        stream_callback=stream_callback,
+                    )
                 rows = list(call_result)
                 self._check_stop()
             except InterruptedError:
                 self._record_force(latest_stream_update)
-                self._publish("evaluator_assistant_error", {
+                self._publish("assistant_failed", {
                     **latest_stream_update,
                     **event_context,
                     "error": "用户强制中止",
+                    "interrupted": True,
                 })
-                raise
+                self._wait()
+                continue
             except Exception as exc:
-                self._publish("evaluator_assistant_error", {
+                self._publish("assistant_failed", {
                     **latest_stream_update,
                     **event_context,
                     "error": str(exc),
@@ -226,7 +230,7 @@ class EvaluatorConstructionAgent(Agent):
                 ],
             }
             timeline_events.append(assistant_event)
-            self._publish("evaluator_assistant", {
+            self._publish("assistant_completed", {
                 **event_context,
                 "content": content or "",
                 "reasoning": message.get("reasoning", ""),
@@ -236,7 +240,7 @@ class EvaluatorConstructionAgent(Agent):
             })
             if not calls:
                 if update_needs_test:
-                    self.buffer.append({
+                    self._append_prompt({
                         "role": "user",
                         "content": (
                             "Completion is blocked: call validate_evaluator after the latest evaluator "
@@ -244,18 +248,25 @@ class EvaluatorConstructionAgent(Agent):
                             "evaluator-specific metric it returns is a finite number."
                         ),
                     })
-                    self._check_pause()
+                    self._wait()
                     continue
-                self._check_pause()
+                if self._wait():
+                    continue
                 return {
                     "message": content or "",
                     "tool_events": tool_events,
                     "timeline_events": timeline_events,
-                    "streamed": self.event_callback is not None,
+                    "streamed": True,
                 }
             results = []
             for call in calls:
-                results.extend(self.execute_action([call]))
+                tool = next((item for item in self.tools if item.metadata.name == call.name), None)
+                cancel = getattr(tool, "cancel", lambda: None)
+                self._publish("tool_started", {
+                    "call": {"name": call.name, "params": json_value(call.params), "id": call.id},
+                })
+                with self.interaction_manager.cancellable(cancel):
+                    results.extend(self.execute_action([call]))
             completed = [{
                 "tool": call.name,
                 "ok": result.ok,
@@ -271,9 +282,9 @@ class EvaluatorConstructionAgent(Agent):
             tool_events.extend(completed)
             timeline_events.extend({"kind": "tool_result", **event} for event in completed)
             for event in completed:
-                self._publish("evaluator_tool_result", event)
+                self._publish("tool_completed", event)
             self.buffer.extend(self.parser.format_tool_result_messages(calls, results))
-            if self._stop_requested.is_set():
+            if self.interaction_manager.is_interrupting:
                 self._record_force()
                 self._check_stop()
             for call, result in zip(calls, results):
@@ -285,7 +296,7 @@ class EvaluatorConstructionAgent(Agent):
                     and test_has_finite_custom_metrics(result)
                 ):
                     update_needs_test = False
-            self._check_pause()
+            self._wait()
         raise RuntimeError(
             f"EvaluatorConstructionAgent exceeded the {self.max_steps}-step repair limit"
         )

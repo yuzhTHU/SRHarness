@@ -176,7 +176,13 @@ class Workspace:
             item.chmod(updated)
         return path
 
-    def resolve(self, relative_path: str, *, write: bool = False) -> Path | None:
+    def resolve(
+        self,
+        relative_path: str,
+        *,
+        write: bool = False,
+        modify_entry: bool = False,
+    ) -> Path | None:
         """Resolve a relative path inside the workspace.
 
         ``None`` selects the workspace root. Absolute paths, traversal, and symbolic links escaping the workspace are rejected.
@@ -184,6 +190,9 @@ class Workspace:
         Args:
             relative_path: Relative path supplied by the caller.
             write: Whether the caller intends to modify the resolved path.
+            modify_entry: Whether the operation creates, removes, renames, or replaces
+                a directory entry. Such operations require a writable parent directory;
+                an in-place file-content write only requires a writable file.
 
         Returns:
             The resolved path, or ``None`` when it is invalid."""
@@ -219,16 +228,14 @@ class Workspace:
         except ValueError:
             return None
         if write:
-            probe = candidate
-            while not probe.exists() and probe != self._path:
-                probe = probe.parent
-            for item in (probe, *probe.parents):
-                if item == self._path.parent:
-                    break
-                if item.exists() and self.is_locked(item):
-                    return None
-                if item == self._path:
-                    break
+            if modify_entry or not candidate.exists():
+                probe = candidate.parent
+                while not probe.exists() and probe != self._path:
+                    probe = probe.parent
+            else:
+                probe = candidate
+            if probe.exists() and self.is_locked(probe):
+                return None
         return candidate
 
     def cleanup(self):
@@ -884,6 +891,15 @@ class WorkspaceShellTool(BaseTool):
             return self._error(f"No such file: {source}")
         if src_path.is_dir() and not options.recursive:
             return self._error(f"cp: omitting directory {source!r}; use -r")
+        effective_destination = dst_path / src_path.name if dst_path.is_dir() else dst_path
+        destination_name = str(effective_destination.relative_to(ws.path))
+        dst_path = ws.resolve(
+            destination_name,
+            write=True,
+            modify_entry=src_path.is_dir(),
+        )
+        if dst_path is None:
+            return self._error(f"Invalid destination path: {destination}")
         try:
             if src_path.is_dir():
                 shutil.copytree(src_path, dst_path, dirs_exist_ok=options.force)
@@ -902,8 +918,8 @@ class WorkspaceShellTool(BaseTool):
         if len(options.paths) != 2:
             return self._error("mv: exactly one source and one destination are supported")
         source, destination = options.paths
-        src_path = ws.resolve(source, write=True)
-        dst_path = ws.resolve(destination, write=True)
+        src_path = ws.resolve(source, write=True, modify_entry=True)
+        dst_path = ws.resolve(destination, write=True, modify_entry=True)
         if src_path is None:
             return self._error(f"Invalid source path: {source}")
         if dst_path is None:
@@ -928,7 +944,7 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("rm", args, configure)
         for name in options.paths:
-            path = ws.resolve(name, write=True)
+            path = ws.resolve(name, write=True, modify_entry=True)
             if path is None:
                 return self._error(f"Invalid path: {name}")
             if path == ws.path:
@@ -955,7 +971,7 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("mkdir", args, configure)
         for name in options.directories:
-            path = ws.resolve(name, write=True)
+            path = ws.resolve(name, write=True, modify_entry=True)
             if path is None:
                 return self._error(f"Invalid path: {name}")
             try:
@@ -982,7 +998,10 @@ class WorkspaceShellTool(BaseTool):
             else str(Path(options.file).parent / (Path(options.file).name + ".out"))
         )
         out_path = ws.resolve(output_name, write=True)
-        if out_path is None or (not options.keep and ws.resolve(options.file, write=True) is None):
+        if out_path is None or (
+            not options.keep
+            and ws.resolve(options.file, write=True, modify_entry=True) is None
+        ):
             return self._error("gunzip: read-only workspace inputs cannot be modified")
         if out_path.exists() and not options.force:
             return self._error(f"gunzip: output already exists: {out_path.name}; use -f")
@@ -1008,7 +1027,10 @@ class WorkspaceShellTool(BaseTool):
         if not path.exists():
             return self._error(f"No such file: {options.file}")
         out_path = ws.resolve(str(Path(options.file).parent / (Path(options.file).name + ".gz")), write=True)
-        if out_path is None or (not options.keep and ws.resolve(options.file, write=True) is None):
+        if out_path is None or (
+            not options.keep
+            and ws.resolve(options.file, write=True, modify_entry=True) is None
+        ):
             return self._error("gzip: read-only workspace inputs cannot be modified")
         if out_path.exists() and not options.force:
             return self._error(f"gzip: output already exists: {out_path.name}; use -f")
@@ -1030,7 +1052,13 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("unzip", args, configure)
         path = ws.resolve(options.file)
-        destination = ws.resolve(options.directory, write=True)
+        destination = ws.resolve(
+            str(Path(options.directory) / ".workspace-extract-probe"),
+            write=True,
+            modify_entry=True,
+        )
+        if destination is not None:
+            destination = destination.parent
         if path is None:
             return self._error(f"Invalid path: {options.file}")
         if destination is None:
@@ -1067,7 +1095,13 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("tar", args, configure)
         path = ws.resolve(options.file)
-        destination = ws.resolve(options.directory, write=True)
+        destination = ws.resolve(
+            str(Path(options.directory) / ".workspace-extract-probe"),
+            write=True,
+            modify_entry=True,
+        )
+        if destination is not None:
+            destination = destination.parent
         if path is None:
             return self._error(f"Invalid path: {options.file}")
         if destination is None:

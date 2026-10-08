@@ -57,6 +57,27 @@ def test_workspace_executor_rejects_user_locked_files(tmp_path):
         raise AssertionError("locked file unexpectedly accepted for writing")
 
 
+def test_workspace_executor_writes_unlocked_file_in_locked_directory(tmp_path):
+    workspace = Workspace(path=tmp_path)
+    directory = tmp_path / "context.data"
+    directory.mkdir()
+    manifest = directory / "manifest.json"
+    manifest.write_text("old")
+    workspace.set_locked("context.data", True)
+    workspace.set_locked("context.data/manifest.json", False)
+    tool = WorkspaceCodeExecutorTool(
+        context=AgentContext(data={"x": [1, 2]}, workspace=workspace)
+    )
+
+    result = tool(program="open('context.data/manifest.json', 'w').write('new')")
+
+    assert result.ok, result.result_str
+    assert manifest.read_text() == "new"
+    result = tool(program="import os\nos.remove('context.data/manifest.json')")
+    assert not result.ok
+    assert manifest.exists()
+
+
 def test_workspace_executor_terminates_its_worker_when_cancelled(tmp_path):
     workspace = Workspace(path=tmp_path)
     tool = WorkspaceCodeExecutorTool(

@@ -2,14 +2,13 @@
 """Persistent tool-using agent for preparing structured research data."""
 from __future__ import annotations
 
-import threading
 import time
 import uuid
 from copy import deepcopy
 from typing import Any
 
 from ..core import AgentContext
-from ..interaction import InteractionManager
+from ..runtime import InteractionManager
 from ..parser import BaseParser
 from ..skills import SkillManager
 from ..tools import BaseTool
@@ -65,8 +64,6 @@ class DataPreparationAgent(Agent):
         self.parser = None
         self.api = None
         self.context = context
-        self._stop_requested = threading.Event()
-        self._pause_requested = threading.Event()
         self._force_recorded = False
         self.buffer: list[dict[str, Any]] = [{
             "role": "system",
@@ -106,25 +103,15 @@ class DataPreparationAgent(Agent):
         }]
         self.initialize_tools(context)
 
-    def reset_stop(self) -> None:
-        """Clear a previous stop request before starting another user turn."""
-        self._stop_requested.clear()
-        self._pause_requested.clear()
-        self._force_recorded = False
-
-    def request_stop(self, *, force: bool = False) -> None:
-        """Pause after this turn, or force-interrupt its active operation."""
-        self._pause_requested.set()
-        if force:
-            self._stop_requested.set()
-
     def _check_stop(self) -> None:
-        if self._stop_requested.is_set():
+        if self.interaction_manager.is_interrupting:
             raise InterruptedError("用户强制中止")
 
-    def _check_pause(self) -> None:
-        if self._pause_requested.is_set():
-            raise InterruptedError("Data preparation paused at a safe boundary")
+    def _wait(self) -> bool:
+        with self.interaction_manager.wait() as messages:
+            for pending in messages:
+                self._append_prompt({"role": "user", "content": pending.content})
+        return bool(messages)
 
     def _record_force(self, update: dict[str, Any] | None = None) -> None:
         if self._force_recorded:
@@ -134,8 +121,13 @@ class DataPreparationAgent(Agent):
             if update.get("reasoning"):
                 message["reasoning"] = update["reasoning"]
             self.buffer.append(message)
-        self.buffer.append({"role": "user", "content": "用户强制中止"})
+        self._append_prompt({"role": "user", "content": "用户强制中止"})
         self._force_recorded = True
+
+    def _append_prompt(self, message: dict[str, Any]) -> None:
+        self.buffer.append(message)
+        if message.get("role") in {"system", "user"}:
+            self.interaction_manager.publish_event("prompt_added", {"message": message})
 
     def initialize_tools(self, context: AgentContext) -> None:
         """Bind configured skills before constructing context-aware tools.
@@ -146,7 +138,7 @@ class DataPreparationAgent(Agent):
         context.args.enabled_skills = self.skills
         super().initialize_tools(context)
         for tool in self.tools:
-            tool.cancel_event = self._stop_requested
+            tool.cancel_event = self.interaction_manager.cancellation_signal
 
     def run(self, instruction: str) -> dict[str, Any]:
         """Continue the persistent preparation conversation until it yields control.
@@ -163,8 +155,9 @@ class DataPreparationAgent(Agent):
         self.context.args.llm_provider = self.llm_provider
         self.context.args.llm_model = self.llm_model
         self.context.args.llm_max_tokens = self.llm_max_tokens
-        self.buffer.append({"role": "user", "content": instruction})
-        self._publish("data_user", {"content": instruction})
+        if not any(event["payload"].get("message") == self.buffer[0] for event in self.interaction_manager.get_recent_events()["events"] if event["kind"] == "prompt_added"):
+            self.interaction_manager.publish_event("prompt_added", {"message": self.buffer[0]})
+        self._append_prompt({"role": "user", "content": instruction})
         committed = False
         final_content = ""
         while True:
@@ -173,7 +166,7 @@ class DataPreparationAgent(Agent):
             turn = self.turn_count
             prompt = deepcopy(self.buffer)
             self.set_messages(prompt)
-            self._publish("data_context", {"messages": prompt, "turn": turn})
+            self._publish("context", {"messages": prompt, "turn": turn})
             response_id = f"data:{uuid.uuid4().hex}"
             tool_schemas = {
                 tool.metadata.name: {
@@ -182,7 +175,7 @@ class DataPreparationAgent(Agent):
                 }
                 for tool in self.tools
             }
-            self._publish("data_assistant_start", {
+            self._publish("assistant_started", {
                 "response_id": response_id,
                 "turn": turn,
                 "tool_schemas": tool_schemas,
@@ -200,7 +193,7 @@ class DataPreparationAgent(Agent):
                 if update.get("type") == "delta" and now - last_stream_emit < 0.08:
                     return
                 last_stream_emit = now
-                self._publish("data_assistant_delta", {
+                self._publish("assistant_delta", {
                     **update,
                     "response_id": response_id,
                     "turn": turn,
@@ -210,27 +203,31 @@ class DataPreparationAgent(Agent):
                 })
 
             try:
-                call_result = self.api(
-                    prompt,
-                    n=1,
-                    max_tokens=self.llm_max_tokens,
-                    stream_callback=stream_callback,
-                )
+                cancel = getattr(self.api, "cancel", lambda: None)
+                with self.interaction_manager.cancellable(cancel):
+                    call_result = self.api(
+                        prompt,
+                        n=1,
+                        max_tokens=self.llm_max_tokens,
+                        stream_callback=stream_callback,
+                    )
                 responses = list(call_result)
                 self._check_stop()
             except InterruptedError:
                 self._record_force(latest_stream_update)
-                self._publish("data_assistant_error", {
+                self._publish("assistant_failed", {
                     **latest_stream_update,
                     "response_id": response_id,
                     "turn": turn,
                     "provider": self.llm_provider,
                     "model": self.llm_model,
                     "error": "用户强制中止",
+                    "interrupted": True,
                 })
-                raise
+                self._wait()
+                continue
             except Exception as exc:
-                self._publish("data_assistant_error", {
+                self._publish("assistant_failed", {
                     **latest_stream_update,
                     "response_id": response_id,
                     "turn": turn,
@@ -244,7 +241,7 @@ class DataPreparationAgent(Agent):
                 raise RuntimeError("The model returned no usable response")
             content, calls, message = responses[0]
             final_content = content or ""
-            self._publish("data_assistant", {
+            self._publish("assistant_completed", {
                 "response_id": response_id,
                 "content": content,
                 "message": message,
@@ -257,22 +254,23 @@ class DataPreparationAgent(Agent):
             })
             if not calls:
                 self.buffer.append(message)
-                self._check_pause()
+                if self._wait():
+                    continue
                 break
             results = self._execute_with_events(calls)
             self.buffer.append(message)
             self.buffer.extend(self.parser.format_tool_result_messages(calls, results))
             committed = committed or any(result.result.get("data_committed") for result in results)
-            if self._stop_requested.is_set():
+            if self.interaction_manager.is_interrupting:
                 self._record_force()
                 self._check_stop()
-            self._check_pause()
+            self._wait()
         result = {
             "message": final_content,
             "committed": committed,
             "context": self.context.schema(),
         }
-        self._publish("data_complete", result)
+        self._publish("execution_completed", result)
         return result
 
     def _execute_with_events(self, calls):
@@ -286,15 +284,21 @@ class DataPreparationAgent(Agent):
                 for tool in self.tools
                 if tool.metadata.name == call.name
             ), {})
-            self._publish("data_tool_start", {"call": call, "tool_schema": schema})
-            result = super().execute_action([call])[0]
-            self._publish("data_tool_result", {
+            self._publish("tool_started", {"call": call, "tool_schema": schema})
+            started_at = time.monotonic()
+            tool = next((item for item in self.tools if item.metadata.name == call.name), None)
+            cancel = getattr(tool, "cancel", lambda: None)
+            with self.interaction_manager.cancellable(cancel):
+                result = super().execute_action([call])[0]
+            self._publish("tool_completed", {
                 "call": call,
                 "tool_schema": schema,
                 "result": result,
+                "duration_seconds": time.monotonic() - started_at,
+                "interrupted": self.interaction_manager.is_interrupting,
             })
             results.append(result)
         return results
 
     def _publish(self, kind: str, payload: Any) -> None:
-        self.interaction_manager.publish(kind, payload)
+        self.interaction_manager.publish_event(kind, payload)

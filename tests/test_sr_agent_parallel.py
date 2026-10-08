@@ -14,6 +14,7 @@ from sr_harness.core import (
 )
 from sr_harness.agents.sr_agent import SRAgent
 from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
+from sr_harness.runtime import SRInteractionManager
 from sr_harness.tools.base_tool import BaseTool
 from sr_harness.tools.read_skill import ReadSkill
 from sr_harness.tools.relationship_analysis import RelationshipAnalysisTool
@@ -52,20 +53,70 @@ def make_agent(tmp_path):
 def test_interactive_agent_reuses_shared_run_loop():
     assert "run" not in SRAgentInteractive.__dict__
     assert SRAgentInteractive.run is SRAgent.run
+    assert "create_initial_buffer" not in SRAgentInteractive.__dict__
+    assert SRAgentInteractive.create_initial_buffer is SRAgent.create_initial_buffer
+    assert "create_initial_prompt_messages" not in SRAgentInteractive.__dict__
+    assert "prepare_model_messages" not in SRAgentInteractive.__dict__
+    assert "update_conversation" not in SRAgentInteractive.__dict__
     assert not hasattr(SRAgent, "fit")
+
+
+def test_interactive_initial_buffer_uses_narrow_customization_hooks(tmp_path):
+    manager = SRInteractionManager()
+    agent = SRAgentInteractive(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=[],
+        skills=[],
+        save_path=str(tmp_path),
+        interaction_manager=manager,
+    )
+    agent.tools = []
+    agent.variable_descriptions = {"x": "input", "y": "output"}
+
+    messages = agent.create_initial_buffer(
+        "Find y from x.", {"x": np.arange(3)}, {"y": np.arange(3)}, [],
+    )
+
+    assert "working with a human researcher" in messages[0]["content"]
+    assert "- x: input" in messages[1]["content"]
+    events = manager.get_recent_events()["events"]
+    assert [event["payload"]["message"]["role"] for event in events] == [
+        "system", "user", "user",
+    ]
+
+
+def test_initial_prompts_can_be_created_without_progress_or_buffer_events(tmp_path):
+    manager = SRInteractionManager()
+    agent = SRAgentInteractive(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=[],
+        skills=[],
+        save_path=str(tmp_path),
+        interaction_manager=manager,
+    )
+    agent.variable_descriptions = {"x": "input", "y": "output"}
+
+    messages = agent.create_initial_prompt_messages(
+        "Find y from x.", {"x": np.arange(3)}, {"y": np.arange(3)}, [],
+    )
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "- x: input" in messages[1]["content"]
+    assert manager.get_recent_events()["events"] == []
 
 
 def test_interactive_guidance_is_added_before_prompt_construction():
     agent = object.__new__(SRAgentInteractive)
-    agent.interaction_manager = SimpleNamespace(
-        checkpoint=lambda: ["compare against a power law"],
-        publish=lambda *args: None,
-        take_runtime_settings=lambda: None,
-        take_search_transition=lambda: None,
-    )
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
+    agent.interaction_manager.command("message", "compare against a power law")
+    agent.runtime_settings_supplier = None
+    agent.refresh_data = lambda *args, **kwargs: False
     buffer = [{"role": "user", "content": "Find a formula."}]
 
-    agent.before_iteration(buffer, R=1, L=1, C=1)
+    agent.prepare_iteration(buffer, R=1, L=1, C=1)
 
     assert buffer[-1] == {
         "role": "user",
@@ -76,104 +127,96 @@ def test_interactive_guidance_is_added_before_prompt_construction():
     }
 
 
-def test_interactive_agent_waits_for_guidance_after_tool_free_response():
+def test_interactive_refreshes_data_before_queued_human_guidance():
     agent = object.__new__(SRAgentInteractive)
-    agent._last_iteration_had_tool_calls = False
-    agent._perfect_candidate_announced = False
-    agent.best_candidate = lambda: None
-    agent.interaction_manager = SimpleNamespace(
-        should_request_guidance_after_tool_free_response=lambda: True,
-        pause_after_tool_free_response=lambda: False,
-    )
-    prompts = []
-    agent.human_input_callback = lambda prompt: prompts.append(prompt) or "Try a power law."
-    buffer = [{"role": "assistant", "content": "I need more direction."}]
-
-    status = agent.handle_iteration_complete(buffer, R=1, L=2, C=1)
-
-    assert status is None
-    assert prompts == [
-        "The Agent replied without calling a tool and has yielded control. "
-        "Provide further guidance to continue the symbolic-regression search."
-    ]
-    assert buffer[-1] == {
-        "role": "user",
-        "content": (
-            "[Human guidance after the Agent yielded control]\n"
-            "Try a power law."
-        ),
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
+    agent.interaction_manager.command("message", "continue with the new data")
+    agent.runtime_settings_supplier = None
+    agent.refresh_data = lambda: {
+        "previous_revision": 3,
+        "revision": 4,
+        "target": "y",
+        "features": ["x", "z"],
+        "variable_descriptions": {"z": "new feature"},
     }
-
-
-def test_interactive_agent_continues_without_waiting_after_tool_call():
-    agent = object.__new__(SRAgentInteractive)
-    agent._last_iteration_had_tool_calls = True
-    agent._perfect_candidate_announced = False
-    agent.best_candidate = lambda: None
-    agent.interaction_manager = SimpleNamespace(
-        should_request_guidance_after_tool_free_response=lambda: True,
-    )
-    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
-        AssertionError("tool-using responses must not pause for guidance")
-    )
     buffer = []
 
-    assert agent.handle_iteration_complete(buffer, R=1, L=2, C=1) is None
+    agent.prepare_iteration(buffer, R=1, L=2, C=1)
+
+    assert "Data revision changed from 3 to 4" in buffer[0]["content"]
+    assert "- z: new feature" in buffer[0]["content"]
+    assert buffer[1]["content"].endswith("continue with the new data")
+    events = agent.interaction_manager.get_recent_events()["events"]
+    assert [event["kind"] for event in events].count("prompt_added") == 2
+    assert all(event["kind"] != "data_revision" for event in events)
+
+
+def test_interactive_agent_requests_pause_after_tool_free_response():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = False
+    agent.best_candidate = lambda: None
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
+    buffer = [{"role": "assistant", "content": "I need more direction."}]
+
+    status = agent.finish_iteration(buffer, R=1, L=2, C=1)
+
+    assert status is None
+    assert agent.interaction_manager.state == "pausing"
+    assert buffer == [{"role": "assistant", "content": "I need more direction."}]
+
+
+def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = True
+    agent.best_candidate = lambda: SimpleNamespace(metric=lambda name, split: 0.0)
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
+    buffer = []
+
+    assert agent.finish_iteration(buffer, R=1, L=2, C=1) is None
+    assert agent.interaction_manager.state == "running"
     assert buffer == []
 
 
 def test_web_tool_free_response_pauses_without_asking_a_question():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
-    agent._perfect_candidate_announced = False
     agent.best_candidate = lambda: None
-    pauses = []
-    agent.interaction_manager = SimpleNamespace(
-        should_request_guidance_after_tool_free_response=lambda: True,
-        pause_after_tool_free_response=lambda: pauses.append(True) or True,
-    )
-    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
-        AssertionError("a tool-free response must not create an artificial question")
-    )
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
 
-    assert agent.handle_iteration_complete([], R=1, L=2, C=1) is None
-    assert pauses == [True]
+    assert agent.finish_iteration([], R=1, L=2, C=1) is None
+    assert agent.interaction_manager.state == "pausing"
 
 
 def test_safe_pause_does_not_block_tools_already_requested_this_turn(monkeypatch):
     agent = object.__new__(SRAgentInteractive)
-    events = []
     agent.tools = []
-    agent._force_stop_event = None
-    agent.interaction_manager = SimpleNamespace(
-        publish=lambda kind, payload: events.append((kind, payload)),
-        wait_until_running=lambda: (_ for _ in ()).throw(
-            AssertionError("safe pause must wait until the next turn boundary")
-        ),
-    )
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
     result = ToolCallResult(ok=True, result={"mse": 0.0}, result_str="MSE=0", meta_data={})
     monkeypatch.setattr(SRAgent, "execute_action", lambda self, actions: [result])
 
     returned = agent.execute_action([ToolCall("submit_formula", {"f": "x"}, id="call-1")])
 
     assert returned == [result]
-    assert [kind for kind, _ in events] == ["activity", "tool_start", "tool_result", "activity"]
+    events = agent.interaction_manager.get_recent_events()["events"]
+    assert [event["kind"] for event in events][-2:] == ["tool_started", "tool_completed"]
 
 
 def test_interactive_agent_honors_pending_control_before_automatic_guidance():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
-    agent._perfect_candidate_announced = False
     agent.best_candidate = lambda: None
-    agent.interaction_manager = SimpleNamespace(
-        should_request_guidance_after_tool_free_response=lambda: False,
-    )
-    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
-        AssertionError("pending controls must take precedence")
-    )
+    agent.interaction_manager = SRInteractionManager()
+    agent.interaction_manager.start_agent_execution()
+    agent.interaction_manager.command("pause")
     buffer = []
 
-    assert agent.handle_iteration_complete(buffer, R=1, L=2, C=1) is None
+    assert agent.finish_iteration(buffer, R=1, L=2, C=1) is None
+    assert agent.interaction_manager.state == "pausing"
     assert buffer == []
 
 
@@ -234,7 +277,7 @@ def test_execute_action_parallel_preserves_order_and_records_usage(tmp_path):
     assert agent.tools_counter.named_count == {"unit_parallel_tool": 2}
 
 
-def test_get_results_uses_messages_already_injected_into_tool_context(tmp_path):
+def test_execute_tool_calls_uses_messages_already_injected_into_tool_context(tmp_path):
     agent = make_agent(tmp_path)
     agent.tools = [UnitMessagesTool()]
     agent.max_workers = 2
@@ -251,15 +294,15 @@ def test_get_results_uses_messages_already_injected_into_tool_context(tmp_path):
         )
     ]
 
-    results = agent.get_results(response_list, R=1, L=1, C=1)
+    results = agent.execute_tool_calls(response_list, R=1, L=1, C=1)
     assert results[0][0].result == {"messages": [{"role": "system", "content": "Reusable context"}]}
 
 
-def test_build_initial_prompt_includes_refinement_budget_rule(tmp_path):
+def test_create_initial_buffer_includes_refinement_budget_rule(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_refinement_depth = 7
 
-    prompt = agent.build_initial_prompt(
+    prompt = agent.create_initial_buffer(
         problem_description="Find y from x.",
         X={"x": [1, 2, 3]},
         y={"y": [2, 4, 6]},
@@ -296,7 +339,7 @@ def test_force_initial_diagnostics_runs_and_injects_results(tmp_path):
     ]
 
     buffer = [{"role": "user", "content": "Find y=f(x)."}]
-    prompt = agent.build_prompt(buffer, R=1, L=1, C=1)
+    prompt = agent.prepare_model_messages(buffer, R=1, L=1, C=1)
 
     diagnostic_message = prompt[-1]["content"]
     assert prompt[-1]["role"] == "user"
@@ -458,7 +501,7 @@ def test_split_data_zero_validation_fraction_reuses_training_data(tmp_path):
     assert np.array_equal(train["t"], validation["t"])
 
 
-def test_update_buffer_injects_iteration_status(tmp_path):
+def test_update_conversation_injects_iteration_status(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_restart_loop = 2
     agent.global_width = 3
@@ -471,7 +514,7 @@ def test_update_buffer_injects_iteration_status(tmp_path):
     response_list = [("", [], {"role": "assistant", "content": ""})]
     results_list = [[]]
 
-    updated, _ = agent.update_buffer(
+    updated, _ = agent.update_conversation(
         buffer, response_list, results_list, {}, R=1, L=2, C=1
     )
 
@@ -484,7 +527,7 @@ def test_update_buffer_injects_iteration_status(tmp_path):
     assert original_buffer[-1]["content"] == "Solve the task."
 
 
-def test_update_buffer_injects_current_pareto_front(tmp_path):
+def test_update_conversation_injects_current_pareto_front(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_refinement_depth = 5
     candidate = CandidateRecord(formula="x + y", node_id="candidate-node", details={
@@ -496,7 +539,7 @@ def test_update_buffer_injects_current_pareto_front(tmp_path):
     agent.push_candidate(candidate)
     buffer = [{"role": "user", "content": "Find a formula."}]
 
-    agent.update_buffer(
+    agent.update_conversation(
         buffer,
         [("", [], {"role": "assistant", "content": ""})],
         [[]],
@@ -512,7 +555,7 @@ def test_update_buffer_injects_current_pareto_front(tmp_path):
     assert "Formula=x + y" in status
 
 
-def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
+def test_update_conversation_final_round_tells_agent_to_submit(tmp_path):
     agent = make_agent(tmp_path)
     agent.max_refinement_depth = 4
     buffer = [
@@ -522,7 +565,7 @@ def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
     response_list = [("", [], {"role": "assistant", "content": ""})]
     results_list = [[]]
 
-    agent.update_buffer(buffer, response_list, results_list, {}, R=1, L=4, C=1)
+    agent.update_conversation(buffer, response_list, results_list, {}, R=1, L=4, C=1)
     final_status = buffer[-1]["content"]
 
     assert "final refinement round" in final_status
@@ -530,7 +573,7 @@ def test_update_buffer_final_round_tells_agent_to_submit(tmp_path):
     assert "Do not spend this response on new data exploration" in final_status
 
 
-def test_record_metric_ignores_non_candidate_tool_results(tmp_path):
+def test_get_ranking_metric_ignores_non_candidate_tool_results(tmp_path):
     agent = make_agent(tmp_path)
     diagnostic_result = ToolCallResult(
         True,
@@ -539,11 +582,11 @@ def test_record_metric_ignores_non_candidate_tool_results(tmp_path):
         {},
     )
 
-    assert agent.record_metric(diagnostic_result.result) == (None, None)
-    assert agent.sortby(diagnostic_result.result) is None
+    assert agent.get_ranking_metric(diagnostic_result.result) == (None, None)
+    assert agent.candidate_sort_key(diagnostic_result.result) is None
 
 
-def test_update_buffer_sorts_unwrapped_tool_results(tmp_path):
+def test_update_conversation_sorts_unwrapped_tool_results(tmp_path):
     agent = make_agent(tmp_path)
     agent.parser = SimpleNamespace(format_tool_result_messages=lambda *args: [])
     buffer = [{"role": "user", "content": "Find a formula."}]
@@ -558,7 +601,7 @@ def test_update_buffer_sorts_unwrapped_tool_results(tmp_path):
         }, "candidate", {})],
     ]
 
-    agent.update_buffer(buffer, response_list, results_list, {}, R=1, L=1, C=1)
+    agent.update_conversation(buffer, response_list, results_list, {}, R=1, L=1, C=1)
 
     assert buffer[-2]["content"] == "candidate"
 
@@ -597,7 +640,7 @@ def test_collect_candidates_records_pareto_front(tmp_path):
     ]]
 
     candidates = agent.collect_candidates(response_list, results_list, R=1, L=1, C=1)
-    result = agent.search_result("completed", R=1, L=1, C=1)
+    result = agent.build_search_result("completed", R=1, L=1, C=1)
 
     assert [item.formula for item in candidates] == ["x + y", "x", "x + y + z"]
     assert result["pareto_front"] == [0, 1]

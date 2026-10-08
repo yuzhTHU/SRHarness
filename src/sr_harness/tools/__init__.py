@@ -24,7 +24,6 @@ from .edit_tool import EditTool
 from .call_sindy import SINDyTool
 from .call_pysr import PySRTool
 from .predict_property import PropertyPredictorTool
-from .ask_human import AskHumanTool
 from .workspace_shell import WorkspaceShellTool
 from .subagent import SubagentTool
 from .web_research import WebFetchTool, WebSearchTool

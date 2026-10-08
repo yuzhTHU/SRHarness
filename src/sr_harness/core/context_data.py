@@ -372,11 +372,14 @@ def inspect_context_data(directory: str | Path) -> dict[str, Any]:
 def update_context_data_descriptions(
     directory: str | Path, descriptions: dict[str, str],
 ) -> dict[str, Any]:
-    """Atomically update variable and axis descriptions in ``manifest.json``.
+    """Update variable and axis descriptions in ``manifest.json``.
 
-    The complete store is validated before the edit. Because only existing
-    string-valued description fields are changed, its structural validity is
-    preserved. The returned mapping matches :func:`load_context_data`.
+    The complete store is validated before the edit. An atomic replacement is
+    used when the directory permits creating entries. If the directory is
+    read-only but ``manifest.json`` itself is writable, the existing file is
+    updated in place, matching normal POSIX file-permission semantics. Because
+    only existing string-valued description fields are changed, structural
+    validity is preserved. The returned mapping matches :func:`load_context_data`.
     """
     directory = Path(directory).resolve()
     manifest_path = directory / _ContextDataReader.MANIFEST_NAME
@@ -395,20 +398,30 @@ def update_context_data_descriptions(
         for name, spec in manifest[section].items():
             if name in descriptions:
                 spec["description"] = descriptions[name].strip()
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=directory, prefix=".manifest-",
-        suffix=".json.tmp", delete=False,
-    ) as stream:
-        temporary_path = Path(stream.name)
-        json.dump(manifest, stream, ensure_ascii=False, indent=2)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    serialized = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    temporary_path = None
     try:
-        os.replace(temporary_path, manifest_path)
-    except Exception:
-        temporary_path.unlink(missing_ok=True)
-        raise
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=directory, prefix=".manifest-",
+                suffix=".json.tmp", delete=False,
+            ) as stream:
+                temporary_path = Path(stream.name)
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, manifest_path)
+            temporary_path = None
+        except PermissionError:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+            with manifest_path.open("w", encoding="utf-8") as stream:
+                stream.write(serialized)
+                stream.flush()
+                os.fsync(stream.fileno())
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     updated = dict(loaded)
     updated["variable_descriptions"] = loaded["variable_descriptions"] | {
         name: value.strip() for name, value in descriptions.items()

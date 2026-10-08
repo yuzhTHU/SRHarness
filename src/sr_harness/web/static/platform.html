@@ -89,7 +89,7 @@
 <aside class="panel right" id="insights-panel"><div id="search-insights" class="insights-view search-insights"><div class="bar"><span id="tree-title">搜索树</span><button id="tree-latest" title="跟随最新节点">最新</button><button id="tree-fit" title="显示整棵搜索树">总览</button><button id="tree-retry" title="重新连接搜索树">↻</button><span class="spacer"></span><a id="full-tree" href="/viewer" target="_blank" rel="noopener">完整查看器 ↗</a></div><div class="tree-wrap"><div id="tree-status">任务开始后显示搜索树</div><iframe id="tree" title="Agent 搜索树" src="about:blank"></iframe></div><div class="bar candidate-bar"><span id="candidate-title">候选公式</span><div class="candidate-mode" role="group" aria-label="候选公式范围"><button id="candidate-topk" class="active" type="button">Topk</button><button id="candidate-pareto" type="button">Pareto Front</button></div><span class="spacer"></span><span class="eyebrow" id="count">0 RECORDS</span></div><div id="topk"><p class="muted small">评估得到的候选公式及 Metrics 将显示在此处。</p></div></div><div id="data-insights" class="insights-view data-insights" hidden><div class="bar"><span id="data-insights-title">数据预览</span><span class="spacer"></span><span id="data-insights-note" class="eyebrow">CONTEXT.DATA</span></div><div class="data-insights-scroll"><div id="data-summary" class="data-summary">刷新以显示 context.data 中形状一致的一维变量与轴。</div><div id="data-table" class="data-table-wrap"></div><div class="bar relationship-preview-bar"><span>关系预览</span></div><div id="plot-variable-palette" class="plot-variable-palette"></div><div class="plot-fields"><div class="plot-slot" data-channel="x"><b>X</b><span class="plot-slot-value"></span></div><div class="plot-slot" data-channel="y"><b>Y</b><span class="plot-slot-value"></span></div><div class="plot-slot" data-channel="hue"><b>HUE</b><span class="plot-slot-value"></span></div><div class="plot-slot" data-channel="size"><b>SIZE</b><span class="plot-slot-value"></span></div></div><div id="plot-stage" class="plot-stage"><svg id="scatter" role="img" aria-label="变量关系散点图"></svg><div id="plot-empty" class="plot-empty">将数值变量拖入 X 和 Y</div></div></div></div></aside>
 </main><dialog id="preview"><div class="row"><b id="preview-title"></b><span class="spacer"></span><button id="close-preview">关闭</button></div><div id="preview-meta" class="preview-meta"></div><pre id="preview-text"></pre></dialog><dialog id="demo-picker" class="demo-picker"><div class="demo-picker-header"><div><h3 id="demo-picker-title">选择样例数据</h3><p id="demo-picker-help">生成后将作为当前 context.data 加载。</p></div><button id="demo-picker-close" class="demo-picker-close" type="button" aria-label="关闭">×</button></div><div class="demo-options"><button class="demo-option" type="button" data-demo-kind="polynomial"><b id="demo-polynomial-title">多项式回归</b><code>y = 1 + x1**2 + 2*x1*x2</code><span id="demo-polynomial-help">两个连续输入和一个回归目标。</span></button><button class="demo-option" type="button" data-demo-kind="grouped_parameters"><b id="demo-grouped-title">分组参数</b><code>y = x1*exp(-grouped_param(label, name='scale')**2*x2)</code><span id="demo-grouped-help">用类别标签选择不同的隐藏参数。</span></button><button class="demo-option" type="button" data-demo-kind="driven_ode"><b id="demo-ode-title">振荡 ODE</b><code>dx_dt = 1.15*sin(1.35*t) + 0.42*sin(2.7*t) - 0.24*x - 0.075*x**3</code><span id="demo-ode-help">非线性、多频周期驱动的一维振荡轨迹。</span></button><button class="demo-option" type="button" data-demo-kind="kuramoto_ba"><b id="demo-kuramoto-title">Kuramoto 网络</b><code>dx_dt = omega + 1.35*sum[j](A[i, j], sin(x[j] - x[i]))/sum[j](A[i, j], 1)</code><span id="demo-kuramoto-help">十节点无标度网络上的耦合振子轨迹。</span></button></div></dialog>
 <script>
-const $=id=>document.getElementById(id);let session=null,seq=0,questionId=null,treeRun=null,initialized=false,filesSignature='',contextSignature='',workspaceExpansionInitialized=false,workspaceEditItem=null;const expandedDirectories=new Set();
+const $=id=>document.getElementById(id);let session=null,seq=0,dataSeq=0,evaluatorSeq=0,treeRun=null,initialized=false,filesSignature='',contextSignature='',workspaceExpansionInitialized=false,workspaceEditItem=null;const expandedDirectories=new Set();
 let inferredActivity={phase:'idle',since:Date.now()/1000},lastStatusAt=0,lastEventsAt=0,lastCoord={},latestContext=null,selectedContextKey=null;const toolCards=new Map(),dataToolCards=new Map(),assistantCards=new Map(),dataAssistantCards=new Map(),evaluatorAssistantCards=new Map(),assistantStreamStates=new Map(),seenUsageSteps=new Set(),seenDataUsageTurns=new Set(),contextHistory=new Map();let observedUsage={token:{},price:{}},observedDataUsage={token:{},price:{}};
 let dataPreview=null,dataChannels={x:'',y:'',hue:'',size:''},promptRefreshTimer=null,promptRefreshToken=0,renderedDataRevision=0,useCommittedContext=false;
 const DEFAULT_PROBLEM_DESCRIPTION='Find an interpretable formula explaining the selected target from the selected features.';
@@ -136,6 +136,7 @@ Object.assign(MESSAGE_CATALOGS['zh-CN'],{uploadDataHelpPrefix:'上传数据文�
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{restartCount:'R · 重启次数',branchCount:'C · 独立分支',conversationDepth:'L · 对话深度',samplesPerRound:'K · 每轮采样'});Object.assign(MESSAGE_CATALOGS.en,{restartCount:'R · Restart Count',branchCount:'C · Independent Branches',conversationDepth:'L · Conversation Depth',samplesPerRound:'K · Samples per Round'});
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{evaluatorTitle:'配置评测方案',evaluatorHelp:'选择内置评估器或自定义新的评估器，实现数据切分、模型拟合、模型评估',evaluatorCustom:'Custom Evaluator',evaluatorSave:'保存方案',evaluatorTest:'测试',evaluatorSaved:'评测方案已保存。',evaluatorTesting:'正在使用当前数据测试…',evaluatorTestPassed:'测试通过',evaluatorAgentToggle:'也可以描述需求，让 Agent 创建 Evaluator',evaluatorAgentTitle:'评测器构建 Agent',evaluatorAgentNote:'Agent 可阅读相关源码，并在工作区中创建和验证自定义 Evaluator。',evaluatorAgentPlaceholder:'例如：改成按轨迹 RMSE 评测，并用当前数据测试和修复代码…',evaluatorAgentSend:'交给 Agent',evaluatorAgentWorking:'Agent 正在构建并检验 Evaluator…',evaluatorNoTools:'未调用工具'});Object.assign(MESSAGE_CATALOGS.en,{evaluatorTitle:'Configure Evaluation Protocol',evaluatorHelp:'Choose a built-in evaluator or define a custom evaluator for data splitting, model fitting, and model evaluation.',evaluatorCustom:'Custom Evaluator',evaluatorSave:'Save Protocol',evaluatorTest:'Test',evaluatorSaved:'Evaluation protocol saved.',evaluatorTesting:'Testing against the current data…',evaluatorTestPassed:'Test passed',evaluatorAgentToggle:'Or describe what you need and let the Agent create an Evaluator',evaluatorAgentTitle:'Evaluator Construction Agent',evaluatorAgentNote:'The Agent can inspect relevant source and create and validate a custom Evaluator in the workspace.',evaluatorAgentPlaceholder:'For example: evaluate trajectory RMSE, then test and repair the implementation with the current data…',evaluatorAgentSend:'Send to Agent',evaluatorAgentWorking:'The Agent is constructing and testing the Evaluator…',evaluatorNoTools:'No tools called'});
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{composerEnterHint:'Shift/⌘ + Enter 换行；Enter 发送'});Object.assign(MESSAGE_CATALOGS.en,{composerEnterHint:'Shift/⌘ + Enter for newline; Enter to send'});
+Object.assign(MESSAGE_CATALOGS['zh-CN'],{interactionStateChanged:'状态：{{previous}} → {{current}}',interactionIdle:'准备就绪',interactionRunning:'正在运行',interactionPausing:'等待在安全边界暂停',interactionInterrupting:'正在中断当前操作',interactionPaused:'已暂停'});Object.assign(MESSAGE_CATALOGS.en,{interactionStateChanged:'State: {{previous}} → {{current}}',interactionIdle:'Ready',interactionRunning:'Running',interactionPausing:'Pausing at the next safe boundary',interactionInterrupting:'Interrupting the current operation',interactionPaused:'Paused'});
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{safeStopNotice:'已发送停止请求，Agent 将在本轮结束后暂停。重复点击以强制结束本轮',forceStopNotice:'用户强制中止',forceStop:'强制结束本轮'});Object.assign(MESSAGE_CATALOGS.en,{safeStopNotice:'Stop requested. The Agent will pause after this turn. Click again to force-end the turn.',forceStopNotice:'User force-stopped the turn',forceStop:'Force-end this turn'});
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{evaluatorAgentStop:'停止评测器构建 Agent',evaluatorAgentStopping:'正在停止评测器构建 Agent…',evaluatorAgentStopped:'评测器构建 Agent 已停止'});Object.assign(MESSAGE_CATALOGS.en,{evaluatorAgentStop:'Stop Evaluator Construction Agent',evaluatorAgentStopping:'Stopping Evaluator Construction Agent…',evaluatorAgentStopped:'Evaluator Construction Agent stopped'});
 Object.assign(MESSAGE_CATALOGS['zh-CN'],{evaluatorGuide:'查看 Evaluator 接口文档',evaluatorArgs:'参数配置',evaluatorArgsTitle:'context.args.*',evaluatorValidationFraction:'验证集占全部样本的比例。',evaluatorSplitRandomState:'随机划分或 OOD 并列值处理使用的随机种子。',evaluatorSplitBy:'数据划分策略：random 随机划分；ood 按指定变量排序后外推划分。',evaluatorSplitOodVariable:'OOD 划分所依据的变量名；split_by=ood 时必须显式提供。',evaluatorRankingMetric:'用于候选公式排序的 evaluate 返回字段。',evaluatorLargerIsBetter:'排序指标是否以更大的值为优。'});Object.assign(MESSAGE_CATALOGS.en,{evaluatorGuide:'View Evaluator interface guide',evaluatorArgs:'Parameters',evaluatorArgsTitle:'context.args.*',evaluatorValidationFraction:'Fraction of samples reserved for evaluation.',evaluatorSplitRandomState:'Seed used for random splitting and OOD tie handling.',evaluatorSplitBy:'Split strategy: random sampling, or OOD extrapolation ordered by a selected variable.',evaluatorSplitOodVariable:'Variable used to order an OOD split; required explicitly when split_by=ood.',evaluatorRankingMetric:'Field returned by evaluate that ranks candidate formulas.',evaluatorLargerIsBetter:'Whether larger values of the ranking metric are preferred.'});
@@ -154,8 +155,8 @@ function mountAdvanceControls(){for(const [inputId,buttonId] of [['R','next-c'],
 function applyTheme(){document.documentElement.dataset.theme=uiTheme;const dark=uiTheme==='dark',button=$('theme-toggle'),label=_(dark?'themeLight':'themeDark');button.textContent=dark?'☀':'☾';button.title=label;button.setAttribute('aria-label',label);localStorage.setItem('sr-harness-theme',uiTheme);try{$('tree').contentWindow.postMessage({type:'sr-tree-theme',theme:uiTheme},location.origin)}catch{}}
 function renderHeaderControls(){
   if(!session){$('connection').textContent=_('connection');$('status').textContent=_('connection');return}
-  const running=['starting','running'].includes(session.state);
-  $('status').textContent=session.questions&&Object.keys(session.questions).length?_('awaitingReply'):session.stopped&&running?_('stopping'):session.paused&&running?_(session.waiting_at_boundary?'paused':'pauseRequested'):_(session.state);
+  const interaction=session.interaction_state;
+  $('status').textContent=interaction==='paused'?_('paused'):interaction==='pausing'?_('pauseRequested'):interaction==='interrupting'?_('stopping'):_(session.state);
   renderActivity();
 }
 function renderTimelineWelcome(){
@@ -222,10 +223,10 @@ function mountEvaluatorWorkbench(){
   $('evaluator-code').oninput=()=>{evaluatorDirty=true;renderEvaluatorLineNumbers();renderEvaluatorAvailability()};$('evaluator-code').onscroll=event=>$('evaluator-line-numbers').scrollTop=event.currentTarget.scrollTop;$('evaluator-code').onkeydown=event=>{if(event.key!=='Tab')return;event.preventDefault();const input=event.currentTarget,start=input.selectionStart,end=input.selectionEnd;input.setRangeText('    ',start,end,'end');input.dispatchEvent(new Event('input'))};$('evaluator-select').onchange=()=>{const selected=$('evaluator-select').value,item=evaluatorConfiguration?.evaluators.find(entry=>entry.id===selected);$('evaluator-code').value=item?.source||'';evaluatorDirty=selected!==evaluatorConfiguration?.selected;renderEvaluatorLineNumbers();renderEvaluatorAvailability();renderEvaluatorSelectionStatus(item)};$('evaluator-save').onclick=guard(saveEvaluatorConfiguration);$('evaluator-test').onclick=guard(testEvaluatorConfiguration);$('evaluator-args-toggle').onclick=()=>setEvaluatorArgsOpen($('evaluator-args-panel').hidden);$('evaluator-args-cancel').onclick=()=>setEvaluatorArgsOpen(false);$('evaluator-args-apply').onclick=guard(applyEvaluatorArgs);$('evaluator-agent-send').onclick=guard(runEvaluatorAgent);$('evaluator-agent-settings-toggle').onclick=guard(()=>setEvaluatorAgentSettingsOpen($('evaluator-agent-settings').hidden));$('evaluator-agent-settings-cancel').onclick=()=>setEvaluatorAgentSettingsOpen(false);$('evaluator-agent-settings-apply').onclick=guard(applyEvaluatorAgentSettings);$('evaluator-agent-model-test').onclick=guard(testEvaluatorAgentModel);$('evaluator-agent-provider').onchange=()=>refreshEvaluatorAgentCredential().catch(notice);$('evaluator-agent-api-key-visibility').onclick=()=>{const input=$('evaluator-agent-api-key');input.type=input.type==='password'?'text':'password';renderEvaluatorAgentApiKeyVisibility()};for(const button of agentTabs.querySelectorAll('[data-evaluator-agent-settings-tab]'))button.onclick=()=>selectEvaluatorAgentSettingsTab(button.dataset.evaluatorAgentSettingsTab);bindEnterToSend($('evaluator-agent-input'),$('evaluator-agent-send'));renderEvaluatorLanguage()}
 function renderEvaluatorLineNumbers(){const code=$('evaluator-code'),lines=Math.max(1,code.value.split('\n').length);$('evaluator-line-numbers').textContent=Array.from({length:lines},(_,index)=>index+1).join('\n');const highlight=$('evaluator-highlight');if(highlight)highlight.innerHTML=highlightPython(code.value)+(code.value.endsWith('\n')?' ':'')}
 function renderEvaluatorSelectionStatus(item){const status=$('evaluator-status');status.className='evaluator-editor-status'+(item?.invalid?' failed':'');status.textContent=item?.invalid?'⚠ '+item.error:item?.abstract?(currentLocale==='en'?'Abstract reference: choose another Evaluator to create an implementation.':'抽象基类仅供参考；请选择其它 Evaluator 创建具体实现。'):''}
-function renderEvaluatorAvailability(){if(!$('evaluator-config-card'))return;const state=session?.state||'idle',safePaused=['starting','running'].includes(state)&&session?.paused&&session?.waiting_at_boundary,locked=state!=='idle'&&!safePaused,selected=evaluatorConfiguration?.evaluators.find(item=>item.id===$('evaluator-select').value),abstract=Boolean(selected?.abstract),invalid=Boolean(selected?.invalid),agentActive=['running','stopping'].includes(session?.evaluator_agent_state);$('evaluator-select').disabled=locked;$('evaluator-code').readOnly=locked||abstract;$('evaluator-save').disabled=locked||abstract;$('evaluator-test').disabled=locked||abstract||invalid;$('evaluator-agent-input').disabled=locked||abstract||agentActive;$('evaluator-agent-settings-toggle').disabled=locked||agentActive;renderEvaluatorAgentControl()}
+function renderEvaluatorAvailability(){if(!$('evaluator-config-card'))return;const state=session?.state||'idle',safePaused=['starting','running'].includes(state)&&session?.interaction_state==='paused',locked=state!=='idle'&&!safePaused,selected=evaluatorConfiguration?.evaluators.find(item=>item.id===$('evaluator-select').value),abstract=Boolean(selected?.abstract),invalid=Boolean(selected?.invalid),agentActive=['running','pausing','interrupting'].includes(session?.evaluator_interaction_state);$('evaluator-select').disabled=locked;$('evaluator-code').readOnly=locked||abstract;$('evaluator-save').disabled=locked||abstract;$('evaluator-test').disabled=locked||abstract||invalid;$('evaluator-agent-input').disabled=locked||abstract||agentActive;$('evaluator-agent-settings-toggle').disabled=locked||agentActive;renderEvaluatorAgentControl()}
 function renderEvaluatorAgentControl(){
-  if(!$('evaluator-agent-send'))return;const button=$('evaluator-agent-send'),agentState=session?.evaluator_agent_state||'idle',running=agentState==='running',stopping=agentState==='stopping',active=running||stopping,state=session?.state||'idle',safePaused=['starting','running'].includes(state)&&session?.paused&&session?.waiting_at_boundary,locked=state!=='idle'&&!safePaused,selected=evaluatorConfiguration?.evaluators.find(item=>item.id===$('evaluator-select').value),abstract=Boolean(selected?.abstract),label=_(stopping?'evaluatorAgentStopping':running?'evaluatorAgentStop':'evaluatorAgentSend');
-  button.classList.toggle('stop',active);button.classList.toggle('pending',stopping);button.disabled=Boolean(session?.evaluator_force_stop_requested)||(!active&&(locked||abstract));button.title=stopping?_('forceStop'):label;button.setAttribute('aria-label',button.title);button.innerHTML=active?'<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg>':'<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';
+  if(!$('evaluator-agent-send'))return;const button=$('evaluator-agent-send'),agentState=session?.evaluator_interaction_state||'idle',running=agentState==='running',stopping=['pausing','interrupting'].includes(agentState),active=running||stopping,state=session?.state||'idle',safePaused=['starting','running'].includes(state)&&session?.interaction_state==='paused',locked=state!=='idle'&&!safePaused,selected=evaluatorConfiguration?.evaluators.find(item=>item.id===$('evaluator-select').value),abstract=Boolean(selected?.abstract),label=_(stopping?'evaluatorAgentStopping':running?'evaluatorAgentStop':'evaluatorAgentSend');
+  button.classList.toggle('stop',active);button.classList.toggle('pending',stopping);button.disabled=Boolean(session?.evaluator_force_pause_requested)||(!active&&(locked||abstract));button.title=stopping?_('forceStop'):label;button.setAttribute('aria-label',button.title);button.innerHTML=active?'<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg>':'<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';
   const status=$('evaluator-agent-state');if(status)status.textContent=_(stopping?'evaluatorAgentStopping':running?'evaluatorAgentWorking':agentState==='stopped'?'evaluatorAgentStopped':'dataAgentReady');
 }
 function applyEvaluatorAgentResult(){
@@ -253,8 +254,8 @@ async function syncEvaluatorAgentSettingsForm(){const available=await ensureEval
 async function setEvaluatorAgentSettingsOpen(open){$('evaluator-agent-settings').hidden=!open;$('evaluator-agent-settings-toggle').setAttribute('aria-expanded',String(open));if(open)await syncEvaluatorAgentSettingsForm()}
 async function applyEvaluatorAgentSettings(){await saveEvaluatorAgentCredential();syncSession(await api('/api/evaluator/agent/settings',evaluatorAgentSettingsPayload(),'PUT'));await setEvaluatorAgentSettingsOpen(false);notice(_('settingsSaved'))}
 async function testEvaluatorAgentModel(){const button=$('evaluator-agent-model-test'),status=$('evaluator-agent-model-test-status');button.disabled=true;status.className='model-test-status';status.textContent=_('dataAgentModelTesting');try{await saveEvaluatorAgentCredential();const result=await api('/api/evaluator/agent/test',evaluatorAgentSettingsPayload());status.classList.add(result.ok?'passed':'failed');status.textContent=_(result.ok?'dataAgentModelTestPassed':result.accessible?'dataAgentModelTestPartial':'dataAgentModelTestUnavailable')}catch(error){status.classList.add('failed');status.textContent=error?.message||String(error)}finally{button.disabled=false}}
-function appendEvaluatorAgentEvent(kind,payload,timestamp=Date.now()/1000){const feed=$('evaluator-agent-feed'),failed=kind==='tool_error'||payload.result?.ok===false,card=el('article',undefined,'event '+(kind==='user'?'data_user':kind==='assistant'?'assistant':failed?'tool_error':'tool_result')),meta=el('div',undefined,'meta'),time=el('span',new Date(Number(timestamp)*1000).toLocaleTimeString(currentLocale),'meta-time');if(kind==='user'){meta.append(eventBadge('user',_('eventUser')),time);card.append(meta);previewBlock(card,payload.content||'','message-preview-block')}else if(kind==='assistant'){meta.append(eventBadge('agent',_('eventAgent')));const badge=modelBadge(payload.provider,payload.model);if(badge)meta.append(badge);meta.append(time);card.append(meta);reasoningBlock(card,payload.reasoning||payload.message?.reasoning||'');if(payload.content)previewBlock(card,payload.content,'message-preview-block');toolCallsBlock(card,payload.tool_calls)}else{meta.append(eventBadge('tool',_(failed?'eventToolError':'eventTool'),failed),el('span',payload.call?.name||payload.tool||'Tool','tool-event-name'),el('span',_(failed?'toolFailed':'toolReturned'),'tool-state'+(failed?' failed':'')),time);card.append(meta,el('div',_('callParameters'),'tool-caption'));const parameters=toolParameters(payload.call?.params||{},undefined,true);parameters.classList.add('tool-event-params');card.append(parameters,el('div',_(failed?'errorInfo':'result'),'tool-caption'));previewBlock(card,payload.result?.result_str||_('toolNoText'),'tool-result-block');if(payload.result?.result!==undefined){const raw=el('details',undefined,'raw-json tool-result-raw');raw.append(el('summary',_('rawJson')),el('pre',pretty(payload.result.result)));card.append(raw)}}feed.hidden=false;feed.append(card);feed.scrollTop=feed.scrollHeight}
-async function runEvaluatorAgent(){if(['running','stopping'].includes(session?.evaluator_agent_state)){syncSession(await api('/api/evaluator/agent/stop',{}));return}const input=$('evaluator-agent-input'),message=input.value.trim();if(!message)throw Error(_('inputRequired'));input.value='';$('evaluator-status').textContent=_('evaluatorAgentWorking');syncSession(await api('/api/evaluator/agent/start',{message,source:$('evaluator-code').value}))}
+function appendEvaluatorAgentEvent(kind,payload,timestamp=Date.now()/1000){const feed=$('evaluator-agent-feed'),failed=kind==='tool_error',resultFailed=payload.result?.ok===false,card=el('article',undefined,'event '+(kind==='user'?'data_user':kind==='assistant'?'assistant':failed?'tool_error':'tool_result')),meta=el('div',undefined,'meta'),time=el('span',new Date(Number(timestamp)*1000).toLocaleTimeString(currentLocale),'meta-time');if(kind==='user'){meta.append(eventBadge('user',_('eventUser')),time);card.append(meta);previewBlock(card,payload.content||'','message-preview-block')}else if(kind==='assistant'){meta.append(eventBadge('agent',_('eventAgent')));const badge=modelBadge(payload.provider,payload.model);if(badge)meta.append(badge);meta.append(time);card.append(meta);reasoningBlock(card,payload.reasoning||payload.message?.reasoning||'');if(payload.content)previewBlock(card,payload.content,'message-preview-block');toolCallsBlock(card,payload.tool_calls)}else{meta.append(eventBadge('tool',_(failed?'eventToolError':'eventTool'),failed||resultFailed),el('span',payload.call?.name||payload.tool||'Tool','tool-event-name'),el('span',_(failed?'toolFailed':'toolReturned'),'tool-state'+(failed?' failed':'')),time);card.append(meta,el('div',_('callParameters'),'tool-caption'));const parameters=toolParameters(payload.call?.params||{},undefined,true);parameters.classList.add('tool-event-params');card.append(parameters,el('div',_(failed?'errorInfo':'result'),'tool-caption'));previewBlock(card,payload.result?.result_str||_('toolNoText'),'tool-result-block');if(payload.result?.result!==undefined){const raw=el('details',undefined,'raw-json tool-result-raw');raw.append(el('summary',_('rawJson')),el('pre',pretty(payload.result.result)));card.append(raw)}}feed.hidden=false;feed.append(card);feed.scrollTop=feed.scrollHeight}
+async function runEvaluatorAgent(){if(['running','pausing','interrupting'].includes(session?.evaluator_interaction_state)){syncSession(await api('/api/evaluator/agent/stop',{}));return}const input=$('evaluator-agent-input'),message=input.value.trim();if(!message)throw Error(_('inputRequired'));input.value='';$('evaluator-status').textContent=_('evaluatorAgentWorking');syncSession(await api('/api/evaluator/agent/start',{message,source:$('evaluator-code').value}))}
 function describe(element,description){
   if(description){element.classList.add('has-description');element.dataset.description=description;element.tabIndex=0;element.setAttribute('aria-label',`${element.textContent}：${description}`)}
   return element;
@@ -299,10 +300,21 @@ const MODEL_BRANDS=[
 const PROVIDER_BRANDS={openrouter:{key:'openrouter',name:'OpenRouter'},openai:{key:'openai',name:'OpenAI'},deepseek:{key:'deepseek',name:'DeepSeek'},gemini:{key:'gemini',name:'Google Gemini'},siliconflow:{key:'siliconflow',name:'SiliconFlow'},lmstudio:{key:'lmstudio',name:'LM Studio'}};
 function modelBrand(provider,model){const identity=String(model||'');return MODEL_BRANDS.find(brand=>brand.pattern.test(identity))||PROVIDER_BRANDS[String(provider||'').toLowerCase()]||{key:'generic',name:String(provider||'AI')}}
 function modelBadge(provider,model){if(!provider&&!model)return null;const brand=modelBrand(provider,model),badge=el('span',undefined,'model-logo model-logo-'+brand.key),label='Provider: '+(provider||'—')+'\nModel: '+(model||'—');badge.dataset.label=label;badge.title=label.replace('\n',' · ');badge.tabIndex=0;badge.setAttribute('aria-label',label.replace('\n',', '));if(brand.key==='generic'){badge.textContent=(brand.name||'AI').slice(0,2).toUpperCase()}else{const image=document.createElement('img');image.src='/static/brands/'+brand.key+(brand.key==='siliconflow'?'.png':'.svg');image.alt=brand.name;image.onerror=()=>{image.remove();badge.textContent=(brand.name||'AI').slice(0,2).toUpperCase()};badge.append(image)}return badge}
-function eventKind(kind){
+function eventKind(kind,resultFailed=false){
   const isTool=kind.startsWith('tool_'),key=isTool?'tool':({user:'user',assistant:'agent',context:'context',question:'question',reply:'reply',control:'user-control',lifecycle:'run',settings_applied:'settings',settings_error:'settings',file_uploaded:'file'}[kind]||'event');
   const label=isTool?_(kind==='tool_error'?'eventToolError':'eventTool'):({user:_('eventUser'),assistant:_('eventAgent'),context:_('eventContext'),question:_('eventQuestion'),reply:_('eventReply'),control:_('eventControl'),lifecycle:_('eventRun'),settings_applied:_('eventModelUpdated'),settings_error:_('eventModelError'),file_uploaded:_('eventWorkspace')}[kind]||kind);
-  return eventBadge(key,label,kind==='tool_error'||kind==='settings_error');
+  return eventBadge(key,label,kind==='tool_error'||kind==='settings_error'||resultFailed);
+}
+function renderPromptAdded(e,feed,scope='search'){
+  const message=e.payload?.message||{},role=message.role||'user',card=el('article',undefined,'event '+(role==='system'?'system_prompt':'data_user'));card.dataset.started=e.timestamp;
+  const meta=el('div',undefined,'meta'),label=role==='system'?_('systemPrompt'):_('eventUser');meta.append(eventBadge(role==='system'?'settings':'user',label),el('span',new Date(Number(e.timestamp)*1000).toLocaleTimeString(currentLocale),'meta-time'));card.append(meta);previewBlock(card,message.content||'','message-preview-block');
+  const next=[...feed.querySelectorAll(':scope > .event')].find(item=>Number(item.dataset.started)>Number(e.timestamp));feed.insertBefore(card,next||null);feed.hidden=false;
+}
+function interactionStateLabel(state){return _({idle:'interactionIdle',running:'interactionRunning',pausing:'interactionPausing',interrupting:'interactionInterrupting',paused:'interactionPaused'}[state]||state)}
+function renderGenericEventCard(e,feed){const p=e.payload||{},card=el('article',undefined,'event '+e.kind);card.dataset.started=e.timestamp;const meta=el('div',undefined,'meta'),stateChanged=e.kind==='state_changed';meta.append(eventBadge(stateChanged?'run':'event',stateChanged?_('eventRun'):e.kind),el('span',new Date(Number(e.timestamp)*1000).toLocaleTimeString(currentLocale),'meta-time'));card.append(meta);const controlText=e.kind==='command_received'?({pause:_('safeStopNotice'),force_pause:_('forceStopNotice')}[p.action]||p.action):'',stateText=stateChanged?_('interactionStateChanged',{previous:interactionStateLabel(p.previous),current:interactionStateLabel(p.current)}):'';previewBlock(card,stateText||controlText||p.message||p.error||pretty(p),'message-preview-block');feed.append(card);feed.hidden=false}
+function legacyScopedEvent(e,prefix=''){
+  const names={context:'context',assistant_started:'assistant_start',assistant_delta:'assistant_delta',assistant_completed:'assistant',assistant_failed:'assistant_error',tool_started:'tool_start',tool_completed:'tool_result',tool_failed:'tool_result',execution_completed:'complete',execution_failed:'error'};
+  const name=names[e.kind];return name?{...e,kind:prefix?prefix+'_'+name:name}:e;
 }
 async function responseError(response,fallback='Request failed'){
   const text=await response.text();if(!text)return fallback;
@@ -605,6 +617,14 @@ function dataContextLink(turn){
   const link=el('span',_('dataAgentTurn',{count:turn}),'meta-coord context-link');link.tabIndex=0;link.setAttribute('role','button');link.title=_('contextLinkTitle');
   const open=()=>showDataContextAt(turn);link.onclick=open;link.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();open()}};return link;
 }
+function contextPayloadStats(payload){
+  const messages=Array.isArray(payload?.messages)?payload.messages:[],characters=messages.reduce((total,message)=>{const content=message?.content;return total+(typeof content==='string'?content.length:pretty(content??'').length)},0);
+  return _('contextStats',{count:messages.length,characters:formatMagnitude(characters)});
+}
+function renderDataContextEventCard(e,feed){
+  const p=e.payload||{},card=el('article',undefined,'event data_context'),meta=el('div',undefined,'meta'),time=el('span',new Date(Number(e.timestamp)*1000).toLocaleTimeString(currentLocale),'meta-time');card.dataset.started=e.timestamp;
+  meta.append(eventBadge('context',_('eventContext')));if(p.turn)meta.append(dataContextLink(p.turn));meta.append(el('span',contextPayloadStats(p),'context-size'),time);card.append(meta);feed.append(card);feed.hidden=false;
+}
 function evaluatorContextKey(turn){return 'evaluator:'+String(turn)}
 function evaluatorContextLink(turn){
   const link=el('span',_('dataAgentTurn',{count:turn}),'meta-coord context-link');link.tabIndex=0;link.setAttribute('role','button');link.title=_('contextLinkTitle');
@@ -668,11 +688,16 @@ function trackActivity(e) {
   if(e.kind==='context'){latestContext=p;const key=contextKey(p.coord);if(key)contextHistory.set(key,p)}
 }
 function renderEvent(e) {
+  if(e.kind==='prompt_added'){renderPromptAdded(e,$('feed'));return}
+  if(e.kind==='state_changed')e={...e,kind:'lifecycle',payload:{state:e.payload?.current}};
+  else if(e.kind==='command_received')e={...e,kind:'control',payload:e.payload};
+  else if(e.kind==='execution_completed'||e.kind==='execution_failed')e={...e,kind:'lifecycle',payload:{state:e.payload?.status||(e.kind==='execution_failed'?'failed':'completed'),result:e.payload?.result||e.payload}};
+  else e=legacyScopedEvent(e);
   if(['assistant_start','assistant_delta','assistant_error'].includes(e.kind)){
     renderAssistantStreamEvent(e,{feed:$('feed'),cards:assistantCards});return;
   }
   const p=e.payload||{};trackActivity(e);
-  if(['topk','activity'].includes(e.kind))return;
+  if(e.kind==='topk_updated')renderTopk(p.records||[]);
   const feed=$('feed'),follow=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
   $('welcome')?.remove();
   const key=p.call?.id||p.call?.name;
@@ -682,11 +707,10 @@ function renderEvent(e) {
   card.className='event '+e.kind;
   card.replaceChildren();
   const meta=el('div',undefined,'meta'),metaTime=el('span',new Date(Number(card.dataset.started)*1000).toLocaleTimeString(currentLocale),'meta-time');
-  meta.append(eventKind(e.kind),metaTime);card.append(meta);
+  meta.append(eventKind(e.kind,p.result?.ok===false),metaTime);card.append(meta);
   if(e.kind==='user') {
     previewBlock(card,p.content||'','message-preview-block');
   } else if(e.kind==='context') {
-    renderTimelineSystemPrompt(feed,p,'symbolic-regression',e.timestamp);
     const coord=Object.entries(p.coord||{}).map(([k,v])=>k+v).join(' · '),messages=Array.isArray(p.messages)?p.messages:[],characters=messages.reduce((total,message)=>{const content=message?.content;return total+(typeof content==='string'?content.length:pretty(content??'').length)},0),size=messages.length?_('contextStats',{count:messages.length,characters:formatMagnitude(characters)}):'';
     const status=[coord,size,_('contextWaiting')].filter(Boolean).join(' · ');
     metaTime.before(contextLink(status,p.coord));
@@ -700,7 +724,7 @@ function renderEvent(e) {
     const cumulative=cumulativeUsage(p),usage=usageSummary(p.usage,cumulative);if(usage)card.append(el('div',usage,'usage-line'));
     if(p.response_id){assistantCards.delete(p.response_id);assistantStreamStates.delete(p.response_id)}
   } else if(e.kind.startsWith('tool_')) {
-    const failed=e.kind==='tool_error'||p.result?.ok===false;
+    const failed=e.kind==='tool_error';
     const pending=e.kind==='tool_start';
     const duration=p.duration_seconds??Math.max(0,e.timestamp-Number(card.dataset.started));
     metaTime.before(describe(el('span',p.call?.name||'Tool','tool-event-name'),p.tool_schema?.description),el('span',pending?_('toolRunning'):_(failed?'toolFailed':'toolReturned')+' · '+formatDuration(duration),'tool-state'+(failed?' failed':'')));
@@ -717,18 +741,21 @@ function renderEvent(e) {
     if(bestCandidate?.formula)card.append(el('div',bestCandidate.formula,'formula'));
     if(p.result?.error)card.append(el('pre',p.result.error));disclosure(card,_('fullRunResult'),p.result);
   } else if(e.kind==='control') {
-    const actionLabel={pause:_('controlPaused'),force_stop:_('forceStopNotice'),resume:_('controlResumed'),stop:_('controlStopped'),message:_('controlMessage'),next_c:_('controlNextC'),next_r:_('controlNextR')}[p.action]||p.action||_('controlAction');
+    const actionLabel={pause:_('safeStopNotice'),force_pause:_('forceStopNotice'),next_c:_('controlNextC'),next_r:_('controlNextR')}[p.action]||p.action||_('controlAction');
     metaTime.before(el('span',actionLabel,'meta-coord'));if(p.message)previewBlock(card,p.message,'control-message');
-  } else {card.append(el('pre',p.message||p.error||pretty(p)))}
+  } else {previewBlock(card,p.message||p.error||pretty(p),'message-preview-block')}
   if(!updating)feed.append(card);
   while(feed.children.length>1000)feed.firstChild.remove();
   if(follow)feed.scrollTop=feed.scrollHeight;else $('follow').hidden=false;
 }
 function renderDataEvent(e){
+  if(e.kind==='prompt_added'){renderPromptAdded(e,$('data-agent-feed'),'data');return}
+  if(['state_changed','command_received','workspace_changed','settings_applied','settings_failed'].includes(e.kind)){renderGenericEventCard(e,$('data-agent-feed'));return}
+  e=legacyScopedEvent(e,'data');
   const p=e.payload||{},feed=$('data-agent-feed'),follow=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;
   if(e.kind==='data_context'){
     if(p.turn){const payload={...p,agent_scope:'data'};contextHistory.set(dataContextKey(p.turn),payload);latestContext=payload}
-    renderTimelineSystemPrompt(feed,p,'data',e.timestamp);
+    renderDataContextEventCard(e,feed);
     return;
   }
   if(e.kind==='data_complete'){
@@ -740,11 +767,11 @@ function renderDataEvent(e){
   if(['data_assistant_start','data_assistant_delta','data_assistant_error'].includes(e.kind)){
     renderAssistantStreamEvent(e,{feed,cards:dataAssistantCards,dataMode:true});return;
   }
-  const isTool=e.kind==='data_tool_start'||e.kind==='data_tool_result',failed=e.kind==='data_error'||p.result?.ok===false,key=p.call?.id||p.call?.name;
-  let card=e.kind==='data_tool_result'?dataToolCards.get(key):e.kind==='data_assistant'&&p.response_id?dataAssistantCards.get(p.response_id):null;
+  const isTool=['data_tool_start','data_tool_result','data_tool_error'].includes(e.kind),failed=e.kind==='data_error'||e.kind==='data_tool_error',resultFailed=p.result?.ok===false,key=p.call?.id||p.call?.name;
+  let card=['data_tool_result','data_tool_error'].includes(e.kind)?dataToolCards.get(key):e.kind==='data_assistant'&&p.response_id?dataAssistantCards.get(p.response_id):null;
   const updating=Boolean(card);
   if(!card){card=el('article');card.dataset.started=e.timestamp}
-  card.className='event '+(e.kind==='data_assistant'?'assistant ':e.kind==='data_user'?'data_user ':isTool?(failed?'tool_error ':e.kind==='data_tool_start'?'tool_start ':'tool_result '):'tool_error ')+e.kind;
+  card.className='event '+(e.kind==='data_assistant'?'assistant ':e.kind==='data_user'?'data_user ':isTool?(failed?'tool_error ':e.kind==='data_tool_start'?'tool_start ':'tool_result '):'event_generic ')+e.kind;
   unobservePreviewBlocks(card);card.replaceChildren();
   const meta=el('div',undefined,'meta'),metaTime=el('span',new Date(Number(card.dataset.started)*1000).toLocaleTimeString(currentLocale),'meta-time');
   if(e.kind==='data_user')meta.append(eventBadge('user',_('eventUser')),metaTime);
@@ -753,10 +780,10 @@ function renderDataEvent(e){
     if(p.turn)meta.append(dataContextLink(p.turn));
     const badge=modelBadge(p.provider,p.model);if(badge)meta.append(badge);meta.append(metaTime);
   } else if(isTool){
-    meta.append(eventBadge('tool',_(failed?'eventToolError':'eventTool'),failed));
+    meta.append(eventBadge('tool',_(failed?'eventToolError':'eventTool'),failed||resultFailed));
     const duration=Math.max(0,e.timestamp-Number(card.dataset.started)),pending=e.kind==='data_tool_start';
     meta.append(describe(el('span',p.call?.name||'Tool','tool-event-name'),p.tool_schema?.description),el('span',pending?_('toolRunning'):_(failed?'toolFailed':'toolReturned')+' · '+formatDuration(duration),'tool-state'+(failed?' failed':'')),metaTime);
-  } else meta.append(eventBadge('event',_('eventToolError'),true),metaTime);
+  } else meta.append(eventBadge('event',e.kind),metaTime);
   card.append(meta);
   if(e.kind==='data_user')previewBlock(card,p.content||'','message-preview-block');
   else if(e.kind==='data_assistant'){
@@ -766,7 +793,7 @@ function renderDataEvent(e){
     if(p.response_id){dataAssistantCards.delete(p.response_id);assistantStreamStates.delete(p.response_id)}
   } else if(isTool){
     card.append(el('div',_('callParameters'),'tool-caption'));const parameters=toolParameters(parseToolParams(p.call||{}),p.tool_schema,true);parameters.classList.add('tool-event-params');card.append(parameters);
-    if(e.kind==='data_tool_result'){
+    if(e.kind==='data_tool_result'||e.kind==='data_tool_error'){
       card.append(el('div',_(failed?'errorInfo':'result'),'tool-caption'));previewBlock(card,p.result?.result_str||_('toolNoText'),'tool-result-block');
       if(p.result?.result!==undefined){const raw=el('details',undefined,'raw-json tool-result-raw');raw.append(el('summary',_('rawJson')),el('pre',pretty(p.result.result)));card.append(raw)}
     }
@@ -775,10 +802,13 @@ function renderDataEvent(e){
   if(!updating)feed.append(card);if(follow)feed.scrollTop=feed.scrollHeight;
 }
 function renderEvaluatorEvent(e){
+  if(e.kind==='prompt_added'){renderPromptAdded(e,$('evaluator-agent-feed'),'evaluator');return}
+  if(['state_changed','command_received','workspace_changed','settings_applied','settings_failed'].includes(e.kind)){renderGenericEventCard(e,$('evaluator-agent-feed'));return}
+  e=legacyScopedEvent(e,'evaluator');
   const p=e.payload||{},feed=$('evaluator-agent-feed');feed.hidden=false;
   if(e.kind==='evaluator_context'){
     if(p.turn){const payload={...p,agent_scope:'evaluator'};contextHistory.set(evaluatorContextKey(p.turn),payload);latestContext=payload}
-    renderTimelineSystemPrompt(feed,p,'evaluator',e.timestamp);
+    renderGenericEventCard(e,feed);
     return;
   }
   if(e.kind==='evaluator_user'){appendEvaluatorAgentEvent('user',p,e.timestamp);return}
@@ -794,7 +824,9 @@ function renderEvaluatorEvent(e){
     const card=evaluatorAssistantCards.get(p.response_id);card?.querySelector('.stream-progress')?.remove();
     evaluatorAssistantCards.delete(p.response_id);assistantStreamStates.delete(p.response_id);return;
   }
+  if(e.kind==='evaluator_tool_start')appendEvaluatorAgentEvent('tool_start',p,e.timestamp);
   if(e.kind==='evaluator_tool_result')appendEvaluatorAgentEvent('tool_result',p,e.timestamp);
+  if(e.kind==='evaluator_tool_error')appendEvaluatorAgentEvent('tool_error',p,e.timestamp);
 }
 async function loadCommittedContext(){
   const context=await api('/api/data/context');renderedDataRevision=context.revision||0;
@@ -902,25 +934,25 @@ async function refreshFiles(){
 }
 async function uploadFiles(files){for(const file of files){notice(_('uploading',{name:file.name}));const path=file.webkitRelativePath||file.name;const response=await fetch('/api/workspace/upload?path='+encodeURIComponent(path),{method:'PUT',body:file});if(!response.ok)throw Error(file.name+': '+await responseError(response,_('uploadFailed')))}notice('');filesSignature='';await refreshFiles()}
 function renderDataAgentControl(){
-  const button=$('data-agent-send'),running=session?.data_state==='running',stopping=session?.data_state==='stopping',active=running||stopping,label=_(stopping?'dataAgentStopping':running?'dataAgentStop':'dataAgentSend');
-  button.classList.toggle('stop',active);button.classList.toggle('pending',stopping);button.disabled=Boolean(session?.data_force_stop_requested);button.title=stopping?_('forceStop'):label;button.setAttribute('aria-label',button.title);button.innerHTML=active?'<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg>':'<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';
+  const button=$('data-agent-send'),interaction=session?.data_interaction_state||'idle',running=interaction==='running',stopping=['pausing','interrupting'].includes(interaction),active=running||stopping,label=_(stopping?'dataAgentStopping':running?'dataAgentStop':'dataAgentSend');
+  button.classList.toggle('stop',active);button.classList.toggle('pending',stopping);button.disabled=Boolean(session?.data_force_pause_requested);button.title=stopping?_('forceStop'):label;button.setAttribute('aria-label',button.title);button.innerHTML=active?'<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1" fill="currentColor" stroke="none"/></svg>':'<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';
 }
 function renderTimelineSurface(){
   renderRequestedControlsLanguage();const visible=$('timeline-tab').classList.contains('active'),active=(session?.state||'idle')!=='idle';$('run-setup').style.display=visible&&!active?'block':'none';$('feed').style.display=visible&&active?'block':'none';$('initial-prompt-toggle').hidden=active;if(active)setInitialPromptOpen(false);$('composer-purpose').hidden=active;$('composer-purpose-title').textContent=_('composerPurposeTitle');$('composer-purpose-help').textContent=_('composerPurposeHelp');$('composer-purpose-help').hidden=initialPromptSent;$('prompt').placeholder=_(active?'promptPlaceholder':'initialUserPromptPlaceholder');
 }
 function renderComposerControl(){
-  const button=$('send'),hasInput=Boolean($('prompt').value.trim()),state=session?.state||'idle',running=['starting','running'].includes(state),waiting=Boolean(questionId)||Boolean(session?.paused);
+  const button=$('send'),hasInput=Boolean($('prompt').value.trim()),state=session?.state||'idle',running=['starting','running'].includes(state);
   button.classList.add('send-icon');
-  button.classList.toggle('stop-pending',Boolean(session?.paused&&!session?.waiting_at_boundary));
+  button.classList.toggle('stop-pending',session?.interaction_state==='pausing');
   if(state==='idle'){const label=_('startExploring');button.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';button.title=label;button.setAttribute('aria-label',label);button.disabled=false;return}
-  const canSend=running&&!session?.stopped&&hasInput,label=questionId?_('replyAgent'):_('insertRound');
-  if(hasInput||Boolean(questionId)||Boolean(session?.waiting_at_boundary)){button.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';button.title=label;button.setAttribute('aria-label',label);button.disabled=!canSend;return}
-  button.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/></svg>';button.title=session?.paused?_('forceStop'):_('pause');button.setAttribute('aria-label',button.title);button.disabled=!running||Boolean(session?.stopped)||Boolean(session?.force_stop_requested);
+  const canSend=running&&hasInput,label=_('insertRound');
+  if(hasInput||Boolean(session?.waiting_at_boundary)){button.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M9 14V4M5 8l4-4 4 4"/></svg>';button.title=label;button.setAttribute('aria-label',label);button.disabled=!canSend;return}
+  button.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><rect x="5.5" y="5.5" width="7" height="7" rx="1"/></svg>';button.title=session?.interaction_state==='pausing'?_('forceStop'):_('pause');button.setAttribute('aria-label',button.title);button.disabled=!running||Boolean(session?.force_pause_requested);
 }
 function syncSession(s){
-  session=s;const running=['starting','running'].includes(s.state);questionId=Object.keys(s.questions||{})[0]||null;renderHeaderControls();renderTimelineWelcome();
+  session=s;const running=['starting','running'].includes(s.state);renderHeaderControls();renderTimelineWelcome();
   renderComposerControl();$('data-agent-state').textContent=_(s.data_state==='stopping'?'dataAgentStopping':s.data_state==='running'?'dataAgentRunning':s.data_state==='stopped'?'dataAgentStopped':'dataAgentReady');renderDataAgentControl();renderTimelineSurface();renderEvaluatorAvailability();applyEvaluatorAgentResult();
-  $('pending').textContent=s.pending_transition?_(s.pending_transition==='next_r'?'nextRQueued':'nextCQueued'):s.pending_settings?_('modelQueued'):s.pending_guidance?_('promptsQueued',{count:s.pending_guidance}):'';for(const id of ['next-c','next-r']){$(id).hidden=!running;$(id).disabled=!running||Boolean(questionId)||s.stopped}$('apply').disabled=!['idle','starting','running'].includes(s.state);renderTopk(s.topk_records||[]);
+  $('pending').textContent=s.pending_transition?_(s.pending_transition==='next_r'?'nextRQueued':'nextCQueued'):s.pending_settings?_('modelQueued'):s.pending_messages?_('promptsQueued',{count:s.pending_messages}):'';for(const id of ['next-c','next-r']){$(id).hidden=!running;$(id).disabled=!running}$('apply').disabled=!['idle','starting','running'].includes(s.state);renderTopk(s.topk_records||[]);
   if(s.supplied_data){$('dataset').disabled=true;$('target').disabled=true;$('data-upload').disabled=true;$('dataset').placeholder=_('suppliedDataPlaceholder');dataNote(_('suppliedDataNote'))}
   if(!initialized){
     if(s.initial_prompt){$('problem-description').value=s.initial_prompt;promptDefaults.problem_description=s.initial_prompt;requestAnimationFrame(fitProblemDescription)}
@@ -931,13 +963,14 @@ function syncSession(s){
 async function pollStatus(){try{const s=await api('/api/session');lastStatusAt=Date.now();syncSession(s);renderActivity()}catch(error){$('connection').textContent=_('connectionError');$('connection').title=error.message}finally{setTimeout(pollStatus,1500)}}
 function compactStreamEventBatch(events){
   const terminal=new Set(),latestDelta=new Map();
-  for(const event of events){const responseId=event.payload?.response_id;if(!responseId)continue;if(['assistant','assistant_error','data_assistant','data_assistant_error','evaluator_assistant','evaluator_assistant_error'].includes(event.kind))terminal.add(responseId);else if(['assistant_delta','data_assistant_delta','evaluator_assistant_delta'].includes(event.kind))latestDelta.set(responseId,event)}
-  return events.filter(event=>{const responseId=event.payload?.response_id;if(!responseId)return true;if(terminal.has(responseId)&&['assistant_start','assistant_delta','data_assistant_start','data_assistant_delta','evaluator_assistant_start','evaluator_assistant_delta'].includes(event.kind))return false;if(['assistant_delta','data_assistant_delta','evaluator_assistant_delta'].includes(event.kind))return latestDelta.get(responseId)===event;return true})
+  for(const event of events){const responseId=event.payload?.response_id;if(!responseId)continue;if(['assistant_completed','assistant_failed'].includes(event.kind))terminal.add(responseId);else if(event.kind==='assistant_delta')latestDelta.set(responseId,event)}
+  return events.filter(event=>{const responseId=event.payload?.response_id;if(!responseId)return true;if(terminal.has(responseId)&&['assistant_started','assistant_delta'].includes(event.kind))return false;if(event.kind==='assistant_delta')return latestDelta.get(responseId)===event;return true})
 }
 async function pollEvents(){try{
-  const events=await api('/api/control/events?after_seq='+seq);lastEventsAt=Date.now();
-  if(events.truncated&&seq)notice(_('eventBufferGap'));
-  const batchMaxSeq=Math.max(seq,...events.events.map(event=>event.seq));for(const e of compactStreamEventBatch(events.events)){try{if(e.kind.startsWith('data_'))renderDataEvent(e);else if(e.kind.startsWith('evaluator_'))renderEvaluatorEvent(e);else renderEvent(e)}catch(error){notice(_('eventRenderFailed',{seq:e.seq,message:error.message}))}}seq=batchMaxSeq;
+  const [searchEvents,dataEvents,evaluatorEvents]=await Promise.all([api('/api/control/events?after_seq='+seq),api('/api/data/agent/events?after_seq='+dataSeq),api('/api/evaluator/agent/events?after_seq='+evaluatorSeq)]);lastEventsAt=Date.now();
+  if((searchEvents.truncated&&seq)||(dataEvents.truncated&&dataSeq)||(evaluatorEvents.truncated&&evaluatorSeq))notice(_('eventBufferGap'));
+  for(const [batch,render] of [[searchEvents,renderEvent],[dataEvents,renderDataEvent],[evaluatorEvents,renderEvaluatorEvent]])for(const e of compactStreamEventBatch(batch.events)){try{render(e)}catch(error){notice(_('eventRenderFailed',{seq:e.seq,message:error.message}))}}
+  if(searchEvents.cursor_reset)seq=0;if(dataEvents.cursor_reset)dataSeq=0;if(evaluatorEvents.cursor_reset)evaluatorSeq=0;seq=Math.max(seq,...searchEvents.events.map(event=>event.seq));dataSeq=Math.max(dataSeq,...dataEvents.events.map(event=>event.seq));evaluatorSeq=Math.max(evaluatorSeq,...evaluatorEvents.events.map(event=>event.seq));
   const visibleContext=selectedContextKey?contextHistory.get(selectedContextKey):latestContext;if(visibleContext)renderContext(visibleContext);renderActivity();
 }catch(error){$('connection').title=_('eventSync',{message:error.message})}finally{setTimeout(pollEvents,1500)}}
 async function pollFiles(){try{await refreshFiles()}catch(error){$('files').title=error.message}finally{setTimeout(pollFiles,5000)}}
@@ -964,9 +997,9 @@ function setupPanelResizer(side){
 }
 applyPanelLayout();setupPanelResizer('left');setupPanelResizer('right');window.addEventListener('resize',applyPanelLayout);
 
-$('send').onclick=guard(async()=>{const prompt=$('prompt').value.trim();if(session.state==='idle'){await startPreparedRun(prompt);$('prompt').value='';renderComposerControl();return}if(prompt){$('send').disabled=true;if(questionId){await api('/api/control/reply/'+questionId,{message:prompt});if(session.paused)await api('/api/control/command',{action:'resume'})}else{const control=await api('/api/control/command',{action:'message',message:prompt});syncSession({...session,...control})}$('prompt').value='';renderComposerControl();return}if(!questionId&&!session.paused){const control=await api('/api/control/command',{action:'pause',message:_('safeStopNotice')});syncSession({...session,...control});return}if(!questionId&&session.paused&&!session.waiting_at_boundary){const control=await api('/api/control/command',{action:'force_stop',message:_('forceStopNotice')});syncSession({...session,...control})}});
+$('send').onclick=guard(async()=>{const prompt=$('prompt').value.trim();if(session.state==='idle'){await startPreparedRun(prompt);$('prompt').value='';renderComposerControl();return}if(prompt){$('send').disabled=true;const control=await api('/api/control/command',{action:'message',message:prompt});syncSession({...session,...control});$('prompt').value='';renderComposerControl();return}if(session.interaction_state==='running'){const control=await api('/api/control/command',{action:'pause'});syncSession({...session,...control});return}if(session.interaction_state==='pausing'){const control=await api('/api/control/command',{action:'force_pause'});syncSession({...session,...control})}});
 $('prompt').oninput=()=>{renderComposerControl();if((session?.state||'idle')!=='idle')return;promptEdited.user=true};$('system-prompt').oninput=()=>{promptEdited.system=true};bindEnterToSend($('prompt'),$('send'));$('problem-description').oninput=()=>{fitProblemDescription();syncResearchProblem($('problem-description').value)};
-$('data-agent-send').onclick=dataGuard(async()=>{if(['running','stopping'].includes(session?.data_state)){syncSession(await api('/api/data/agent/stop',{}));return}const input=$('data-agent-input'),message=input.value.trim();if(!message)throw Error(_('inputRequired'));if(session?.state==='running'&&!session.paused&&!questionId)throw Error(_('dataAgentPauseFirst'));input.value='';syncSession(await api('/api/data/agent',{message}))});
+$('data-agent-send').onclick=dataGuard(async()=>{if(['running','pausing','interrupting'].includes(session?.data_interaction_state)){syncSession(await api('/api/data/agent/stop',{}));return}const input=$('data-agent-input'),message=input.value.trim();if(!message)throw Error(_('inputRequired'));if(session?.state==='running'&&session?.interaction_state!=='paused')throw Error(_('dataAgentPauseFirst'));input.value='';syncSession(await api('/api/data/agent',{message}))});
 bindEnterToSend($('data-agent-input'),$('data-agent-send'));
 for(const button of document.querySelectorAll('[data-data-settings-tab]'))button.onclick=()=>selectDataSettingsTab(button.dataset.dataSettingsTab);
 $('data-provider').onchange=()=>{$('data-api-key').value='';refreshDataProviderCredential().catch(notice)};

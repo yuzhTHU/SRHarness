@@ -70,6 +70,10 @@ def mount_platform(app, session: InteractiveSession):
         except (ValueError, OSError) as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.get('/api/data/agent/events')
+    def data_agent_events(after_seq: int = 0):
+        return session.data_interaction_manager.get_recent_events(max(0, after_seq))
+
     @app.post('/api/data/agent/stop')
     def stop_data_preparation():
         try:
@@ -129,6 +133,10 @@ def mount_platform(app, session: InteractiveSession):
             return session.start_evaluator_assistance(payload)
         except (OSError, ValueError) as exc:
             raise HTTPException(400, str(exc)) from exc
+
+    @app.get('/api/evaluator/agent/events')
+    def evaluator_agent_events(after_seq: int = 0):
+        return session.evaluator_interaction_manager.get_recent_events(max(0, after_seq))
 
     @app.post('/api/evaluator/agent/stop')
     def stop_evaluator_assistance():
@@ -230,10 +238,9 @@ def mount_platform(app, session: InteractiveSession):
             if session.state not in {"idle", "running"}:
                 raise HTTPException(409, "Variable roles cannot be changed in the current run state")
             if session.state == "running":
-                control_status = session.controller.status()
+                control_status = session.sr_interaction_manager.status()
                 if not (
-                    control_status["paused"]
-                    and control_status["waiting_at_boundary"]
+                    control_status["interaction_state"] == "paused"
                 ):
                     raise HTTPException(
                         409,
@@ -287,10 +294,9 @@ def mount_platform(app, session: InteractiveSession):
                     "Wait for the data-preparation agent to finish before changing variable descriptions",
                 )
             if session.state == "running":
-                control_status = session.controller.status()
+                control_status = session.sr_interaction_manager.status()
                 if not (
-                    control_status["paused"]
-                    and control_status["waiting_at_boundary"]
+                    control_status["interaction_state"] == "paused"
                 ):
                     raise HTTPException(
                         409,
@@ -629,7 +635,9 @@ def mount_platform(app, session: InteractiveSession):
             raise HTTPException(400, str(exc)) from exc
         relative = str(path.relative_to(session.workspace))
         size = sum(file.stat().st_size for file in path.iterdir() if file.is_file())
-        session.controller.publish('file_uploaded', {'path': relative, 'size': size})
+        session.data_interaction_manager.publish_event('workspace_changed', {
+            'operation': 'created', 'path': relative, 'size': size,
+        })
         return {'path': relative}
 
     @app.post('/api/data/prompts')
@@ -669,7 +677,9 @@ def mount_platform(app, session: InteractiveSession):
                 if destination.exists():
                     raise HTTPException(409, 'File already exists; rename it before uploading')
                 os.replace(temp, destination)
-            session.controller.publish('file_uploaded', {'path': path, 'size': size})
+            session.data_interaction_manager.publish_event('workspace_changed', {
+                'operation': 'created', 'path': path, 'size': size,
+            })
             return {'path': path, 'size': size}
         except HTTPException:
             raise

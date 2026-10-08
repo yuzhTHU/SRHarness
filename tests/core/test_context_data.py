@@ -121,6 +121,29 @@ def test_context_data_descriptions_are_updated_atomically(tmp_path):
     assert load_context_data(directory)["variable_descriptions"] == loaded["variable_descriptions"]
 
 
+def test_context_data_descriptions_update_unlocked_manifest_in_locked_directory(tmp_path):
+    directory = tmp_path / "context.data"
+    write_manifest(directory, {
+        "variables": {
+            "x": {"file": "x.npy", "description": "Old input.", "axes": ["sample"]},
+        },
+        "axes": {
+            "sample": {"values": [1, 2], "description": "Sample."},
+        },
+    })
+    np.save(directory / "x.npy", np.array([3.0, 4.0]))
+    manifest = directory / "manifest.json"
+    directory.chmod(0o555)
+    manifest.chmod(0o644)
+    try:
+        loaded = update_context_data_descriptions(directory, {"x": "Edited input."})
+    finally:
+        directory.chmod(0o755)
+
+    assert loaded["variable_descriptions"]["x"] == "Edited input."
+    assert json.loads(manifest.read_text())["variables"]["x"]["description"] == "Edited input."
+
+
 def test_context_data_reports_redundant_missing_and_misaligned_content(tmp_path):
     directory = tmp_path / "context.data"
     write_manifest(directory, {

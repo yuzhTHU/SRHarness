@@ -32,6 +32,8 @@ _logger = logging.getLogger(f'sr_harness.{__name__}')
 class SRAgent(Agent):
     """Agent that performs an R-C-L-K symbolic-regression search."""
 
+    # Construction and public lifecycle
+
     def __init__(
         self,
         llm_provider: str,
@@ -104,9 +106,8 @@ class SRAgent(Agent):
         )
 
         if not hasattr(self, "excluded_tools"):
-            # ask_human and workspace_code_executor require interaction or
-            # workspace permissions, so the non-interactive agent excludes them.
-            self.excluded_tools = {"ask_human", "workspace_code_executor", "validate_context_data"}
+            # Workspace executors require explicit workspace permissions.
+            self.excluded_tools = {"workspace_code_executor", "validate_context_data"}
 
         tool_cls_list = []
         for tool_cls in BaseTool.load_tool_classes():
@@ -317,7 +318,7 @@ class SRAgent(Agent):
                 return self.search(X, y, problem_description)
             except KeyboardInterrupt as error:
                 coordinate = self.run_state.latest_coordinate
-                error.partial_result = self.search_result(
+                error.partial_result = self.build_search_result(
                     "interrupted",
                     R=coordinate.R if coordinate else None,
                     C=coordinate.C if coordinate else None,
@@ -326,7 +327,7 @@ class SRAgent(Agent):
                 raise
             except Exception as error:
                 coordinate = self.run_state.latest_coordinate
-                error.partial_result = self.search_result(
+                error.partial_result = self.build_search_result(
                     "failed",
                     R=coordinate.R if coordinate else None,
                     C=coordinate.C if coordinate else None,
@@ -342,6 +343,8 @@ class SRAgent(Agent):
             tool_context: Shared context used to initialize tools.
         """
         yield tool_context
+
+    # Search orchestration
 
     def search(self, X: Dict[str, np.ndarray], y: Dict[str, np.ndarray], problem_description: str) -> Dict[str, Any]:
         """Run the R-C-L search after data, tools, parser, and API are initialized.
@@ -365,11 +368,11 @@ class SRAgent(Agent):
         while R <= self.max_restart_loop:  # R 次 best-solution restart
             _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
-            # 用平凡结果或者历史最佳结果构建新的 initial prompt
+            # 用平凡结果或者历史最佳结果构建新的分支 buffer
             restart_records = self.run_state.ranked_candidates()[:self.restart_top_k]
-            initial_prompt = self.build_initial_prompt(problem_description, X, y, restart_records)
+            initial_buffer = self.create_initial_buffer(problem_description, X, y, restart_records)
             initial_node_parents = {record.node_id: "restart_seed" for record in restart_records}
-            self.named_timer.add("build_initial_prompt")
+            self.named_timer.add("create_initial_buffer")
             C = 1
             next_restart = False
             while C <= self.global_width:  # C 次独立重复对话
@@ -379,7 +382,7 @@ class SRAgent(Agent):
                 )
 
                 # 用 initial prompt 初始化 buffer，node_parents 记录当前 buffer 的父节点
-                buffer = deepcopy(initial_prompt)
+                buffer = deepcopy(initial_buffer)
                 node_parents = deepcopy(initial_node_parents)
                 self.named_timer.add("init_buffer")
 
@@ -392,23 +395,23 @@ class SRAgent(Agent):
                     )
 
                     # Step 1: 根据 Buffer 创建 Prompt
-                    transition = self.before_iteration(buffer, R=R, L=L, C=C)
+                    transition = self.prepare_iteration(buffer, R=R, L=L, C=C)
                     if transition == "next_r":
                         next_restart = True
                         break
                     if transition == "next_c":
                         break
-                    prompt = self.build_prompt(buffer, R=R, L=L, C=C)
+                    prompt = self.prepare_model_messages(buffer, R=R, L=L, C=C)
                     self.set_messages(prompt)
-                    self.named_timer.add("build_prompt")
+                    self.named_timer.add("prepare_model_messages")
 
                     # Step 2: 请求 LLM 得到 Content、Tool Calls 和 Message
                     response_list, usage = self.request_llm(prompt, R=R, L=L, C=C)
                     self.named_timer.add("request_llm")
 
                     # Step 3: 执行 Tool Calls 得到 Results
-                    results_list = self.get_results(response_list, R=R, L=L, C=C)
-                    self.named_timer.add("get_results")
+                    results_list = self.execute_tool_calls(response_list, R=R, L=L, C=C)
+                    self.named_timer.add("execute_tool_calls")
 
                     # Step 4: 记录当前搜索节点
                     self.record_search_iteration(
@@ -421,10 +424,10 @@ class SRAgent(Agent):
                     self.named_timer.add("collect_candidates")
 
                     # Step 6: 更新对话 Buffer 和父节点关系
-                    buffer, node_parents = self.update_buffer(
+                    buffer, node_parents = self.update_conversation(
                         buffer, response_list, results_list, node_parents, R, L, C,
                     )
-                    self.named_timer.add("update_buffer")
+                    self.named_timer.add("update_conversation")
 
                     # Step 7: 打印本轮日志
                     self.log_info(response_list, R=R, L=L, C=C)
@@ -432,10 +435,10 @@ class SRAgent(Agent):
                     self.total_timer.add()
 
                     # Step 8: 判断是否终止当前搜索
-                    status = self.handle_iteration_complete(buffer, R=R, L=L, C=C)
+                    status = self.finish_iteration(buffer, R=R, L=L, C=C)
                     if status is not None:
                         _logger.note("Early stopping triggered. Returning best result.")
-                        return self.search_result(status, R=R, L=L, C=C)
+                        return self.build_search_result(status, R=R, L=L, C=C)
                     L += 1
                 if next_restart:
                     break
@@ -444,7 +447,7 @@ class SRAgent(Agent):
 
         _logger.note("Finished all iterations. Returning best result.")
         coordinate = self.run_state.latest_coordinate
-        return self.search_result(
+        return self.build_search_result(
             "completed",
             R=coordinate.R if coordinate else None,
             C=coordinate.C if coordinate else None,
@@ -486,8 +489,10 @@ class SRAgent(Agent):
         splits = split_context.evaluator.split(split_context)
         return splits["train"].data, splits["validation"].data
 
-    def build_initial_prompt(self, problem_description, X, y, restart_records):
-        """Build initial prompt.
+    # Prompt and conversation-buffer lifecycle
+
+    def create_initial_buffer(self, problem_description, X, y, restart_records):
+        """Combine initial prompts with the first progress message for a branch.
 
         Args:
             problem_description: Natural-language description of the discovery task.
@@ -495,85 +500,110 @@ class SRAgent(Agent):
             y: Target data or target expression.
             restart_records: Ranked candidates used to seed a restart.
         """
-        initial_prompt = []
         self._task_route_score, self._task_route_reasons = self.model_router.assess(
             problem_description,
             feature_count=len(X),
         )
+        initial_buffer = [
+            *self.create_initial_prompt_messages(
+                problem_description, X, y, restart_records,
+            ),
+            self.build_progress_message(L=0),
+        ]
+        self.on_buffer_messages_added(initial_buffer)
+        return initial_buffer
 
-        # 根据是否有历史最优结果来动态设置 MSE 目标
-        if not restart_records:
-            mse_goal = "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-        elif (best_mse := restart_records[0].metric("mse", "train")) > 0:
-            target_mse = best_mse * 0.1
-            mse_goal = f"Your target is to find a formula with MSE < {target_mse:.6g} (10x better than the previous best MSE of {best_mse:.6g})."
-        else:
-            mse_goal = "The previous round already achieved MSE = 0. Try to find a simpler formula that also achieves MSE = 0."
-
-        # 构建 system prompt
-        initial_prompt.append({
+    def create_initial_prompt_messages(self, problem_description, X, y, restart_records):
+        """Create the finalized system and user messages without buffer metadata."""
+        messages = [{
             "role": "system",
-            "content": (
-                f"You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
-                f"that explain the relationship between feature variables and the target variable. "
-                f"DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
-                f"You have at most {self.max_refinement_depth} refinement rounds in each conversation branch. "
-                f"Plan tool use within this budget: use early rounds for targeted exploration, keep concrete "
-                f"candidate formulas as the budget shrinks, and avoid open-ended searches near the end. "
-                f"If possible, try calling multiple tools in each round. "
-                f"At the final refinement round (L={self.max_refinement_depth}), stop exploration and submit the best available "
-                f"target formula using the most appropriate final-answer mechanism available; do not wait for another reminder after the final round. "
-                f"Please start by analyzing the data to understand the relationship between features and target."
-            )
-        })
+            "content": self.create_initial_system_prompt(restart_records),
+        }, {
+            "role": "user",
+            "content": self.create_initial_user_prompt(
+                problem_description, X, y, restart_records,
+            ),
+        }]
+        return self.customize_initial_prompts(messages, X=X, y=y)
 
-        # 构建 user prompt - 告知具体问题和数据信息
-        user_content = (
+    @staticmethod
+    def _build_mse_goal(restart_records) -> str:
+        """Describe the next MSE objective from the current restart seeds."""
+        if not restart_records:
+            return "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
+        best_mse = restart_records[0].metric("mse", "train")
+        if best_mse > 0:
+            return (
+                f"Your target is to find a formula with MSE < {best_mse * 0.1:.6g} "
+                f"(10x better than the previous best MSE of {best_mse:.6g})."
+            )
+        return (
+            "The previous round already achieved MSE = 0. "
+            "Try to find a simpler formula that also achieves MSE = 0."
+        )
+
+    def create_initial_system_prompt(self, restart_records) -> str:
+        """Create the initial system prompt independently of the branch buffer."""
+        mse_goal = self._build_mse_goal(restart_records)
+        return (
+            "You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
+            "that explain the relationship between feature variables and the target variable. "
+            "DO NOT be satisfied with an accurate but complex formula — prefer simple, interpretable expressions. "
+            f"You have at most {self.max_refinement_depth} refinement rounds in each conversation branch. "
+            "Plan tool use within this budget: use early rounds for targeted exploration, keep concrete "
+            "candidate formulas as the budget shrinks, and avoid open-ended searches near the end. "
+            "If possible, try calling multiple tools in each round. "
+            f"At the final refinement round (L={self.max_refinement_depth}), stop exploration and submit the best available "
+            "target formula using the most appropriate final-answer mechanism available; do not wait for another reminder "
+            "after the final round. "
+            f"{mse_goal} Please start by analyzing the data to understand the relationship between features and target."
+        )
+
+    def create_initial_user_prompt(self, problem_description, X, y, restart_records) -> str:
+        """Create the initial user prompt independently of the branch buffer."""
+        content = (
             f"{problem_description}\n\n"
             f"- Feature names: {list(X.keys())}\n"
             f"- Target name: {next(iter(y))}\n"
         )
+        if not restart_records:
+            return content + "Please start by analyzing the data to understand the relationship between features and target."
 
-        # 如果有历史最优结果，注入作为参考上下文
-        if restart_records:
-            previous_formulas = []
-            for idx, record in enumerate(restart_records):
-                formula = record.formula
-                result = record.details['data_split_results']
-                previous_formulas.append(
-                    f"{idx}. Formula: {formula}\n"
-                    f"    (Train | Validation)\n"
-                    f"    R2={result['train']['metrics']['r2']:.6g} | {result['validation']['metrics']['r2']:.6g}\n"
-                    f"    MSE={result['train']['metrics']['mse']:.6g} | {result['validation']['metrics']['mse']:.6g}\n"
-                )
-            previous_formulas_text = "\n".join(previous_formulas)
-            if (best_mse := restart_records[0].metric("mse", "train")) > 0:
-                goal = f"find a formula with MSE < {best_mse * 0.1:.3g} (10x better than the previous best MSE)"
-            else:
-                goal = "find a simpler formula that also achieves MSE = 0"
-            user_content += (
-                f"\n---\n\n"
-                f"Previously Explored Formulas (from best to worst):\n"
-                f"{previous_formulas_text}\n\n"
-                f"Use these as inspiration. Try to improve upon them or find simpler alternatives.\n"
-                f"\n---\n\n"
-                f"Based on the above results, {goal}."
-            )
-        else:
-            user_content += (
-                "You should try to find a simple formula that fits the data with an MSE of EXACTLY 0."
-            )
+        content += (
+            "\n--- Previously Explored Formulas (from best to worst) ---\n"
+            "Use these as inspiration. Try to improve upon them or find simpler alternatives.\n\n"
+        )
+        for record in restart_records:
+            mse = record.metric("mse", "validation")
+            if mse is None:
+                mse = record.metric("mse", "train")
+            r2 = record.metric("r2", "validation")
+            if r2 is None:
+                r2 = record.metric("r2", "train")
+            metric_text = f"MSE={mse:.6g}" if mse is not None else "MSE=unavailable"
+            if r2 is not None:
+                metric_text += f", R²={r2:.6g}"
+            content += f"  • Formula: {record.formula}\n    {metric_text}\n\n"
+        return content + (
+            "---\n\nAnalyze why the previous best formulas may not be perfect, and try a different "
+            "approach or structure to improve the result."
+        )
 
-        initial_prompt.append({
-            "role": "user",
-            "content": user_content
-        })
-        process_message = self.build_process_message(L=0)
-        initial_prompt.append(process_message)
-        return initial_prompt
+    def customize_initial_prompts(self, messages, *, X, y):
+        """Customize finalized initial prompt messages before buffer insertion."""
+        return messages
 
-    def build_prompt(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]:
-        """Build prompt.
+    def on_buffer_messages_added(self, messages, **coordinate: int) -> None:
+        """Observe messages after they enter a conversation buffer."""
+
+    def _append_buffer_messages(self, buffer, messages, **coordinate: int) -> None:
+        """Append messages and notify subclasses through one mutation path."""
+        messages = list(messages)
+        buffer.extend(messages)
+        self.on_buffer_messages_added(messages, **coordinate)
+
+    def prepare_model_messages(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]:
+        """Prepare the messages sent to the model for one iteration.
 
         Args:
             buffer: Conversation history buffer.
@@ -587,7 +617,13 @@ class SRAgent(Agent):
         if self.force_initial_diagnostics and L == 1:
             # Persist the evidence in the branch buffer so later refinement
             # rounds retain the diagnostics and skill instructions.
-            buffer.append(self.run_initial_diagnostics(R=R, L=L, C=C))
+            self._append_buffer_messages(
+                buffer,
+                [self.run_initial_diagnostics(R=R, L=L, C=C)],
+                R=R,
+                C=C,
+                L=L,
+            )
         prompt = deepcopy(buffer)
         _logger.info(f"Built prompt with {len(prompt)} messages.")
         logs = []
@@ -610,7 +646,7 @@ class SRAgent(Agent):
         _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
         return prompt
 
-    def before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
+    def prepare_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
         """Apply mode-specific control changes before constructing this iteration's prompt.
 
         Args:
@@ -624,20 +660,13 @@ class SRAgent(Agent):
         """
         return None
 
-    def refresh_data(self, buffer: List[Dict[str, Any]]) -> bool:
-        """Apply a newly committed shared-data revision at an iteration boundary.
-
-        Args:
-            buffer: Conversation history buffer.
-
-        Returns:
-            bool: The operation result.
-        """
+    def refresh_data(self) -> dict[str, Any] | None:
+        """Apply a newly committed shared-data revision and describe the change."""
         if not hasattr(self, "context") or not hasattr(self, "_data_revision"):
-            return False
+            return None
         revision = int(getattr(self.context.args, "data_revision", 0))
         if revision == self._data_revision:
-            return False
+            return None
         if self.context.target is None or not self.context.feature_names():
             raise ValueError("The updated context does not define a target and features")
 
@@ -655,25 +684,20 @@ class SRAgent(Agent):
         self._active_y.update(y)
         previous_revision = self._data_revision
         self._data_revision = revision
-        descriptions = [
-            f"- {name}: {description}"
+        descriptions = {
+            name: description
             for name in [self.context.target, *self.context.feature_names()]
             if (description := self.context.variable_descriptions.get(name, "").strip())
-        ]
-        buffer.append({
-            "role": "user",
-            "content": (
-                "[Structured data updated by the data-preparation agent]\n"
-                f"Data revision changed from {previous_revision} to {self._data_revision}. "
-                f"The target is {self.context.target!r}; available features are "
-                f"{list(self.context.feature_names())}. Reassess earlier evidence against the updated variables "
-                "and continue the investigation."
-                + ("\nVariable descriptions:\n" + "\n".join(descriptions) if descriptions else "")
-            ),
-        })
-        return True
+        }
+        return {
+            "previous_revision": previous_revision,
+            "revision": revision,
+            "target": self.context.target,
+            "features": list(self.context.feature_names()),
+            "variable_descriptions": descriptions,
+        }
 
-    def handle_iteration_complete(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
+    def finish_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
         """Return a terminal status when the current search should stop.
 
         Args:
@@ -733,6 +757,8 @@ class SRAgent(Agent):
             ),
         }
 
+    # Model and tool execution
+
     def request_llm(self, prompt: List[Dict[str, Any]], R, L, C, stream_callback=None):
         """Run the ``request llm`` operation.
 
@@ -785,8 +811,8 @@ class SRAgent(Agent):
         usage = self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list, usage
 
-    def get_results(self, response_list, R, L, C):
-        """Return results.
+    def execute_tool_calls(self, response_list, R, L, C):
+        """Execute tool calls from model responses and preserve sample grouping.
 
         Args:
             response_list: Model responses for the current step.
@@ -844,7 +870,7 @@ class SRAgent(Agent):
                 }, f)
                 f.write('\n')
 
-    def update_buffer(
+    def update_conversation(
         self,
         buffer: List[Dict[str, Any]],
         response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
@@ -871,7 +897,7 @@ class SRAgent(Agent):
         selected_priority = float('inf')
         for K, results in enumerate(results_list, 1):
             for result in results:
-                if (priorities := self.sortby(result.result)) is not None and priorities[0] < selected_priority:
+                if (priorities := self.candidate_sort_key(result.result)) is not None and priorities[0] < selected_priority:
                     selected_K = K
                     selected_priority = priorities[0]
         node_parents[self.run_state.node_id(R=R, C=C, L=L, K=selected_K)] = 'continuation'
@@ -900,15 +926,22 @@ class SRAgent(Agent):
                 node_parents[self.run_state.node_id(R=R, C=C, L=L, K=K)] = 'context_merge'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
         if tool_calls or (message.get('content') or '').strip():
-            buffer.append(message)
-            buffer.extend(self.parser.format_tool_result_messages(tool_calls, results))
+            self._append_buffer_messages(
+                buffer,
+                [message, *self.parser.format_tool_result_messages(tool_calls, results)],
+                R=R,
+                C=C,
+                L=L,
+            )
         else:
             _logger.warning("Skipping empty LLM response (no content nor tool calls).")
-        process_message = self.build_process_message(L)
-        buffer.append(process_message)
+        process_message = self.build_progress_message(L)
+        self._append_buffer_messages(buffer, [process_message], R=R, C=C, L=L)
         return buffer, node_parents
 
-    def build_process_message(self, L):
+    # Progress prompts and candidate state
+
+    def build_progress_message(self, L):
         # 将当前搜索进度加入 buffer
         """Build process message.
 
@@ -942,7 +975,7 @@ class SRAgent(Agent):
         train_metric_path = f"train.metrics.{self.ranking_metric}"
         metric_label = self.ranking_metric.replace("_", " ").upper()
         pareto_front_str = format_pareto_front(
-            [self.candidate_dict(record) for record in pareto_front],
+            [self.candidate_to_dict(record) for record in pareto_front],
             concise=True,
             formula_max_length=160,
             balance=(
@@ -1073,7 +1106,7 @@ class SRAgent(Agent):
             for name, count in self.tools_counter.named_count.items()
         )
         if best_record := self.best_candidate():
-            metric_label, metric_value = self.record_metric(best_record)
+            metric_label, metric_value = self.get_ranking_metric(best_record)
             best_metric = f"{best_record.formula} ({metric_label}={metric_value:.6g})"
         else:
             best_metric = "None"
@@ -1088,6 +1121,8 @@ class SRAgent(Agent):
         }
         msg = "[gray] | [reset]".join(f"[blue]{k}[reset]={v}" for k, v in log.items())
         _logger.info(tag2ansi(msg))
+
+    # Persistence and result projection
 
     def record_llm_result(self, llm_result, R, L, C) -> Dict[str, Any] | None:
         """Record llm result.
@@ -1157,8 +1192,8 @@ class SRAgent(Agent):
             f"(K={self.local_sample_size})"
         )
 
-    def record_metric(self, record):
-        """Record metric.
+    def get_ranking_metric(self, record):
+        """Return the configured ranking metric and its display label.
 
         Args:
             record: Search or candidate record.
@@ -1180,13 +1215,13 @@ class SRAgent(Agent):
             return f"training {metric_label}", metric_value
         return None, None
 
-    def sortby(self, record):
-        """Run the ``sortby`` operation.
+    def candidate_sort_key(self, record):
+        """Return the ranking key for a candidate-like record.
 
         Args:
             record: Search or candidate record.
         """
-        _, metric_value = self.record_metric(record)
+        _, metric_value = self.get_ranking_metric(record)
         if metric_value is None:
             return None
 
@@ -1215,7 +1250,7 @@ class SRAgent(Agent):
         )
 
     @staticmethod
-    def candidate_dict(record: CandidateRecord) -> dict[str, Any]:
+    def candidate_to_dict(record: CandidateRecord) -> dict[str, Any]:
         """Adapt a candidate to utilities that consume split results at top level.
 
         Args:
@@ -1248,8 +1283,8 @@ class SRAgent(Agent):
         candidates = self.run_state.ranked_candidates()
         return [candidates[index] for index in self.run_state.pareto_indices(candidates)]
 
-    def search_result(self, status: str, R: int | None, L: int | None, C: int | None):
-        """Run the ``search result`` operation.
+    def build_search_result(self, status: str, R: int | None, L: int | None, C: int | None):
+        """Build a serializable search result for the current run state.
 
         Args:
             status: Run completion status.

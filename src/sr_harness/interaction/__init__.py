@@ -1,4 +1,4 @@
-"""Frontend-independent interaction primitives for interactive runs."""
-from .manager import InteractionManager
-from .terminal import TerminalInteractionManager
-from .web import WebInteractionManager
+"""Compatibility imports for runtime interaction primitives."""
+from ..runtime import InteractionManager, SRInteractionManager
+
+__all__ = ["InteractionManager", "SRInteractionManager"]

@@ -5,8 +5,7 @@ from .agents.sr_agent import SRAgent
 from .agents.sr_agent_interactive import SRAgentInteractive
 from .core import AgentContext, ToolCall
 from .evaluator import DefaultEvaluator, GraphEvaluator, load_custom_evaluator
-from .interaction import InteractionManager, TerminalInteractionManager
-from .runtime import InteractionController
+from .runtime import InteractionManager, SRInteractionManager
 from . import api
 from . import tools
 from . import utils
