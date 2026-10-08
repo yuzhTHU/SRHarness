@@ -24,7 +24,7 @@ from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, To
 from .agent import Agent
 
 if TYPE_CHECKING:
-    from ..evaluator import BaseEvaluator
+    from ..evaluator import DefaultEvaluator
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
@@ -50,7 +50,8 @@ class SRAgent(Agent):
         llm_max_tokens: int = 4096,
         max_workers: int = 0,
         validation_fraction: float = 0.2,
-        split_by: str = "ood",
+        split_by: str = "random",
+        split_ood_variable: str | None = None,
         split_random_state: int = 42,
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
@@ -59,7 +60,7 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
-        evaluator: BaseEvaluator | None = None,
+        evaluator: DefaultEvaluator | None = None,
     ):
         """初始化 Agent。
 
@@ -80,8 +81,9 @@ class SRAgent(Agent):
             llm_max_tokens: 每次 LLM 响应的最大 token 数。
             max_workers: 并行执行工具调用的最大工作进程数。0 表示不使用并行。
             validation_fraction: 验证集比例；验证集结果会展示给 Agent。设为 0 可关闭。
-            split_by: 验证集划分方式。"random" 表示随机划分；"ood" 表示优先按 t、
-                其次按 T 排序，并将取值较高的区间作为验证集。
+            split_by: 验证集划分方式。"random" 表示随机划分；"ood" 要求通过
+                split_ood_variable 显式指定排序变量。
+            split_ood_variable: OOD 划分使用的变量名；随机划分时可留空。
             split_random_state: 数据划分的随机种子。
             ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
@@ -104,7 +106,7 @@ class SRAgent(Agent):
         if not hasattr(self, "excluded_tools"):
             # ask_human and workspace_code_executor require interaction or
             # workspace permissions, so the non-interactive agent excludes them.
-            self.excluded_tools = {"ask_human", "workspace_code_executor", "commit_data"}
+            self.excluded_tools = {"ask_human", "workspace_code_executor", "validate_context_data"}
 
         tool_cls_list = []
         for tool_cls in BaseTool.load_tool_classes():
@@ -132,8 +134,13 @@ class SRAgent(Agent):
             raise ValueError("validation_fraction must be in [0, 1).")
         if split_by not in {"random", "ood"}:
             raise ValueError("split_by must be either 'random' or 'ood'.")
+        if split_ood_variable is not None and (
+            not isinstance(split_ood_variable, str) or not split_ood_variable.strip()
+        ):
+            raise ValueError("split_ood_variable must be None or a non-empty string.")
         self.validation_fraction = validation_fraction
         self.split_by = split_by
+        self.split_ood_variable = split_ood_variable
         self.split_random_state = split_random_state
         self.ranking_metric = ranking_metric
         self.larger_is_better = larger_is_better
@@ -218,11 +225,15 @@ class SRAgent(Agent):
         self.money_counter = ParallelTimer(unit='$') # 费用统计
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
-        from ..evaluator import DefaultEvaluator
         self.context = context if context is not None else AgentContext()
-        self.context.evaluator = evaluator or self.context.evaluator or DefaultEvaluator()
+        if evaluator is not None:
+            from ..evaluator import DefaultEvaluator
+            if not isinstance(evaluator, DefaultEvaluator):
+                raise TypeError("evaluator must be a DefaultEvaluator instance")
+            self.context.evaluator = evaluator
         self.context.args.validation_fraction = validation_fraction
         self.context.args.split_by = split_by
+        self.context.args.split_ood_variable = split_ood_variable
         self.context.args.split_random_state = split_random_state
         self.context.invalidate_splits()
         self.evaluator = self.context.evaluator
@@ -444,6 +455,9 @@ class SRAgent(Agent):
         """Split aligned arrays into train and validation data mappings."""
         self.context.args.validation_fraction = self.validation_fraction
         self.context.args.split_by = self.split_by
+        self.context.args.split_ood_variable = getattr(
+            self, "split_ood_variable", self.context.args.split_ood_variable
+        )
         self.context.args.split_random_state = self.split_random_state
         target = next(iter(y))
         data = X | y
@@ -469,8 +483,8 @@ class SRAgent(Agent):
             evaluator=self.context.evaluator,
             workspace=self.context.workspace,
         )
-        splits = split_context.evaluator.split_data(split_context)
-        return splits["train"], splits["evaluation"]
+        splits = split_context.evaluator.split(split_context)
+        return splits["train"].data, splits["validation"].data
 
     def build_initial_prompt(self, problem_description, X, y, restart_records):
         """Build initial prompt.
@@ -924,10 +938,24 @@ class SRAgent(Agent):
                 "this environment, with a brief justification if text is required."
             )
         pareto_front = self.get_pareto_front()
+        metric_path = f"validation.metrics.{self.ranking_metric}"
+        train_metric_path = f"train.metrics.{self.ranking_metric}"
+        metric_label = self.ranking_metric.replace("_", " ").upper()
         pareto_front_str = format_pareto_front(
             [self.candidate_dict(record) for record in pareto_front],
             concise=True,
             formula_max_length=160,
+            balance=(
+                ("validation.metrics.complexity", "minimize"),
+                (metric_path, "maximize" if self.larger_is_better else "minimize"),
+            ),
+            columns=("validation.metrics.complexity", metric_path, train_metric_path, "formula"),
+            title_mapping={
+                "validation.metrics.complexity": "Complexity",
+                metric_path: f"Validation {metric_label}",
+                train_metric_path: f"Train {metric_label}",
+                "formula": "Formula",
+            },
         )
         diagnostics = []
         for record in pareto_front:
@@ -1010,15 +1038,6 @@ class SRAgent(Agent):
                 node_id=self.run_state.node_id(R=R, C=C, L=L, K=K),
                 details=details,
             )
-            if "eic_diagnostics" not in res.result and not str(res.result.get("method", "")).startswith("ND2"):
-                eic_tool = next((tool for tool in self.tools if tool.metadata.name == "evaluate_eic"), None)
-                if eic_tool is not None:
-                    audit_call = ToolCall(name="evaluate_eic", params={"f": record.formula, "repeats": 4})
-                    audit_result = eic_tool(**audit_call.params)
-                    self.tools_counter.add("evaluate_eic")
-                    self.record_tool_calls([audit_call], [audit_result], R=R, L=L, C=C, forced=True)
-                    if audit_result.ok:
-                        record.details["eic_diagnostics"] = audit_result.result["eic_diagnostics"]
             if diagnostics := res.result.get("eic_diagnostics"):
                 record.details["eic_diagnostics"] = diagnostics
                 self.run_state.update_diagnostics(record.formula, diagnostics)

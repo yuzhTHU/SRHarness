@@ -48,7 +48,7 @@ class MyTool(BaseTool):
 工具实例化时传入的上下文可通过 `self.context` 访问，用于存放数据、模型、缓存等不应放在参数列表中由 Agent 生成的值。目前包含以下字段：
 - `self.context.data`: 原始数据，格式为 `{变量名: np.ndarray}`。
 - `self.context.target`: 目标变量名称字符串。除目标变量外的其他非轴变量都可以作为公式中的自变量。
-- `self.context.train_data()` / `self.context.evaluation_data()`: 由 Evaluator 首次切分并缓存的数据映射。拟合应使用 `train_split()`，评测应分别使用训练和评测视图。
+- `self.context.train_split` / `self.context.validation_split`: Evaluator 首次切分并缓存的只读上下文属性。
 
 ## 公式处理
 
@@ -144,12 +144,12 @@ LLM 会选择一种类型：
 
 ## 自定义评估器与数据划分
 
-SRHarness 提供公开的抽象 `sr_harness.BaseEvaluator` 接口、普通一维数据实现
-`sr_harness.DefaultEvaluator` 和图数据实现 `sr_harness.GraphEvaluator`。用户可以用静态方法覆盖 `fit()` 与 `evaluate()`，从
+SRHarness 提供普通一维数据实现 `sr_harness.DefaultEvaluator` 和图数据实现
+`sr_harness.GraphEvaluator`。用户可以用类方法覆盖 `fit()` 与 `evaluate()`，或只覆盖候选公式专用的 `fit_candidate()` 与 `evaluate_candidate()`，从
 `context.args` 提取所需参数后，再通过 `SRAgent(evaluator=...)` 注入自己的参数优化、
 数值积分或评价协议。
-评估器直接接收结构化 `Expression` 和当前数据划分的只读上下文；`fit()` 返回已绑定参数、
-可直接求值的 `Expression`，`evaluate()` 返回当前 split 的 metrics 字典。
+评估器直接接收结构化 `Expression` 和当前数据划分的上下文；`fit()` 返回已绑定参数、
+可直接求值的 `Expression`，`evaluate()` 返回仅含数值的扁平 metrics 字典。复杂度和格式化由工具层负责。
 它适合 ODE 轨迹积分、网络动力学和其它不能用逐点回归评价的任务。
 
 内置公式工具仍通过 `BaseTool.evaluate()` 复用统一的 train/validation 指标与残差诊断。

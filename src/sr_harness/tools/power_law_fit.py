@@ -217,7 +217,7 @@ class PowerLawFitTool(BaseTool):
 
     def _validation_r2(self, features, y_symbol, exponents, scale):
         """Score an exponent candidate on the same complete, positive validation rows."""
-        data = self.context.evaluation_data()
+        data = self.context.validation_split.data
         if not data:
             return None
         try:

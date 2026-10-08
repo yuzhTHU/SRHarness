@@ -1,3 +1,6 @@
+import threading
+import time
+
 from sr_harness.core import AgentContext
 from sr_harness.tools.workspace_code_executor import (
     WorkspaceCodeExecutorTool,
@@ -52,3 +55,31 @@ def test_workspace_executor_rejects_user_locked_files(tmp_path):
         assert "已锁定" in str(exc)
     else:
         raise AssertionError("locked file unexpectedly accepted for writing")
+
+
+def test_workspace_executor_terminates_its_worker_when_cancelled(tmp_path):
+    workspace = Workspace(path=tmp_path)
+    tool = WorkspaceCodeExecutorTool(
+        context=AgentContext(data={"x": [1, 2]}, workspace=workspace)
+    )
+    tool.cancel_event = threading.Event()
+    outcome = {}
+
+    def execute():
+        try:
+            outcome["result"] = tool(
+                program="while True:\n    pass", timeout_seconds=30,
+            )
+        except Exception as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=execute)
+    thread.start()
+    time.sleep(.15)
+    tool.cancel_event.set()
+    thread.join(2)
+
+    assert not thread.is_alive()
+    assert "error" not in outcome
+    assert outcome["result"].ok is False
+    assert "InterruptedError" in outcome["result"].result_str

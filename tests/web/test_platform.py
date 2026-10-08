@@ -16,8 +16,9 @@ pytest.importorskip('httpx')
 from fastapi.testclient import TestClient
 
 from sr_harness.agents.data_preparation_agent import DataPreparationAgent
+from sr_harness.agents.evaluator_construction_agent import EvaluatorConstructionAgent
 from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
-from sr_harness.core import APICallResult, ContextDataLoader, SearchRunState, ToolCall
+from sr_harness.core import APICallResult, SearchRunState, ToolCall, load_context_data
 from sr_harness.api import BaseAPI
 from sr_harness.web.app import create_app
 from sr_harness.runtime import InteractionController
@@ -46,7 +47,10 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="pause"' not in page.text
     assert 'id="stop"' not in page.text
     assert 'function renderComposerControl()' in page.text
-    assert "if(!questionId&&!session.paused){const control=await api('/api/control/command',{action:'pause'})" in page.text
+    assert "button.classList.add('send-icon')" in page.text
+    assert "if(state==='idle'){const label=_('startExploring');button.innerHTML='<svg" in page.text
+    assert "action:'pause',message:_('safeStopNotice')" in page.text
+    assert "action:'force_stop',message:_('forceStopNotice')" in page.text
     assert "const control=await api('/api/control/command',{action:'message',message:prompt})" in page.text
     assert '.composer #send.send-icon{display:grid;place-items:center;width:34px;height:34px' in page.text
     assert "for(const [inputId,buttonId] of [['R','next-c'],['C','next-r']]" in page.text
@@ -54,7 +58,20 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert '#settings-pane-search .search-step-control{display:flex;align-items:center;gap:6px' in page.text
     assert '#settings-pane-search .search-step-control .advance-button{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px' in page.text
     assert "composerToolbar.prepend($('settings-toggle'),$('initial-prompt-toggle'))" in page.text
-    assert "$('status').className='small muted';$('send').before($('status'))" in page.text
+    assert "$('status').className='small muted composer-status-center';$('send').before($('status'),composerKeyboardHint('prompt-keyboard-hint'))" in page.text
+    assert "composerEnterHint:'Shift/⌘ + Enter 换行；Enter 发送'" in page.text
+    assert "function bindEnterToSend(input,button)" in page.text
+    assert "$('data-insights-note')?.remove()" in page.text
+    assert "dataInsightsRefresh.id='data-insights-refresh'" in page.text
+    assert "dataInsightsRefresh.onclick=dataGuard(reloadCommittedContext)" in page.text
+    assert "await api('/api/data/context/reload',{});await loadCommittedContext()" in page.text
+    assert "selectCenterTab(document.querySelector('.tabs button.active')?.id.replace(/-tab$/,'')||'prepare')" in page.text
+    assert "event.key!=='Enter'||event.shiftKey||event.metaKey||event.isComposing" in page.text
+    assert "bindEnterToSend($('prompt'),$('send'))" in page.text
+    assert "bindEnterToSend($('data-agent-input'),$('data-agent-send'))" in page.text
+    assert "bindEnterToSend($('evaluator-agent-input'),$('evaluator-agent-send'))" in page.text
+    assert '.composer-keyboard-hint{flex:0 0 auto;color:var(--muted);font-size:9px;white-space:nowrap}' in page.text
+    assert '.composer-status-center{position:absolute!important;top:50%;left:50%' in page.text
     assert '.composer>.row #status{padding:0;border-radius:0;background:transparent;color:var(--muted);font-size:11px' in page.text
     assert 'id="plot-variable-palette"' in page.text
     assert 'id="start-prepared"' not in page.text
@@ -78,14 +95,49 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert '.evaluator-editor{margin-top:10px;overflow:hidden;border:1px solid #d8dee4;border-radius:25px;background:#fff;box-shadow:var(--interactive-shadow)}' in page.text
     assert 'id="evaluator-code"' in page.text
     assert 'id="evaluator-agent-input"' in page.text
+    assert "evaluatorToggle.id='evaluator-agent-toggle'" in page.text
+    assert 'evaluatorAgent.hidden=true' in page.text
+    assert "evaluatorAgentToggle:'也可以描述需求，让 Agent 创建 Evaluator'" in page.text
     assert 'id="evaluator-agent-feed" class="data-agent-feed evaluator-agent-feed" hidden' in page.text
     assert 'class="data-agent-compose evaluator-agent-compose"' in page.text
     assert 'class="data-agent-compose-toolbar evaluator-agent-compose-toolbar"' in page.text
     assert 'class="data-agent-send evaluator-agent-send"' in page.text
-    assert "feed.hidden=false;feed.append" in page.text
+    assert 'id="evaluator-agent-settings-toggle" class="composer-settings-button"' in page.text
+    assert 'id="evaluator-agent-settings" class="settings-panel data-agent-settings evaluator-agent-settings"' in page.text
+    assert "guide.href='/evaluator-guide'" in page.text
+    assert "data-evaluator-agent-settings-tab=\"capabilities\"" in page.text
+    assert 'id="evaluator-agent-tool-options"' in page.text
+    assert 'id="evaluator-agent-skill-options"' in page.text
+    assert "button.innerHTML='<svg viewBox=\"0 0 20 20\"" in page.text
+    assert "argsToggle.id='evaluator-args-toggle'" in page.text
+    assert "'split_ood_variable','evaluatorSplitOodVariable'" in page.text
+    assert "control.id='evaluator-arg-'+name.replaceAll('_','-')" in page.text
+    assert "api('/api/session/settings',evaluatorArgsPayload())" in page.text
+    assert '.evaluator-args-panel{container-type:inline-size' in page.text
+    assert '.evaluator-args-grid{display:grid;grid-template-columns:1fr' in page.text
+    assert '@container (min-width:590px){.evaluator-args-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}' in page.text
+    assert '.evaluator-arg-copy b{display:block;color:var(--ink);font:600 10px/1.4' in page.text
+    assert '.evaluator-arg-copy small{display:block;margin-top:2px;color:var(--muted)' in page.text
+    assert '#evaluator-args-toggle{height:30px;padding:4px 8px;border:0;border-radius:7px;background:transparent' in page.text
+    assert '#evaluator-args-toggle[aria-expanded="true"]{border:0;background:#eaf3f0;color:var(--accent)}' in page.text
+    assert "api('/api/evaluator/agent/settings',evaluatorAgentSettingsPayload(),'PUT')" in page.text
+    assert "api('/api/evaluator/agent/test',evaluatorAgentSettingsPayload())" in page.text
+    assert "if(e.kind==='evaluator_user'){appendEvaluatorAgentEvent('user',p,e.timestamp);return}" in page.text
+    assert 'function applyEvaluatorAgentResult()' in page.text
+    assert "toolCallsBlock(card,payload.tool_calls)" in page.text
+    assert 'evaluatorCustomSource' not in page.text
+    assert "evaluatorConfiguration.evaluators.map(item=>{const option=el('option'" in page.text
+    assert "Object.assign(el('option',_('evaluatorCustom'))" not in page.text
+    assert "evaluatorArgsTitle:'context.args.*'" in page.text
+    assert "copy.append(el('b',name),el('small',_(helpKey)))" in page.text
+    assert 'class="evaluator-agent-heading step-heading"' in page.text
+    assert ".evaluator-agent>.step-heading::before{content:'4'}" in page.text
     assert '.evaluator-editor-toolbar button{display:inline-flex;align-items:center;justify-content:center;height:34px;padding:0 14px' in page.text
     assert "api('/api/evaluator/test',evaluatorPayload())" in page.text
-    assert "api('/api/evaluator/agent',{message,source:$('evaluator-code').value})" in page.text
+    assert "api('/api/evaluator/agent/start',{message,source:$('evaluator-code').value})" in page.text
+    assert "api('/api/evaluator/agent/stop',{})" in page.text
+    assert "['running','stopping'].includes(session?.evaluator_agent_state)" in page.text
+    assert "button.classList.toggle('stop',active)" in page.text
     assert "if(evaluatorDirty)await saveEvaluatorConfiguration()" in page.text
     assert '<h3>配置变量描述</h3>' in data_view
     assert '点击颜色条切换变量角色，点击变量描述以编辑，也可拖动手柄调整变量顺序' in data_view
@@ -138,7 +190,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert ':root[data-theme="dark"] .data-agent-settings .settings-form label,:root[data-theme="dark"] .data-agent-settings .api-key-setting>span:first-child b,:root[data-theme="dark"] #data-settings-hint{color:#b8c6c3}' in page.text
     assert '#data-model-test,#data-settings-cancel,#data-settings-apply{flex:0 0 auto;height:34px;border-radius:17px;white-space:nowrap}' in page.text
     assert "$('data-model-test').before($('data-settings-hint'))" in page.text
-    assert "$('data-agent-send').before($('data-agent-state'))" in page.text
+    assert "$('data-agent-state').classList.add('composer-status-center');$('data-agent-send').before($('data-agent-state'),composerKeyboardHint('data-agent-keyboard-hint'))" in page.text
     assert "$('data-api-key-status').remove()" in page.text
     assert "apiKeyConfigured:'已配置，输入新值以替换'" in page.text
     assert "input.placeholder=credential.configured?_('apiKeyConfigured')" in page.text
@@ -175,7 +227,9 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "samplesPerRound:'K · Samples per Round'" in page.text
     assert "function renderSearchSettingLabels()" in page.text
     assert "renderApiKeyVisibility();renderSearchSettingLabels()" in page.text
-    assert '#composer>#prompt{padding-right:34px;resize:none}' in page.text
+    assert '#composer>#prompt{padding:14px 15px 7px}' in page.text
+    assert '.composer #send.stop-pending{border-color:var(--danger);background:var(--danger);color:#fff}' in page.text
+    assert '#composer>.row>#send.primary.send-icon.stop-pending{display:grid;visibility:visible;border-color:var(--danger);background:var(--danger);color:#fff;opacity:1}' in page.text
     assert "promptResizeHandle.className='prompt-resize-handle'" in page.text
     assert "promptResizeHandle.style.top=promptInput.offsetTop+7+'px'" in page.text
     assert 'resizePromptInput(startHeight-(moveEvent.clientY-startY))' in page.text
@@ -190,6 +244,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "#variable-config-card .variable-card-heading>div.step-heading::before{content:'1'}" in page.text
     assert "#task-problem-card .task-problem-heading::before{content:'2'}" in page.text
     assert '#problem-description,#variable-role-table,#variable-role-body{border-radius:25px}' in page.text
+    assert '.task-problem-card textarea{min-height:50px}' in page.text
     assert '#variable-role-table{overflow:hidden}' in page.text
     assert '#variable-role-table>.variable-table-head{padding:8px 10px 5px;background:var(--interactive-surface)}' in page.text
     assert '#variable-role-table .variable-row:first-child{border-radius:0}' in page.text
@@ -237,15 +292,39 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "Object.assign(MESSAGE_CATALOGS.zh," not in page.text
     assert "uploadDataHelpPrefix:'上传数据文件，也可以从',uploadDataHelpSuffix:'快速开始'" in page.text
     assert "dataAgentHelp:'用自然语言指导 Agent 整理、清洗、补充或检查数据，结果将被保存在 context.data/ 目录以供使用'" in page.text
-    assert "help.replaceChildren(document.createTextNode(_('dataAgentHelp')+' ('),link,document.createTextNode(')'))" in page.text
+    assert "help.textContent=_('dataAgentHelp');link.textContent=_('dataAgentSafety')" in page.text
+    assert "dataAgentSafety:'它是否会危害我的系统和数据？'" in page.text
+    assert 'id="evaluator-agent-safety" class="data-agent-safety"' in page.text
+    assert '.evaluator-editor-toolbar,.evaluator-line-numbers,.evaluator-editor-status{background:#fff}' in page.text
+    assert '.evaluator-editor-toolbar #evaluator-select{min-width:220px;height:34px' in page.text
+    assert '.evaluator-code{min-height:160px}' in page.text
+    assert 'option.evaluator-option-invalid{color:var(--danger);font-weight:700}' in page.text
+    assert "(item.invalid?'⚠ ':'')" in page.text
+    assert "status.textContent=item?.invalid?'⚠ '+item.error" in page.text
+    assert "$('evaluator-test').disabled=locked||abstract||invalid" in page.text
+    assert "argsToggle.innerHTML='<svg" in page.text
+    assert 'id="evaluator-args-toggle-label"' in page.text
+    assert "evaluatorArgs:'参数配置'" in page.text
+    assert "evaluatorTest:'测试'" in page.text
     assert "dataIngest.before(dataIngestIntro)" in page.text
     assert "dataIngest.append(dataDropCopy,$('data-upload'),$('data-file-input'))" in page.text
     assert "dataIngest.ondrop=dataGuard(" in page.text
     assert 'id="problem-description"' in data_view
     assert 'id="data-refresh"' in data_view
     assert 'id="save-data-selection"' not in data_view
-    assert 'id="data-preview-card"' in data_insights
-    assert 'class="data-card wide relationship-card"' in data_insights
+    assert 'id="data-preview-card"' not in data_insights
+    assert 'class="data-card wide relationship-card"' not in data_insights
+    assert '<div class="bar relationship-preview-bar"><span>关系预览</span></div>' in data_insights
+    assert '#workspace{border-right:0}#insights-panel{border-left:0}' in page.text
+    assert '#workspace>.bar{background:#fff}' in page.text
+    assert '#workspace>.bar,.center>.bar{flex:0 0 57px;height:57px;min-height:57px}' in page.text
+    assert '.center,#data-setup,#run-setup{background:#f6f7f9}#composer{background:#fff}' in page.text
+    assert '#run-setup,#run-variable-preview .variable-role-table{background:transparent}' in page.text
+    assert '.center,.center:has(>#composer:not(.data-mode)){background:#f6f7f9}' in page.text
+    assert '.center>.bar{background:#fff}' in page.text
+    assert '#data-insights{background:#fafbfc}#data-insights>.data-insights-scroll{background:transparent}#data-insights>.bar,#data-insights .relationship-preview-bar{background:#fff}' in page.text
+    assert '#search-insights>.bar,#search-insights>.candidate-bar,#data-insights>.bar,#data-insights .relationship-preview-bar{height:57px;min-height:57px;flex:0 0 57px}' in page.text
+    assert '.search-insights>.tree-wrap,.search-insights>#topk,.data-insights-scroll{background:#fafbfc}' in page.text
     assert 'id="search-insights"' in page.text
     assert 'id="run-variable-preview"' in run_setup
     assert 'class="problem-card"' not in run_setup
@@ -259,22 +338,28 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="system-prompt" class="prompt-editor" aria-label="System Prompt"' in page.text
     assert 'aria-label="System Prompt" readonly' not in page.text
     assert 'id="system-prompt-confirm-title">确认系统提示词</b>' in page.text
-    assert 'id="system-prompt-confirm-help">可在发送前编辑。清空以重新生成。</span>' in page.text
+    assert "systemPromptConfirmHelp:'内置默认提示词，可在发送前编辑。'" in page.text
+    assert "composerPurposeHelp:'根据任务配置自动生成，可在发送前直接编辑。'" in page.text
+    assert "composerPurposeTitle:'确认用户提示词'" in page.text
+    assert "promptRegenerateButton('composer-purpose-regenerate')" in page.text
+    assert "promptRegenerateButton('system-prompt-regenerate')" in page.text
+    assert "await refreshPromptPreview(kind)" in page.text
     assert '<span id="initial-prompt-toggle-label">系统提示词</span>' in page.text
     assert (
         "Find an interpretable formula explaining the selected target from the "
         "selected features."
     ) in data_view
     assert 'id="composer-purpose"' in page.text
-    assert "promptEdited.user=Boolean($('prompt').value.trim())" in page.text
-    assert "promptEdited.system=Boolean($('system-prompt').value.trim())" in page.text
-    assert "if(!promptEdited.user)schedulePromptPreview()" in page.text
-    assert "if(!promptEdited.system)schedulePromptPreview()" in page.text
-    assert "system_prompt:$('system-prompt').value.trim()||promptDefaults.system_prompt" in page.text
+    assert "promptEdited.user=true" in page.text
+    assert "promptEdited.system=true" in page.text
+    assert "if(!promptEdited.user)schedulePromptPreview()" not in page.text
+    assert "if(!promptEdited.system)schedulePromptPreview()" not in page.text
+    assert "system_prompt:$('system-prompt').value.trim(),user_prompt:userPrompt" in page.text
+    assert "session?.state==='running'&&!session.paused&&!questionId" in page.text
+    assert "if(e.kind==='user')" in page.text
     assert "showTabHint(_('runStartedHint'))" not in page.text
     assert "syncResearchProblem($('problem-description').value)" in page.text
     assert 'function renderTimelineSurface()' in page.text
-    assert "composerPurposeTitle:'检查用户提示词'" in page.text
     assert "$('composer-purpose').hidden=active" in page.text
     assert "$('composer-purpose-title').textContent=_('composerPurposeTitle')" in page.text
     assert 'id="timeline-view-switch"' not in page.text
@@ -282,6 +367,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "variableOrder.filter(column=>variableRole(column)!=='unused')" in page.text
     assert "api('/api/data/selection'" in page.text
     assert 'function scheduleDataSelectionSave()' in page.text
+    assert "api('/api/data/descriptions',{variable_descriptions:{...variableDescriptions}},'PUT')" in page.text
     assert 'setTimeout(flushDataSelectionSave,400)' in page.text
     assert 'id="data-refresh"' in page.text
     assert 'id="data-file"' not in page.text
@@ -289,6 +375,25 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "api('/api/data/context')" in page.text
     assert 'async function responseError(response' in page.text
     assert 'function compactStreamEventBatch(events)' in page.text
+    assert "if(events.truncated&&seq)notice(_('eventBufferGap'))" in page.text
+    assert "events.events[0].seq>seq+1" not in page.text
+    assert "if(e.kind==='evaluator_context')" in page.text
+    assert "contextScope:'evaluator'" in page.text
+    assert 'function fitProblemDescription()' in page.text
+    assert "requestAnimationFrame(fitProblemDescription)" in page.text
+    assert 'function renderTimelineSystemPrompt(' in page.text
+    assert "card.dataset.started=timestamp" in page.text
+    assert "find(event=>Number(event.dataset.started)>Number(timestamp))" in page.text
+    assert "statusStarted:performance.now()/1000" in page.text
+    assert "state.statusStarted=performance.now()/1000" in page.text
+    assert "streamProgress(state.statusStarted,state.status)" in page.text
+    assert "const now=performance.now()/1000" in page.text
+    assert "serverClockOffsetSeconds" not in page.text
+    assert "renderTimelineSystemPrompt(feed,p,'symbolic-regression',e.timestamp)" in page.text
+    assert "renderTimelineSystemPrompt(feed,p,'data',e.timestamp)" in page.text
+    assert "renderTimelineSystemPrompt(feed,p,'evaluator',e.timestamp)" in page.text
+    assert "if(e.kind==='evaluator_user')" in page.text
+    assert '.data-agent-feed .event-kind:is(:hover,:focus)::after' in page.text
     assert "await responseError(response,_('uploadFailed'))" in page.text
     assert 'id="workspace-name-editor"' in page.text
     assert 'id="data-context-guide"' not in page.text
@@ -303,6 +408,12 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'workspace_shell' in safety.text
     assert 'workspace_code_executor' in safety.text
     assert '操作系统级只读 bind mount' in safety.text
+    evaluator_guide = client.get('/evaluator-guide')
+    assert evaluator_guide.status_code == 200
+    assert 'Evaluator 的接口' in evaluator_guide.text
+    assert 'evaluator.split(context)' in evaluator_guide.text
+    assert 'evaluator.fit(f, y, train_context)' in evaluator_guide.text
+    assert 'evaluator.evaluate' in evaluator_guide.text
     assert '<button id="context-tab" type="button" hidden>' in page.text
     assert "$('context-tab').hidden=tab!=='context'" in page.text
     assert '#context-tab{display:flex' in page.text
@@ -314,6 +425,9 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert '.reasoning-block.expanded .reasoning-content{display:block;width:100%' in page.text
     assert "previewBlock(card,p.content,'message-preview-block')" in page.text
     assert "if(dataMode)previewBlock(card,state.content,'message-preview-block stream-content')" in page.text
+    assert "state.reasoningExpanded=reasoning.classList.contains('expanded')" in page.text
+    assert "state.contentExpanded=content.classList.contains('expanded')" in page.text
+    assert "const restoreExpansion=()=>" in page.text
     assert 'function unobservePreviewBlocks(parent)' in page.text
     assert 'id="up"' not in page.text
     assert 'id="path"' not in page.text
@@ -330,11 +444,13 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert client.get('/api/workspace/download?path=data/sample.csv').content == b'x,y\n1,2'
     assert client.get('/api/workspace?path=data').json()['entries'][0]['name'] == 'sample.csv'
     tree = client.get('/api/workspace', params={'recursive': True}).json()['entries']
-    assert tree[0]['name'] == 'data'
-    assert tree[0]['read_only'] is False
-    assert tree[0]['size'] is None
-    assert tree[0]['children'][0]['path'] == 'data/sample.csv'
-    assert tree[0]['children'][0]['read_only'] is False
+    assert {entry['name'] for entry in tree} >= {'data'}
+    assert 'context.evaluator' not in {entry['name'] for entry in tree}
+    data_entry = next(entry for entry in tree if entry['name'] == 'data')
+    assert data_entry['read_only'] is False
+    assert data_entry['size'] is None
+    assert data_entry['children'][0]['path'] == 'data/sample.csv'
+    assert data_entry['children'][0]['read_only'] is False
     assert client.get(
         '/api/workspace/size', params={'path': 'data'},
     ).json()['size'] == len(b'x,y\n1,2')
@@ -342,13 +458,11 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert demo['path'] == 'context.data'
     assert (session.workspace / 'context.data' / 'manifest.json').is_file()
     preview = client.get('/api/data/context', params={'rows': 5}).json()
-    assert preview['columns'] == ['sample', 'x1', 'x2', 'x3', 'y']
+    assert preview['columns'] == ['sample', 'x1', 'x2', 'y']
     assert preview['column_kinds'] == {
         'sample': 'axis', 'x1': 'variable', 'x2': 'variable',
-        'x3': 'variable', 'y': 'variable',
+        'y': 'variable',
     }
-    assert preview['variables']['x3']['dtype'].startswith('<U')
-    assert {row['x3'] for row in preview['data']} <= {'alpha', 'beta', 'gamma', 'delta'}
     assert len(preview['data']) == 5
     assert preview['truncated']
     assert client.post('/api/data/demo').status_code == 409
@@ -376,6 +490,50 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert client.post('/api/session/start', json={'max_refinement_depth': 0}).status_code == 400
     assert session.state == 'idle'
     assert client.post('/api/session/start', json={'dataset': 'missing.csv'}).status_code == 400
+
+
+@pytest.mark.parametrize(
+    ('kind', 'variables', 'target'),
+    [
+        ('polynomial', {'x1', 'x2', 'y'}, 'y'),
+        ('grouped_parameters', {'x1', 'x2', 'label', 'y'}, 'y'),
+        ('driven_ode', {'x', 'dx_dt'}, 'dx_dt'),
+        ('kuramoto_ba', {'omega', 'x', 'dx_dt', 'A'}, 'dx_dt'),
+    ],
+)
+def test_demo_dataset_variants(tmp_path, kind, variables, target):
+    session = InteractiveSession(tmp_path / kind)
+    path = session.create_demo(kind)
+    loaded = load_context_data(path)
+    assert set(loaded['variable_axes']) == variables
+    assert session.context.target == target
+    if kind == 'polynomial':
+        np.testing.assert_allclose(
+            loaded['data']['y'],
+            1 + loaded['data']['x1']**2 + 2*loaded['data']['x1']*loaded['data']['x2'],
+        )
+    elif kind == 'grouped_parameters':
+        assert set(loaded['data']['label']) == {'alpha', 'beta', 'gamma'}
+        assert loaded['data']['label'].dtype.kind == 'U'
+    elif kind == 'driven_ode':
+        assert loaded['data']['t'].shape == loaded['data']['x'].shape == loaded['data']['dx_dt'].shape
+        expected = (
+            1.15*np.sin(1.35*loaded['data']['t'])
+            + 0.42*np.sin(2.7*loaded['data']['t'])
+            - 0.24*loaded['data']['x']
+            - 0.075*loaded['data']['x']**3
+        )
+        np.testing.assert_allclose(loaded['data']['dx_dt'], expected)
+    else:
+        assert loaded['data']['omega'].shape == loaded['data']['x'].shape == loaded['data']['dx_dt'].shape == (481, 10)
+        assert loaded['data']['A'].shape == (17, 2)
+        assert set(np.unique(loaded['data']['A'])) == set(range(10))
+
+
+def test_demo_dataset_rejects_unknown_kind(tmp_path):
+    session = InteractiveSession(tmp_path)
+    with pytest.raises(ValueError, match='Unknown sample dataset'):
+        session.create_demo('unknown')
 
 
 def test_workspace_npy_preview(platform):
@@ -496,7 +654,7 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
     np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
     np.save(directory / 'y.npy', np.array([2.0, 4.0, 6.0]))
     np.save(directory / 'A.npy', np.array([[1, 0], [0, 1]]))
-    session.context.commit_context_data(ContextDataLoader(directory).load())
+    session.context.commit_context_data(load_context_data(directory))
 
     preview = client.get('/api/data/context').json()
     assert preview['columns'] == ['sample', 'edge', 'endpoint', 'x', 'y', 'A']
@@ -519,6 +677,11 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
     })
     assert prompts.status_code == 200, prompts.text
     assert "Feature names: ['sample', 'x']" in prompts.json()['user_prompt']
+    np.save(directory / 'x.npy', np.array([10.0, 20.0, 30.0]))
+    reloaded = client.post('/api/data/context/reload')
+    assert reloaded.status_code == 200, reloaded.text
+    np.testing.assert_array_equal(session.context.data['x'], [10.0, 20.0, 30.0])
+    assert client.get('/api/data/context').json()['data'][0]['x'] == 10.0
 
 
 def test_context_data_roles_accept_multidimensional_network_variables(platform):
@@ -558,7 +721,7 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     np.save(directory / 'omega.npy', np.ones((3, 2)))
     np.save(directory / 'A.npy', np.array([[0, 1], [1, 0]]))
     np.save(directory / 'dtheta_dt.npy', np.full((3, 2), 2.0))
-    session.context.commit_context_data(ContextDataLoader(directory).load())
+    session.context.commit_context_data(load_context_data(directory))
 
     preview = client.get('/api/data/context').json()
     assert preview['columns'] == [
@@ -600,7 +763,7 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
     np.save(directory / 'x.npy', np.array([1.0, 2.0, 3.0]))
     np.save(directory / 'z.npy', np.array([2.0, 3.0, 5.0]))
     np.save(directory / 'y.npy', np.array([4.0, 6.0, 9.0]))
-    loaded = ContextDataLoader(directory).load()
+    loaded = load_context_data(directory)
     session.context.commit_context_data(loaded)
 
     response = client.put('/api/data/selection', json={
@@ -613,6 +776,24 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
     assert list(session.context.feature_names()) == ['x']
     assert session.context.variable_descriptions['sample'] == 'Calendar year.'
     assert session.context.variable_descriptions['x'] == ''
+    manifest = json.loads((directory / 'manifest.json').read_text())
+    assert manifest['axes']['sample']['description'] == 'Calendar year.'
+    assert manifest['variables']['x']['description'] == ''
+
+    descriptions_only = client.put('/api/data/descriptions', json={
+        'variable_descriptions': {'x': 'Saved without a valid role selection.'},
+    })
+    assert descriptions_only.status_code == 200, descriptions_only.text
+    manifest = json.loads((directory / 'manifest.json').read_text())
+    assert manifest['variables']['x']['description'] == 'Saved without a valid role selection.'
+
+    manifest['variables']['x']['description'] = 'Edited outside the browser.'
+    (directory / 'manifest.json').write_text(json.dumps(manifest))
+    revision = session.context.args.data_revision
+    snapshot = session.snapshot()
+    assert session.context.variable_descriptions['x'] == 'Edited outside the browser.'
+    assert snapshot['data_context']['variable_descriptions']['x'] == 'Edited outside the browser.'
+    assert session.context.args.data_revision == revision + 1
 
     # Reloading the full manifest restores every non-axis variable as a feature.
     session.context.commit_context_data(loaded)
@@ -649,18 +830,20 @@ def test_read_only_startup_workspace_inputs_are_visible(tmp_path):
     )
     with TestClient(create_app(tmp_path, controller=session.controller, session=session)) as client:
         root = client.get('/api/workspace').json()['entries']
-        assert root[0]['name'] == 'source'
+        assert {entry['name'] for entry in root} >= {'source'}
+        assert 'context.evaluator' not in {entry['name'] for entry in root}
         assert root[0]['directory']
         recursive_root = client.get(
             '/api/workspace', params={'recursive': True},
         ).json()['entries']
-        assert recursive_root[0]['read_only'] is True
-        assert recursive_root[0]['mounted'] is True
-        assert recursive_root[0]['locked'] is False
-        assert recursive_root[0]['children'][0]['path'] == (
+        source_entry = next(entry for entry in recursive_root if entry['name'] == 'source')
+        assert source_entry['read_only'] is True
+        assert source_entry['mounted'] is True
+        assert source_entry['locked'] is False
+        assert source_entry['children'][0]['path'] == (
             'source/observations.csv'
         )
-        assert recursive_root[0]['children'][0]['read_only'] is True
+        assert source_entry['children'][0]['read_only'] is True
         assert client.put('/api/workspace/lock', json={
             'path': 'source', 'locked': False,
         }).status_code == 400
@@ -754,8 +937,17 @@ def test_runtime_capabilities_can_be_configured(platform):
     skill_names = {skill['name'] for skill in payload['skills']}
     assert {'evaluate_formula', 'workspace_shell'} <= tool_names
     assert 'code_executor' not in tool_names
-    assert 'commit_data' not in tool_names
+    assert {'validate_context_data', 'validate_evaluator'} <= tool_names
+    assert {'commit_data', 'load_context_data'}.isdisjoint(tool_names)
     assert 'discover-symbolic-laws' in skill_names
+    catalogs = {
+        agent: client.get('/api/session/capabilities', params={'agent': agent}).json()
+        for agent in ('search', 'data', 'evaluator')
+    }
+    assert catalogs['search']['tools'] == catalogs['data']['tools'] == catalogs['evaluator']['tools']
+    assert catalogs['search']['skills'] == catalogs['data']['skills'] == catalogs['evaluator']['skills']
+    assert catalogs['search']['default_tools'] != catalogs['data']['default_tools']
+    assert catalogs['data']['default_tools'] != catalogs['evaluator']['default_tools']
 
     response = client.post('/api/session/settings', json={
         'llm_provider': 'openrouter',
@@ -771,6 +963,25 @@ def test_runtime_capabilities_can_be_configured(platform):
     assert client.post('/api/session/settings', json={
         'tools': ['not-a-tool'],
     }).status_code == 400
+
+
+def test_evaluator_context_settings_update_context_args(platform):
+    client, session = platform
+    response = client.post('/api/session/settings', json={
+        'validation_fraction': 0.3,
+        'split_random_state': 17,
+        'split_by': 'ood',
+        'split_ood_variable': 'time',
+        'ranking_metric': 'r2',
+        'larger_is_better': True,
+    })
+    assert response.status_code == 200, response.text
+    assert session.context.args.validation_fraction == 0.3
+    assert session.context.args.split_random_state == 17
+    assert session.context.args.split_by == 'ood'
+    assert session.context.args.split_ood_variable == 'time'
+    assert session.context.args.ranking_metric == 'r2'
+    assert session.context.args.larger_is_better is True
 
 
 def test_provider_api_key_is_synced_to_dotenv_without_being_returned(
@@ -818,11 +1029,12 @@ def test_data_agent_has_independent_runtime_settings(platform):
     )
     assert capabilities.status_code == 200
     catalog = capabilities.json()
-    assert {'commit_data', 'load_context_data', 'workspace_code_executor', 'read_skill'} <= {
+    assert {'validate_context_data', 'workspace_code_executor', 'read_skill'} <= {
         tool['name'] for tool in catalog['tools']
     }
-    assert 'commit_data' in catalog['default_tools']
-    assert 'load_context_data' in catalog['default_tools']
+    assert 'validate_context_data' in catalog['default_tools']
+    assert 'commit_data' not in catalog['default_tools']
+    assert 'load_context_data' not in catalog['default_tools']
     assert 'discover-symbolic-laws' in {
         skill['name'] for skill in catalog['skills']
     }
@@ -835,7 +1047,7 @@ def test_data_agent_has_independent_runtime_settings(platform):
         'llm_model': 'test-data-model',
         'tool_parser': 'json',
         'llm_max_tokens': 2048,
-        'tools': ['workspace_shell', 'commit_data'],
+        'tools': ['workspace_shell', 'validate_context_data'],
         'skills': [],
         'proxy': '',
     })
@@ -845,7 +1057,7 @@ def test_data_agent_has_independent_runtime_settings(platform):
         'llm_model': 'test-data-model',
         'tool_parser': 'json',
         'llm_max_tokens': 2048,
-        'tools': ['workspace_shell', 'commit_data'],
+        'tools': ['workspace_shell', 'validate_context_data'],
         'skills': [],
         'proxy': '',
     }
@@ -873,10 +1085,104 @@ def test_data_agent_can_be_stopped_independently(platform, monkeypatch):
     response = client.post('/api/data/agent/stop')
     assert response.status_code == 200, response.text
     assert response.json()['data_state'] == 'stopping'
+    assert session.data_thread.is_alive()
+    response = client.post('/api/data/agent/stop')
+    assert response.status_code == 200, response.text
+    assert response.json()['data_force_stop_requested'] is True
     session.data_thread.join(2)
     assert not session.data_thread.is_alive()
     assert session.data_state == 'stopped'
     assert session.data_result['status'] == 'stopped'
+
+
+def test_evaluator_agent_can_be_stopped_independently(platform, monkeypatch):
+    client, session = platform
+    started = threading.Event()
+
+    def wait_for_stop(agent, instruction):
+        started.set()
+        while True:
+            agent._check_stop()
+            time.sleep(.005)
+
+    monkeypatch.setattr(EvaluatorConstructionAgent, 'run', wait_for_stop)
+    response = client.post('/api/evaluator/agent/start', json={
+        'message': 'Construct an evaluator.',
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()['evaluator_agent_state'] == 'running'
+    assert started.wait(2)
+
+    response = client.post('/api/evaluator/agent/stop')
+    assert response.status_code == 200, response.text
+    assert response.json()['evaluator_agent_state'] == 'stopping'
+    assert session.evaluator_agent_thread.is_alive()
+    response = client.post('/api/evaluator/agent/stop')
+    assert response.status_code == 200, response.text
+    assert response.json()['evaluator_force_stop_requested'] is True
+    session.evaluator_agent_thread.join(2)
+    assert not session.evaluator_agent_thread.is_alive()
+    assert session.evaluator_agent_state == 'stopped'
+    assert session.evaluator_agent_result['status'] == 'stopped'
+    assert any(
+        event['kind'] == 'evaluator_complete'
+        and event['payload']['status'] == 'stopped'
+        for event in session.controller.events()
+    )
+
+
+def test_evaluator_force_stop_preserves_partial_stream_in_buffer(platform):
+    _, session = platform
+    started = threading.Event()
+    agent = EvaluatorConstructionAgent(
+        llm_provider='openrouter', llm_model='test', context=session.context,
+        tools=[],
+    )
+
+    class StreamingAPI:
+        def __call__(self, messages, **kwargs):
+            callback = kwargs['stream_callback']
+
+            def generate():
+                callback({
+                    'type': 'delta', 'sample': 1,
+                    'content': 'partial answer', 'reasoning': 'partial reasoning',
+                })
+                started.set()
+                while not agent._stop_requested.wait(.01):
+                    pass
+                callback({
+                    'type': 'delta', 'sample': 1,
+                    'content': 'partial answer', 'reasoning': 'partial reasoning',
+                })
+                yield from ()
+
+            return APICallResult(generate())
+
+    agent.api = StreamingAPI()
+    outcome = {}
+
+    def run():
+        try:
+            agent.run('Build an evaluator.')
+        except Exception as exc:
+            outcome['error'] = exc
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    assert started.wait(2)
+    agent.request_stop()
+    assert thread.is_alive()
+    agent.request_stop(force=True)
+    thread.join(2)
+
+    assert not thread.is_alive()
+    assert isinstance(outcome['error'], InterruptedError)
+    assert agent.buffer[-2] == {
+        'role': 'assistant', 'content': 'partial answer',
+        'reasoning': 'partial reasoning',
+    }
+    assert agent.buffer[-1] == {'role': 'user', 'content': '用户强制中止'}
 
 
 def test_data_agent_model_test_checks_completion_and_tool_call(platform, monkeypatch):
@@ -961,22 +1267,82 @@ def test_data_agent_model_test_checks_completion_and_tool_call(platform, monkeyp
 
 def test_evaluator_configuration_test_and_restricted_agent(platform, monkeypatch):
     client, session = platform
+    capabilities = client.get(
+        '/api/session/capabilities', params={'agent': 'evaluator'},
+    )
+    assert capabilities.status_code == 200
+    assert {'read_source', 'workspace_shell', 'workspace_code_executor', 'validate_evaluator', 'read_skill'} <= {
+        tool['name'] for tool in capabilities.json()['tools']
+    }
+    assert capabilities.json()['default_tools'] == [
+        'read_source', 'workspace_shell', 'workspace_code_executor', 'validate_evaluator', 'read_skill',
+    ]
+    assert 'discover-symbolic-laws' not in capabilities.json()['default_skills']
+    assert 'discover-symbolic-laws' not in session.evaluator_agent_settings['skills']
     configuration = client.get('/api/evaluator')
     assert configuration.status_code == 200
     assert configuration.json()['selected'] == 'default'
-    assert {item['id'] for item in configuration.json()['evaluators']} == {
-        'base', 'default', 'graph',
-    }
-    base = next(item for item in configuration.json()['evaluators'] if item['id'] == 'base')
-    assert base['abstract'] is True
-    assert 'class BaseEvaluator(ABC)' in base['source']
+    assert {item['id'] for item in configuration.json()['evaluators']} == {'default', 'graph'}
+    assert not session.evaluator_workspace.exists()
+    session.evaluator_workspace.mkdir()
+    invalid_file = session.evaluator_workspace / 'broken_evaluator.py'
+    invalid_file.write_text(
+        'from .default_evaluator import DefaultEvaluator\n\n'
+        'class BrokenEvaluator(DefaultEvaluator)\n    pass\n'
+    )
+    with_invalid = client.get('/api/evaluator')
+    invalid = next(
+        item for item in with_invalid.json()['evaluators']
+        if item['id'] == 'custom:broken_evaluator.py'
+    )
+    assert invalid['invalid'] is True
+    assert invalid['source'] == invalid_file.read_text()
+    assert 'Invalid evaluator syntax' in invalid['error']
+    invalid_file.unlink()
+    session.evaluator_workspace.rmdir()
     evaluator_dir = Path(sr_harness.__file__).parent / 'evaluator'
-    assert base['source'] == (evaluator_dir / 'base_evaluator.py').read_text()
     default = next(item for item in configuration.json()['evaluators'] if item['id'] == 'default')
     assert default['abstract'] is False
-    assert 'class DefaultEvaluator(BaseEvaluator)' in default['source']
+    assert 'class DefaultEvaluator:' in default['source']
     assert default['source'] == (evaluator_dir / 'default_evaluator.py').read_text()
-    assert configuration.json()['custom_template'] == (evaluator_dir / 'template_custom_evaluator.py').read_text()
+    assert 'class CustomEvaluator(DefaultEvaluator):' in configuration.json()['custom_template']
+
+    renamed_source = default['source'].replace(
+        'class DefaultEvaluator:',
+        'class ProjectEvaluator(DefaultEvaluator):',
+    )
+    renamed = client.put('/api/evaluator', json={
+        'selected': 'default', 'source': renamed_source,
+    })
+    assert renamed.status_code == 200, renamed.text
+    assert renamed.json()['selected'] == 'custom:project_evaluator.py'
+    assert renamed.json()['custom_name'] == 'ProjectEvaluator'
+    saved_evaluator = session.workspace / 'context.evaluator' / 'project_evaluator.py'
+    assert renamed.json()['custom_file'] == str(saved_evaluator)
+    assert {
+        item['id'] for item in renamed.json()['evaluators']
+    } == {'default', 'graph', 'custom:project_evaluator.py'}
+    assert saved_evaluator.read_text() == renamed_source
+    assert type(session.context.evaluator).__name__ == 'ProjectEvaluator'
+    assert type(session.context.evaluator).__module__ == 'sr_harness.evaluator.project_evaluator'
+
+    conflicting = client.put('/api/evaluator', json={
+        'selected': 'default', 'source': default['source'] + '\n# modified\n',
+    })
+    assert conflicting.status_code == 400
+    assert 'conflicts with a built-in evaluator' in conflicting.text
+    assert saved_evaluator.read_text() == renamed_source
+
+    overwritten_source = renamed_source.replace(
+        'class ProjectEvaluator(DefaultEvaluator):',
+        'class ProjectEvaluator(DefaultEvaluator):\n    revision = 2',
+    )
+    overwritten = client.put('/api/evaluator', json={
+        'selected': 'custom', 'source': overwritten_source,
+    })
+    assert overwritten.status_code == 200, overwritten.text
+    assert saved_evaluator.read_text() == overwritten_source
+    assert session.context.evaluator.revision == 2
 
     custom_source = '''from sr_harness import DefaultEvaluator
 
@@ -987,8 +1353,23 @@ class CustomEvaluator(DefaultEvaluator):
         'selected': 'custom', 'source': custom_source,
     })
     assert configured.status_code == 200, configured.text
-    assert configured.json()['selected'] == 'custom'
+    assert configured.json()['selected'] == 'custom:custom_evaluator.py'
     assert type(session.context.evaluator).__name__ == 'CustomEvaluator'
+    custom_ids = {item['id'] for item in configured.json()['evaluators']}
+    assert custom_ids == {
+        'default', 'graph', 'custom:custom_evaluator.py',
+        'custom:project_evaluator.py',
+    }
+    project_item = next(
+        item for item in configured.json()['evaluators']
+        if item['id'] == 'custom:project_evaluator.py'
+    )
+    reselected = client.put('/api/evaluator', json={
+        'selected': project_item['id'], 'source': project_item['source'],
+    })
+    assert reselected.status_code == 200, reselected.text
+    assert reselected.json()['selected'] == 'custom:project_evaluator.py'
+    assert type(session.context.evaluator).__name__ == 'ProjectEvaluator'
     forbidden = client.put('/api/evaluator', json={
         'selected': 'custom',
         'source': 'import os\nclass CustomEvaluator(DefaultEvaluator):\n    pass\n',
@@ -996,9 +1377,22 @@ class CustomEvaluator(DefaultEvaluator):
     assert forbidden.status_code == 400
     assert 'scientific SRHarness modules' in forbidden.text
 
+    invalid_annotation = client.put('/api/evaluator', json={
+        'selected': 'custom',
+        'source': (
+            'import sr_harness_engine as engine\n'
+            'from sr_harness import DefaultEvaluator\n'
+            'class BadAnnotationEvaluator(DefaultEvaluator):\n'
+            '    def helper(self, context: engine.AgentContext):\n'
+            '        pass\n'
+        ),
+    })
+    assert invalid_annotation.status_code == 400
+    assert 'AgentContext' in invalid_annotation.text
+
     client.post('/api/data/demo')
     session.context.commit_context_data(
-        ContextDataLoader(session.workspace / 'context.data').load(),
+        load_context_data(session.workspace / 'context.data'),
     )
     session.context.update_selection(target='y', features=['x1', 'x2'])
     tested = client.post('/api/evaluator/test', json={
@@ -1008,6 +1402,29 @@ class CustomEvaluator(DefaultEvaluator):
     })
     assert tested.status_code == 200, tested.text
     assert 'complexity' in tested.json()['result']['data_split_results']['train']['metrics']
+    assert tested.json()['result']['evaluator'] == 'CustomEvaluator'
+    assert tested.json()['result']['evaluator_file'] is None
+
+    class RankedCandidates:
+        @staticmethod
+        def ranked_candidates():
+            return [type('Record', (), {'formula': 'x1 + x2'})()]
+
+    session.run_state = RankedCandidates()
+    tested_best = client.post('/api/evaluator/test', json={
+        'selected': 'custom', 'source': custom_source,
+    })
+    session.run_state = None
+    assert tested_best.status_code == 200, tested_best.text
+    assert tested_best.json()['formula'] == 'x1 + x2'
+    tested_baseline = client.post('/api/evaluator/test', json={
+        'selected': 'custom', 'source': custom_source,
+    })
+    assert tested_baseline.status_code == 200, tested_baseline.text
+    assert tested_baseline.json()['formula'] == (
+        "param('intercept') + param('coefficient_1') * x1 + "
+        "param('coefficient_2') * x2"
+    )
 
     class RestrictedAPI:
         def __init__(self):
@@ -1018,17 +1435,21 @@ class CustomEvaluator(DefaultEvaluator):
 
             def generate():
                 if self.requests == 1:
-                    call = ToolCall(
-                        'update_evaluator', {'source': custom_source}, id='update-evaluator',
-                    )
+                    call = ToolCall('workspace_code_executor', {
+                        'program': (
+                            "import os\n"
+                            "os.makedirs('context.evaluator', exist_ok=True)\n"
+                            f"open('context.evaluator/draft_evaluator.py', 'w').write({custom_source!r})"
+                        ),
+                    }, id='write-evaluator')
                     yield {
                         'content': '', 'tool_call': [call],
                         'message': {'role': 'assistant', 'content': ''},
                     }
                 elif self.requests == 2:
                     call = ToolCall(
-                        'evaluate_formula',
-                        {'f': "param('scale') * x1", 'fit': True, 'show_diagnostics': False},
+                        'validate_evaluator',
+                        {'evaluator_file': 'context.evaluator/draft_evaluator.py', 'f': "param('scale') * x1", 'fit': True},
                         id='test-evaluator',
                     )
                     yield {
@@ -1052,6 +1473,21 @@ class CustomEvaluator(DefaultEvaluator):
         return RestrictedAPI()
 
     monkeypatch.setattr(BaseAPI, 'create', create_api)
+    settings = client.put('/api/evaluator/agent/settings', json={
+        'llm_provider': 'deepseek',
+        'llm_model': 'deepseek-chat',
+        'tool_parser': 'openai',
+        'llm_max_tokens': 2048,
+        'tools': ['workspace_code_executor', 'validate_evaluator', 'read_skill'],
+        'skills': [],
+        'proxy': '',
+    })
+    assert settings.status_code == 200, settings.text
+    assert settings.json()['evaluator_agent_settings']['llm_model'] == 'deepseek-chat'
+    assert settings.json()['evaluator_agent_settings']['tools'] == [
+        'workspace_code_executor', 'validate_evaluator', 'read_skill',
+    ]
+    assert settings.json()['evaluator_agent_settings']['skills'] == []
     assisted = client.post('/api/evaluator/agent', json={
         'message': 'Check this evaluator.',
         'source': custom_source,
@@ -1059,12 +1495,45 @@ class CustomEvaluator(DefaultEvaluator):
     assert assisted.status_code == 200, assisted.text
     assert assisted.json()['message'] == 'The evaluator is ready.'
     assert [event['tool'] for event in assisted.json()['tool_events']] == [
-        'update_evaluator', 'evaluate_formula',
+        'workspace_code_executor', 'validate_evaluator',
     ]
     assert all(event['ok'] for event in assisted.json()['tool_events'])
+    assert [event['kind'] for event in assisted.json()['timeline_events']] == [
+        'assistant', 'tool_result', 'assistant', 'tool_result', 'assistant',
+    ]
+    assert assisted.json()['timeline_events'][0]['tool_calls'][0]['name'] == 'workspace_code_executor'
     assert {tool.metadata.name for tool in created['tool_list']} == {
-        'update_evaluator', 'evaluate_formula',
+        'workspace_code_executor', 'validate_evaluator', 'read_skill',
     }
+    assert created['provider'] == 'deepseek'
+    assert created['model'] == 'deepseek-chat'
+    evaluator_events = [
+        event for event in session.controller.events()
+        if event['kind'].startswith('evaluator_')
+    ]
+    context_events = [
+        event for event in evaluator_events
+        if event['kind'] == 'evaluator_context'
+    ]
+    user_events = [
+        event for event in evaluator_events
+        if event['kind'] == 'evaluator_user'
+    ]
+    assert [event['payload']['content'] for event in user_events] == [
+        'Check this evaluator.',
+    ]
+    assert len(context_events) == 3
+    assert 'Check this evaluator.' in context_events[0]['payload']['messages'][-1]['content']
+    assert context_events[0]['payload']['messages'][-1]['role'] == 'user'
+    assert all(event['payload']['messages'] for event in context_events)
+    for context_event in context_events:
+        turn = context_event['payload']['turn']
+        assistant_start = next(
+            event for event in evaluator_events
+            if event['kind'] == 'evaluator_assistant_start'
+            and event['payload']['turn'] == turn
+        )
+        assert context_event['seq'] < assistant_start['seq']
 
 
 def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monkeypatch):
@@ -1087,7 +1556,7 @@ def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monke
     assert 'HTTPS_PROXY' not in os.environ
 
 
-def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
+def test_data_agent_validates_prepared_excel_data_for_shared_context(platform, monkeypatch):
     client, session = platform
     import pandas as pd
 
@@ -1096,7 +1565,7 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
         'llm_model': 'data-preparation-model',
         'tool_parser': 'openai',
         'llm_max_tokens': 1234,
-        'tools': ['commit_data'],
+        'tools': ['validate_context_data'],
         'skills': [],
     })
     assert configured.status_code == 200
@@ -1119,13 +1588,30 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
 
             def generate():
                 if self.turn == 1:
-                    call = ToolCall('commit_data', {
-                        'path': source.name,
-                        'target': '人口数量',
-                        'features': ['年份', 'GDP'],
-                    }, id='commit')
-                    message = {'role': 'assistant', 'content': '整理并提交数据。', 'tool_calls': [{
-                        'id': 'commit', 'type': 'function', 'function': {
+                    frame = pd.read_excel(source)
+                    directory = session.workspace / 'context.data'
+                    directory.mkdir()
+                    for name in frame.columns:
+                        np.save(directory / f'{name}.npy', frame[name].to_numpy())
+                    (directory / 'manifest.json').write_text(json.dumps({
+                        'variables': {
+                            name: {
+                                'file': f'{name}.npy',
+                                'description': f'{name} variable.',
+                                'axes': ['sample'],
+                            }
+                            for name in frame.columns
+                        },
+                        'axes': {
+                            'sample': {
+                                'size': len(frame),
+                                'description': 'Row index.',
+                            },
+                        },
+                    }, ensure_ascii=False), encoding='utf-8')
+                    call = ToolCall('validate_context_data', {}, id='validate')
+                    message = {'role': 'assistant', 'content': '整理并验证数据。', 'tool_calls': [{
+                        'id': 'validate', 'type': 'function', 'function': {
                             'name': call.name, 'arguments': '{}',
                         },
                     }]}
@@ -1154,8 +1640,8 @@ def test_data_agent_commits_excel_to_shared_context(platform, monkeypatch):
     assert api_options['provider'] == 'deepseek'
     assert api_options['model'] == 'data-preparation-model'
     assert session.data_agent.llm_max_tokens == 1234
-    assert session.context.target == '人口数量'
-    assert list(session.context.feature_names()) == ['年份', 'GDP']
+    assert session.context.target is None
+    assert set(session.context.variable_names()) == {'年份', 'GDP', '人口数量'}
     data_events = session.controller.events()
     data_event_kinds = [event['kind'] for event in data_events]
     assert 'data_user' in data_event_kinds
@@ -1266,6 +1752,34 @@ def test_question_reconnect_and_stop():
         controller.checkpoint()
 
 
+def test_data_agent_is_allowed_while_search_waits_for_human(platform, monkeypatch):
+    client, session = platform
+    session.state = 'running'
+    monkeypatch.setattr(
+        DataPreparationAgent,
+        'run',
+        lambda self, instruction: {'message': f'handled: {instruction}'},
+    )
+    replies = []
+    question_thread = threading.Thread(
+        target=lambda: replies.append(session.controller.ask('Need guidance?')),
+    )
+    question_thread.start()
+    deadline = time.monotonic() + 2
+    while not session.controller.status()['questions'] and time.monotonic() < deadline:
+        time.sleep(.01)
+    question_id = next(iter(session.controller.status()['questions']))
+    try:
+        response = client.post('/api/data/agent', json={'message': 'Update the prepared data.'})
+        assert response.status_code == 200, response.text
+        session.data_thread.join(2)
+        assert session.data_result['message'] == 'handled: Update the prepared data.'
+    finally:
+        session.controller.reply(question_id, 'Continue.')
+        question_thread.join(2)
+    assert replies == ['Continue.']
+
+
 def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     client, session = platform
     prompts = []
@@ -1325,9 +1839,11 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     events = session.controller.events()
     kinds = [e['kind'] for e in events]
     assert all(k in kinds for k in [
-        'context', 'assistant_start', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle',
+        'user', 'context', 'assistant_start', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle',
     ])
-    assert kinds.index('context') < kinds.index('assistant_start') < kinds.index('assistant')
+    assert kinds.index('user') < kinds.index('context') < kinds.index('assistant_start') < kinds.index('assistant')
+    user_event = next(event for event in events if event['kind'] == 'user')
+    assert user_event['payload']['content'] == 'Custom user prompt'
     assistant_events = [event for event in events if event['kind'] == 'assistant']
     assert all(event['payload']['provider'] for event in assistant_events)
     assert all(event['payload']['model'] for event in assistant_events)
@@ -1378,7 +1894,7 @@ def test_advance_to_next_branch_and_restart(platform, monkeypatch):
     ]
 
 
-def test_tool_free_search_response_waits_for_web_guidance(platform, monkeypatch):
+def test_tool_free_search_response_pauses_without_question_card(platform, monkeypatch):
     client, session = platform
     prompts = []
 
@@ -1402,15 +1918,16 @@ def test_tool_free_search_response_waits_for_web_guidance(platform, monkeypatch)
     response = client.post('/api/session/start', json={'max_refinement_depth': 3})
     assert response.status_code == 200, response.text
     deadline = time.monotonic() + 5
-    while not session.controller.status()['questions'] and time.monotonic() < deadline:
+    while not session.controller.status()['waiting_at_boundary'] and time.monotonic() < deadline:
         time.sleep(.01)
-    questions = session.controller.status()['questions']
-    assert len(questions) == 1
-    question_id, question = next(iter(questions.items()))
-    assert 'replied without calling a tool' in question
+    status = session.controller.status()
+    assert status['paused'] is True
+    assert status['waiting_at_boundary'] is True
+    assert status['questions'] == {}
+    assert not any(event['kind'] == 'question' for event in session.controller.events())
 
     reply = client.post(
-        f'/api/control/reply/{question_id}', json={'message': 'Try a power law.'},
+        '/api/control/command', json={'action': 'message', 'message': 'Try a power law.'},
     )
     assert reply.status_code == 200, reply.text
     session.thread.join(10)

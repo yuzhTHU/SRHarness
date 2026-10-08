@@ -35,6 +35,7 @@ AGENT_OPTION_NAMES = (
     "max_workers",
     "validation_fraction",
     "split_by",
+    "split_ood_variable",
     "split_random_state",
     "force_initial_diagnostics",
     "auto_routing",
@@ -144,6 +145,9 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     ))
     parser.add_argument("--split_by", choices=["random", "ood"], default="random", help=(
         "Validation split strategy."
+    ))
+    parser.add_argument("--split_ood_variable", default=None, help=(
+        "Variable used to order samples for an OOD validation split. Required when --split_by=ood."
     ))
     parser.add_argument("--split_random_state", type=int, default=42, help=(
         "Random seed used by the random validation split."

@@ -28,9 +28,11 @@ from .ask_human import AskHumanTool
 from .workspace_shell import WorkspaceShellTool
 from .subagent import SubagentTool
 from .web_research import WebFetchTool, WebSearchTool
-from .commit_data import CommitDataTool
-from .load_context_data import LoadContextDataTool
+from .validate_context_data import ValidateContextDataTool
 from .read_pdf import PDFReadTool
 from .eic import EICTool
 from .nd2 import ND2Tool
 from .sr4mdl import SR4MDLTool
+from .model_test import ModelTestTool
+from .read_source import ReadSourceTool
+from .validate_evaluator import ValidateEvaluatorTool

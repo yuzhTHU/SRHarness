@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import numpy as np
@@ -12,8 +14,8 @@ class ContextManifestError(ValueError):
     """Raised when a context-data manifest cannot be validated."""
 
 
-class ContextDataLoader:
-    """Short-lived validator and loader for one manifest-backed NPY collection."""
+class _ContextDataReader:
+    """Private implementation shared by the public loading functions."""
 
     MANIFEST_NAME = "manifest.json"
     REQUIRED_ROOT_FIELDS = {"variables", "axes"}
@@ -334,8 +336,8 @@ class ContextDataLoader:
     @staticmethod
     def _description(location: str, spec: dict[str, Any], errors: list[str]) -> str:
         description = spec.get("description")
-        if not isinstance(description, str) or not description.strip():
-            errors.append(f"{location}.description must be a non-empty string")
+        if not isinstance(description, str):
+            errors.append(f"{location}.description must be a string")
             return ""
         return description.strip()
 
@@ -355,3 +357,60 @@ class ContextDataLoader:
             errors.append(f"{location} is missing fields: {missing}")
         if extra:
             errors.append(f"{location} contains unsupported fields: {extra}")
+
+
+def load_context_data(directory: str | Path) -> dict[str, Any]:
+    """Validate and load one manifest-backed ``context.data`` directory."""
+    return _ContextDataReader(directory).load()
+
+
+def inspect_context_data(directory: str | Path) -> dict[str, Any]:
+    """Return validation diagnostics without raising for manifest errors."""
+    return _ContextDataReader(directory).inspect()
+
+
+def update_context_data_descriptions(
+    directory: str | Path, descriptions: dict[str, str],
+) -> dict[str, Any]:
+    """Atomically update variable and axis descriptions in ``manifest.json``.
+
+    The complete store is validated before the edit. Because only existing
+    string-valued description fields are changed, its structural validity is
+    preserved. The returned mapping matches :func:`load_context_data`.
+    """
+    directory = Path(directory).resolve()
+    manifest_path = directory / _ContextDataReader.MANIFEST_NAME
+    loaded = load_context_data(directory)
+    if not isinstance(descriptions, dict) or any(
+        not isinstance(name, str) or not isinstance(value, str)
+        for name, value in descriptions.items()
+    ):
+        raise ValueError("descriptions must map variable names to text")
+    unknown = set(descriptions) - set(loaded["data"])
+    if unknown:
+        raise ValueError(f"unknown context.data variables: {sorted(unknown)}")
+    with manifest_path.open(encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    for section in ("variables", "axes"):
+        for name, spec in manifest[section].items():
+            if name in descriptions:
+                spec["description"] = descriptions[name].strip()
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=directory, prefix=".manifest-",
+        suffix=".json.tmp", delete=False,
+    ) as stream:
+        temporary_path = Path(stream.name)
+        json.dump(manifest, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.replace(temporary_path, manifest_path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
+    updated = dict(loaded)
+    updated["variable_descriptions"] = loaded["variable_descriptions"] | {
+        name: value.strip() for name, value in descriptions.items()
+    }
+    return updated

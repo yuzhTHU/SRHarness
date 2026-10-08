@@ -382,7 +382,12 @@ class SearchRunState:
             list[CandidateRecord]: The operation result.
         """
         with self._lock:
-            return sorted(self._candidates, key=self._candidate_priority)
+            ranked = [
+                (priority, candidate)
+                for candidate in self._candidates
+                if (priority := self._candidate_priority(candidate)) is not None
+            ]
+            return [candidate for _, candidate in sorted(ranked, key=lambda item: item[0])]
 
     def pareto_indices(self, candidates: list[CandidateRecord] | None = None) -> list[int]:
         """Run the ``pareto indices`` operation.

@@ -56,6 +56,14 @@ class InteractionManager(ABC):
     def wait_until_running(self) -> None:
         """Wait at a tool boundary while the frontend has paused the run."""
 
+    def force_stop_event(self):
+        """Return the event used to interrupt the active model or tool call."""
+        return None
+
+    def consume_force_stop(self) -> bool:
+        """Consume a forced-turn interruption after it has entered the buffer."""
+        return False
+
     def take_runtime_settings(self) -> dict[str, Any] | None:
         """Return and consume runtime settings queued by the frontend.
 
@@ -89,6 +97,10 @@ class InteractionManager(ABC):
         action, such as pause or branch transition, is already pending.
         """
         return True
+
+    def pause_after_tool_free_response(self) -> bool:
+        """Pause silently after a tool-free response when supported by the frontend."""
+        return False
 
     def publish(self, kind: str, payload: Any) -> None:
         """Publish an observable event to the frontend.

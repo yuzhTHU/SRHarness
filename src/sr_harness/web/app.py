@@ -52,6 +52,10 @@ def create_app(
     def data_agent_safety():
         return FileResponse(STATIC_DIR / "data-agent-safety.html")
 
+    @app.get("/evaluator-guide")
+    def evaluator_guide():
+        return FileResponse(STATIC_DIR / "evaluator-guide.html")
+
     if session is not None:
         from .platform import mount_platform
         mount_platform(app, session)
@@ -76,7 +80,7 @@ def create_app(
 
     @app.get("/api/control/events")
     def control_events(after_seq: int = Query(0, ge=0)):
-        return {"events": app.state.controller.events(after_seq)}
+        return app.state.controller.event_batch(after_seq)
 
     @app.post("/api/control/command")
     def control_command(payload: dict = Body(...)):

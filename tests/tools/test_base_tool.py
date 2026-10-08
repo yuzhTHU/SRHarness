@@ -408,6 +408,27 @@ class TestBaseToolEvaluate:
         text = tool.format_evaluation_result(evaluation)
         assert "Fit quality (Train-set | Validation-set):\n    RMSE=0.00 | 0.00;\n    MAE=0.00 | 0.00;\n    R2=1.00 | 1.00;" in text
 
+    def test_formatted_evaluation_exposes_evaluator_specific_metrics(self):
+        result = {
+            "formula": "x",
+            "target_expression": "dx_dt",
+            "data_split_results": {
+                "train": {"metrics": {
+                    "rmse": 0.1, "mae": 0.08, "r2": 0.9,
+                    "complexity": 1, "rollout_rmse": 0.25,
+                }},
+                "validation": {"metrics": {
+                    "rmse": 0.2, "mae": 0.16, "r2": 0.8,
+                    "complexity": 1, "rollout_rmse": 0.5,
+                }},
+            },
+        }
+
+        text = UnitSampleTool.format_evaluation_result(result)
+
+        assert "Evaluator-specific metrics (Train-set | Validation-set):" in text
+        assert "rollout_rmse=0.250 | 0.500;" in text
+
     def test_formatted_evaluation_uses_eight_significant_digits_for_formula_only(self):
         result = {
             "formula": "0.123456789012 * x",

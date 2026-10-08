@@ -126,6 +126,14 @@ class OpenRouterAPI(BaseAPI):
                 else:
                     tool_call = get_tool_call(message, content)
                     if not (tool_call or content.strip()):
+                        if response_dict.get("finish_reason") == "length":
+                            raise RuntimeError(
+                                f"OpenRouterAPI({self.model}) exhausted max_tokens={max_tokens} "
+                                "while reasoning, before producing content or a tool call. "
+                                "Increase the Agent's maximum output length and retry. "
+                                f"推理已耗尽 max_tokens={max_tokens}，尚未生成正文或工具调用；"
+                                "请增大 Agent 的最大输出长度后重试。"
+                            )
                         retry_error = ValueError(f"OpenRouterAPI({self.model}) returned empty content and no usable tool calls.")
                     else:
                         retry_error = None
@@ -193,6 +201,7 @@ class OpenRouterAPI(BaseAPI):
         raw_chunks: list[dict[str, Any]] = []
         raw_tool_calls: dict[int, dict[str, Any]] = {}
         usage = None
+        finish_reason = None
         callback({"type": "start", "sample": sample})
         for chunk in stream:
             chunk_dict = chunk.to_dict() if hasattr(chunk, "to_dict") else {}
@@ -202,7 +211,10 @@ class OpenRouterAPI(BaseAPI):
             choices = getattr(chunk, "choices", None) or []
             if not choices:
                 continue
-            delta = choices[0].delta
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None) is not None:
+                finish_reason = choice.finish_reason
+            delta = choice.delta
             if text := getattr(delta, "content", None):
                 content_parts.append(text)
             reasoning_delta = (
@@ -260,9 +272,13 @@ class OpenRouterAPI(BaseAPI):
             "content": content,
             "reasoning": reasoning,
             "tool_calls": message.get("tool_calls", []),
+            "finish_reason": finish_reason,
         })
         completion = type("StreamCompletion", (), {"usage": usage})()
-        return completion, {"chunks": raw_chunks}, message, content
+        return completion, {
+            "chunks": raw_chunks,
+            "finish_reason": finish_reason,
+        }, message, content
 
     @staticmethod
     def _retry_delay(error: Exception, attempt: int) -> float:

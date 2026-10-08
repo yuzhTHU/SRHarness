@@ -8,7 +8,6 @@ from typing import Dict, Any
 import numpy as np
 import sr_harness_engine as engine
 from .base_tool import BaseTool, ToolMetadata
-from ..utils.constant_optimizer import fit_constants
 
 
 @BaseTool.register('evaluate_formula')
@@ -36,7 +35,7 @@ class EvaluateTool(BaseTool):
             show_diagnostics: Whether the result should include a compact residual error profile,
                 the worst samples, and the strongest residual-variable correlations.
         """
-        split_context = self.context.train_split()
+        split_context = self.context.train_split
         data = split_context.data
         y = y or self.context.target
         y = y.strip().strip('"').strip("'")
@@ -51,30 +50,13 @@ class EvaluateTool(BaseTool):
                 eq_f = eq_f.replace(var, engine.Parameter(var.name, np.random.rand()))
                 fit = True # If there are unknown variables, we must fit the formula to data.
 
-        evaluator = self.context.evaluator
-        parameters = None
-        if fit:
-            if evaluator is None:
-                eq_f = fit_constants(
-                    eq_f, data, y_true.flatten(), num_nodes=num_nodes,
-                )
-            else:
-                eq_f = evaluator.fit(eq_f, split_context, y_true)
-                if not isinstance(eq_f, engine.Expression):
-                    raise TypeError("BaseEvaluator.fit() must return an Expression.")
-                if missing := engine.unbound_parameters(eq_f):
-                    raise ValueError(
-                        "BaseEvaluator.fit() returned unbound parameters: "
-                        + ", ".join(missing)
-                    )
-                parameters = engine.parameter_values(eq_f)
-
         evaluation = self.evaluate(
             f=eq_f,
             y=eq_y,
             show_diagnostics=show_diagnostics,
-            parameters=parameters,
+            fit=fit,
         )
+        parameters = engine.parameter_values(self.parse_formula(evaluation["formula"])) if fit else None
         return {
             **evaluation,
             "parameters_optimized": fit,

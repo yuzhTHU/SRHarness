@@ -13,7 +13,7 @@ from fastapi import Body, HTTPException, Request
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 
-from ..core import json_value
+from ..core import json_value, update_context_data_descriptions
 from .session import InteractiveSession
 
 MAX_UPLOAD = 256 * 1024 * 1024
@@ -123,6 +123,34 @@ def mount_platform(app, session: InteractiveSession):
         except Exception as exc:
             raise HTTPException(400, str(exc)) from exc
 
+    @app.post('/api/evaluator/agent/start')
+    def start_evaluator_assistance(payload: dict = Body(...)):
+        try:
+            return session.start_evaluator_assistance(payload)
+        except (OSError, ValueError) as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/evaluator/agent/stop')
+    def stop_evaluator_assistance():
+        try:
+            return session.stop_evaluator_assistance()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.put('/api/evaluator/agent/settings')
+    def configure_evaluator_agent(payload: dict = Body(...)):
+        try:
+            return session.configure_evaluator_agent(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post('/api/evaluator/agent/test')
+    def test_evaluator_agent_model(payload: dict = Body(...)):
+        try:
+            return session.test_evaluator_agent_model(payload)
+        except Exception as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.get('/api/data/context')
     def data_context(rows: int = 300):
         rows = max(1, min(rows, 1000))
@@ -184,6 +212,13 @@ def mount_platform(app, session: InteractiveSession):
             "truncated": total > count,
         }
 
+    @app.post('/api/data/context/reload')
+    def reload_data_context():
+        try:
+            return session.reload_context_data()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
     @app.put('/api/data/selection')
     def update_data_selection(payload: dict = Body(...)):
         with session.lock:
@@ -223,6 +258,11 @@ def mount_platform(app, session: InteractiveSession):
                 descriptions = {
                     name: value.strip() for name, value in descriptions.items()
                 }
+                manifest_path = session.workspace / "context.data" / "manifest.json"
+                if manifest_path.is_file():
+                    update_context_data_descriptions(
+                        manifest_path.parent, descriptions,
+                    )
                 change = session.context.update_selection(
                     target=target,
                     features=features,
@@ -237,6 +277,65 @@ def mount_platform(app, session: InteractiveSession):
                 **change,
                 "context": session.context.schema(),
             }
+
+    @app.put('/api/data/descriptions')
+    def update_data_descriptions(payload: dict = Body(...)):
+        with session.lock:
+            if session.data_state in {"running", "stopping"}:
+                raise HTTPException(
+                    409,
+                    "Wait for the data-preparation agent to finish before changing variable descriptions",
+                )
+            if session.state == "running":
+                control_status = session.controller.status()
+                if not (
+                    control_status["paused"]
+                    and control_status["waiting_at_boundary"]
+                ):
+                    raise HTTPException(
+                        409,
+                        "Pause symbolic regression and wait for the safe-boundary acknowledgement "
+                        "before changing variable descriptions",
+                    )
+            descriptions = payload.get("variable_descriptions", {})
+            if not isinstance(descriptions, dict) or any(
+                not isinstance(name, str) or not isinstance(value, str)
+                for name, value in descriptions.items()
+            ):
+                raise HTTPException(
+                    400, "variable_descriptions must map variable names to text",
+                )
+            descriptions = {
+                name: value.strip() for name, value in descriptions.items()
+            }
+            manifest_path = session.workspace / "context.data" / "manifest.json"
+            try:
+                if manifest_path.is_file():
+                    update_context_data_descriptions(
+                        manifest_path.parent, descriptions,
+                    )
+                elif unknown := set(descriptions) - set(session.context.data):
+                    raise ValueError(
+                        f"unknown context variables: {sorted(unknown)}"
+                    )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            changed = False
+            for name in session.context.data:
+                if (
+                    name in descriptions
+                    and session.context.variable_descriptions[name] != descriptions[name]
+                ):
+                    session.context.variable_descriptions[name] = descriptions[name]
+                    changed = True
+            if changed:
+                session.context.args.data_revision = int(
+                    getattr(session.context.args, "data_revision", 0)
+                ) + 1
+            session.variable_descriptions = dict(
+                session.context.variable_descriptions
+            )
+            return session.context.schema()
 
     @app.post('/api/session/settings')
     def settings(payload: dict = Body(...)):
@@ -521,11 +620,13 @@ def mount_platform(app, session: InteractiveSession):
                 'rows': records, 'truncated': truncated}
 
     @app.post('/api/data/demo')
-    def create_demo():
+    def create_demo(payload: dict | None = Body(default=None)):
         try:
-            path = session.create_demo()
+            path = session.create_demo(str((payload or {}).get("kind", "polynomial")))
         except FileExistsError as exc:
             raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         relative = str(path.relative_to(session.workspace))
         size = sum(file.stat().st_size for file in path.iterdir() if file.is_file())
         session.controller.publish('file_uploaded', {'path': relative, 'size': size})

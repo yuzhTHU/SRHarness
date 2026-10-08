@@ -28,7 +28,7 @@ R-C-L-K 符号回归搜索，`SRAgentInteractive` 则在同一个搜索循环上
 
 `AgentContext`：内存中的权威研究上下文。它保存完整结构化数据、目标和自变量、变量
 描述、来源、工作区、当前训练/验证划分以及单调递增的数据版本。工具继续通过 Mapping
-接口读取上下文。数据准备 Agent 调用 `commit_data` 原子提交新版本；运行中的交互式
+接口读取上下文。数据准备 Agent 只在工作区生成或验证 `context.data/`；`InteractiveSession` 在受控边界加载新版本。运行中的交互式
 SRAgent 只在安全迭代边界刷新划分并把变量变化写入原有对话。
 
 SRAgent 在运行时组织以下核心组件：

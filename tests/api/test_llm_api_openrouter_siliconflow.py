@@ -104,8 +104,11 @@ class _RetryingOpenRouterClient(_FakeOpenRouterClient):
 
 
 class _FakeStreamChunk:
-    def __init__(self, delta=None, usage=None):
-        self.choices = [] if delta is None else [SimpleNamespace(delta=delta)]
+    def __init__(self, delta=None, usage=None, finish_reason=None):
+        self.choices = [] if delta is None else [SimpleNamespace(
+            delta=delta,
+            finish_reason=finish_reason,
+        )]
         self.usage = usage
 
     def to_dict(self):
@@ -269,6 +272,49 @@ def test_openrouter_stream_callback_receives_incremental_snapshots(monkeypatch):
     assert updates[-1]["content"] == "ready"
     assert updates[-1]["tool_calls"][0]["function"]["arguments"] == '{"x": 7}'
     assert returned["usage"]["token"] == {"prompt": 7, "answer": 11}
+
+
+def test_openrouter_stream_preserves_reasoning_when_output_limit_is_exhausted(monkeypatch):
+    class ReasoningLengthClient(_FakeOpenRouterClient):
+        attempts = 0
+
+        def create(self, **payload):
+            self.__class__.attempts += 1
+            return iter([
+                _FakeStreamChunk(SimpleNamespace(
+                    content=None,
+                    reasoning="a long chain of reasoning",
+                    reasoning_content=None,
+                    reasoning_details=None,
+                    tool_calls=[],
+                )),
+                _FakeStreamChunk(SimpleNamespace(
+                    content=None,
+                    reasoning=None,
+                    reasoning_content=None,
+                    reasoning_details=None,
+                    tool_calls=[],
+                ), finish_reason="length"),
+            ])
+
+    import pytest
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", ReasoningLengthClient)
+    updates = []
+    api = OpenRouterAPI(model="deepseek/deepseek-v4-flash-0731")
+
+    with pytest.raises(RuntimeError, match="exhausted max_tokens=64"):
+        _consume(api(
+            [{"role": "user", "content": "reason for a long time"}],
+            max_tokens=64,
+            stream_callback=updates.append,
+        ))
+
+    assert ReasoningLengthClient.attempts == 1
+    assert updates[-1]["type"] == "complete"
+    assert updates[-1]["reasoning"] == "a long chain of reasoning"
+    assert updates[-1]["finish_reason"] == "length"
 
 
 def test_openrouter_empty_response_uses_same_retry_backoff(monkeypatch):

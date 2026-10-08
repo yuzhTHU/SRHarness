@@ -4,7 +4,7 @@ from .agents.evaluator_construction_agent import EvaluatorConstructionAgent
 from .agents.sr_agent import SRAgent
 from .agents.sr_agent_interactive import SRAgentInteractive
 from .core import AgentContext, ToolCall
-from .evaluator import BaseEvaluator, DefaultEvaluator, GraphEvaluator, TemplateCustomEvaluator
+from .evaluator import DefaultEvaluator, GraphEvaluator, load_custom_evaluator
 from .interaction import InteractionManager, TerminalInteractionManager
 from .runtime import InteractionController
 from . import api

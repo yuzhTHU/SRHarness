@@ -27,8 +27,7 @@ class DataPreparationAgent(Agent):
         "web_fetch",
         "read_pdf",
         "read_skill",
-        "commit_data",
-        "load_context_data",
+        "validate_context_data",
     ]
     DEFAULT_EXCLUDED_SKILLS = frozenset({"discover-symbolic-laws"})
 
@@ -67,6 +66,8 @@ class DataPreparationAgent(Agent):
         self.api = None
         self.context = context
         self._stop_requested = threading.Event()
+        self._pause_requested = threading.Event()
+        self._force_recorded = False
         self.buffer: list[dict[str, Any]] = [{
             "role": "system",
             "content": (
@@ -93,10 +94,12 @@ class DataPreparationAgent(Agent):
                 "units and other meaning in description. Preserve existing variable files unless the user "
                 "asks to replace them. NPY variables may contain numeric, Boolean, or string values. Preserve "
                 "categorical and textual variables as Unicode string arrays rather than object arrays, unless "
-                "the user explicitly requests an encoding such as one-hot encoding. Call load_context_data "
-                "after writing or editing the collection; use "
-                "all reported errors to repair the manifest before claiming completion. commit_data remains "
-                "available for a simple finite numeric CSV/Excel table.\n\n"
+                "the user explicitly requests an encoding such as one-hot encoding. Create and transform "
+                "context.data with workspace_code_executor, then call validate_context_data after every "
+                "write or edit. Use every reported error and repair action before claiming completion. "
+                "This validation "
+                "does not mutate the live AgentContext; InteractiveSession loads valid files after your "
+                "turn completes.\n\n"
                 "Explain material assumptions and sources. A later request may extend the existing data, so "
                 "retain and use this conversation and all workspace artifacts."
             ),
@@ -106,14 +109,33 @@ class DataPreparationAgent(Agent):
     def reset_stop(self) -> None:
         """Clear a previous stop request before starting another user turn."""
         self._stop_requested.clear()
+        self._pause_requested.clear()
+        self._force_recorded = False
 
-    def request_stop(self) -> None:
-        """Request cooperative cancellation at the next safe boundary."""
-        self._stop_requested.set()
+    def request_stop(self, *, force: bool = False) -> None:
+        """Pause after this turn, or force-interrupt its active operation."""
+        self._pause_requested.set()
+        if force:
+            self._stop_requested.set()
 
     def _check_stop(self) -> None:
         if self._stop_requested.is_set():
-            raise InterruptedError("Data preparation was stopped by the user")
+            raise InterruptedError("用户强制中止")
+
+    def _check_pause(self) -> None:
+        if self._pause_requested.is_set():
+            raise InterruptedError("Data preparation paused at a safe boundary")
+
+    def _record_force(self, update: dict[str, Any] | None = None) -> None:
+        if self._force_recorded:
+            return
+        if update and (update.get("content") or update.get("reasoning")):
+            message = {"role": "assistant", "content": update.get("content", "")}
+            if update.get("reasoning"):
+                message["reasoning"] = update["reasoning"]
+            self.buffer.append(message)
+        self.buffer.append({"role": "user", "content": "用户强制中止"})
+        self._force_recorded = True
 
     def initialize_tools(self, context: AgentContext) -> None:
         """Bind configured skills before constructing context-aware tools.
@@ -123,6 +145,8 @@ class DataPreparationAgent(Agent):
         """
         context.args.enabled_skills = self.skills
         super().initialize_tools(context)
+        for tool in self.tools:
+            tool.cancel_event = self._stop_requested
 
     def run(self, instruction: str) -> dict[str, Any]:
         """Continue the persistent preparation conversation until it yields control.
@@ -166,9 +190,11 @@ class DataPreparationAgent(Agent):
                 "model": self.llm_model,
             })
             last_stream_emit = 0.0
+            latest_stream_update: dict[str, Any] = {}
 
             def stream_callback(update: dict[str, Any]) -> None:
-                nonlocal last_stream_emit
+                nonlocal last_stream_emit, latest_stream_update
+                latest_stream_update = update
                 self._check_stop()
                 now = time.monotonic()
                 if update.get("type") == "delta" and now - last_stream_emit < 0.08:
@@ -193,9 +219,19 @@ class DataPreparationAgent(Agent):
                 responses = list(call_result)
                 self._check_stop()
             except InterruptedError:
+                self._record_force(latest_stream_update)
+                self._publish("data_assistant_error", {
+                    **latest_stream_update,
+                    "response_id": response_id,
+                    "turn": turn,
+                    "provider": self.llm_provider,
+                    "model": self.llm_model,
+                    "error": "用户强制中止",
+                })
                 raise
             except Exception as exc:
                 self._publish("data_assistant_error", {
+                    **latest_stream_update,
                     "response_id": response_id,
                     "turn": turn,
                     "provider": self.llm_provider,
@@ -221,11 +257,16 @@ class DataPreparationAgent(Agent):
             })
             if not calls:
                 self.buffer.append(message)
+                self._check_pause()
                 break
             results = self._execute_with_events(calls)
             self.buffer.append(message)
             self.buffer.extend(self.parser.format_tool_result_messages(calls, results))
             committed = committed or any(result.result.get("data_committed") for result in results)
+            if self._stop_requested.is_set():
+                self._record_force()
+                self._check_stop()
+            self._check_pause()
         result = {
             "message": final_content,
             "committed": committed,
@@ -237,7 +278,6 @@ class DataPreparationAgent(Agent):
     def _execute_with_events(self, calls):
         results = []
         for call in calls:
-            self._check_stop()
             schema = next((
                 {
                     "description": tool.metadata.description,
@@ -254,7 +294,6 @@ class DataPreparationAgent(Agent):
                 "result": result,
             })
             results.append(result)
-            self._check_stop()
         return results
 
     def _publish(self, kind: str, payload: Any) -> None:

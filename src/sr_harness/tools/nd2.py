@@ -218,7 +218,7 @@ class ND2Tool(BaseTool):
             raise RuntimeError("ND2 completed without producing a formula.")
 
         validation_metrics = None
-        if validation_data := self.context.evaluation_data():
+        if validation_data := self.context.validation_split.data:
             validation_data = self._prepare_data(validation_data)
             validator = self._make_rewarder(
                 RewardSolver, validation_data, y, vars_node, vars_edge

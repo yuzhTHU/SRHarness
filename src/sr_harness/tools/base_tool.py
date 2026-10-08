@@ -8,6 +8,7 @@ import re
 import argparse
 import time
 import warnings
+from numbers import Real
 import numpy as np
 import sr_harness_engine as engine
 from pathlib import Path
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Union, get_args, get
 from ..utils import FactoryMixin, log_exception
 from ..core import AgentContext
 from ..core.tool import ToolCallResult, ToolMetadata
-from ..evaluator import regression_metrics
+from ..evaluator import utils as evaluator_utils
 if TYPE_CHECKING:
     from ..skills import SkillManager
 
@@ -69,9 +70,6 @@ class BaseTool(ABC, FactoryMixin):
         target = supplied.pop("target", next(iter(data), None))
         evaluation_data = supplied.pop("evaluation_data", None)
         evaluator = supplied.pop("evaluator", None)
-        if evaluator is None:
-            from ..evaluator import DefaultEvaluator
-            evaluator = DefaultEvaluator()
         workspace = supplied.pop("workspace", supplied.pop("workspace_dir", None))
         supplied.setdefault("validation_fraction", 0)
         args = argparse.Namespace(**supplied)
@@ -80,8 +78,8 @@ class BaseTool(ABC, FactoryMixin):
         )
         if evaluation_data is not None:
             self.context._split_cache = {
-                "train": self.context.data,
-                "evaluation": {name: np.asarray(value) for name, value in evaluation_data.items()},
+                "train": self.context.with_data(self.context.data),
+                "validation": self.context.with_data({name: np.asarray(value) for name, value in evaluation_data.items()}),
             }
 
     @classmethod
@@ -119,7 +117,12 @@ class BaseTool(ABC, FactoryMixin):
         """工具调用入口"""
         start_time = time.time()
         try:
+            cancellation_event = getattr(self, "cancel_event", None)
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise InterruptedError("用户强制中止")
             result = self.execute(*args, **kwargs)
+            if cancellation_event is not None and cancellation_event.is_set():
+                raise InterruptedError("用户强制中止")
             if not isinstance(result, dict):
                 _logger.critical(f"Tool {self.metadata.name} execute() should return a dict, but got {type(result)}, please check the implementation.")
             result_str = self.format_result_dict(result)
@@ -534,99 +537,83 @@ class BaseTool(ABC, FactoryMixin):
 
         Returns:
             Fit, correlation, information-criterion, and complexity metrics."""
-        return regression_metrics(f, y_true, y_pred)
+        return evaluator_utils.regression_metrics(f, y_true, y_pred)
 
     def evaluate(
         self,
         f: engine.Expression,
         y: engine.Expression,
         show_diagnostics: bool = True,
-        parameters: dict[str, Any] | None = None,
+        fit: bool = False,
     ) -> Dict[str, Any]:
         """Evaluate a symbolic prediction against a symbolic target.
 
-        Formula complexity is ``len(f)``. Residual diagnostics include an error profile, worst samples, and strong residual-variable correlations.
+        Metrics, including formula complexity, are supplied by the active evaluator. Residual diagnostics include an error profile, worst samples, and strong residual-variable correlations.
 
         Args:
             f: Symbolic prediction expression.
             y: Symbolic target expression.
             show_diagnostics: Whether to include residual diagnostics.
-            parameters: Parameters fitted by a custom evaluator, if any.
+            fit: Whether to fit parameters on the training split before scoring.
 
         Returns:
             Candidate eligibility and metrics for each available data split."""
         if not isinstance(f, engine.Expression) or not isinstance(y, engine.Expression):
             raise TypeError("f and y must both be sr_harness_engine.Expression instances.")
 
-        data_split_results = {
-            'train': {'metrics': None, 'diagnostics': None},
-            'validation': {'metrics': None, 'diagnostics': None},
-        }
         evaluator = self.context.evaluator
-        def evaluate_split(data, *, split_context=None, max_samples=None):
-            num_nodes = split_context.num_nodes if split_context is not None else None
-            y_true = y.eval(data, num_nodes=num_nodes)
-            if evaluator is not None:
-                result = evaluator.evaluate(f, split_context, y_true)
-                if not isinstance(result, dict):
-                    raise TypeError("BaseEvaluator.evaluate() must return a dictionary.")
-                metrics = {name: value for name, value in result.items() if name != "diagnostics"}
-                diagnostics = result.get("diagnostics")
-                if not isinstance(metrics, dict):
-                    raise TypeError("BaseEvaluator metrics must be a dictionary.")
-                metrics = dict(metrics)
-                metrics.setdefault("complexity", len(f))
-                split = {"metrics": metrics}
-                if show_diagnostics:
-                    if diagnostics is None:
-                        diagnostics = self.residual_diagnostics(
-                            y_true=np.asarray(y_true),
-                            y_pred=np.asarray(f.evaluate(data, num_nodes=num_nodes)),
-                            data=data,
-                            target_expression=y.to_str(),
-                            **(
-                                {"max_samples": max_samples}
-                                if max_samples is not None else {}
-                            ),
-                        )
-                    split["diagnostics"] = diagnostics
-                return split
+        train_context = self.context.train_split
+        validation_context = self.context.validation_split
 
-            y_pred = f.eval(data, num_nodes=num_nodes)
-            split = {"metrics": self.calculate_metrics(f, y_true, y_pred)}
+        target = self.context.target
+        var_names = {var.name for var in f.iter_preorder() if isinstance(var, engine.Variable)}
+        ineligibility_reasons = []
+        if y.to_str() != target:
+            ineligibility_reasons.append(f"the left-hand side of the equation is not {target}")
+        if target in var_names:
+            ineligibility_reasons.append(f"the right-hand side of the equation depends on {target}")
+        is_candidate = not ineligibility_reasons
+
+        fitted_f = f
+        if fit:
+            fitted_f = (
+                evaluator.fit_candidate(f, train_context)
+                if is_candidate
+                else evaluator.fit(f, y, train_context)
+            )
+            if not isinstance(fitted_f, engine.Expression):
+                raise TypeError(f"{type(evaluator).__name__}.fit() must return an Expression")
+        if missing := engine.unbound_parameters(fitted_f):
+            raise ValueError(f"unbound parameters: {', '.join(missing)}")
+
+        def evaluate_split(split_context: AgentContext, *, max_samples: int | None = None):
+            result = (
+                evaluator.evaluate_candidate(fitted_f, split_context)
+                if is_candidate
+                else evaluator.evaluate(fitted_f, y, split_context)
+            )
+            if not isinstance(result, dict):
+                raise TypeError(f"{type(evaluator).__name__}.evaluate() must return a dictionary")
+            metrics = {}
+            for name, value in result.items():
+                if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
+                    raise TypeError(f"Evaluator metric {name!r} must be a float or int")
+                metrics[str(name)] = value.item() if isinstance(value, np.generic) else value
+            split = {"metrics": metrics}
             if show_diagnostics:
+                num_nodes = split_context.num_nodes
                 split["diagnostics"] = self.residual_diagnostics(
-                    y_true=np.asarray(y_true),
-                    y_pred=np.asarray(y_pred),
-                    data=data,
+                    y_true=np.asarray(y.eval(split_context.data, num_nodes=num_nodes)),
+                    y_pred=np.asarray(fitted_f.evaluate(split_context.data, num_nodes=num_nodes)),
+                    data=split_context.data,
                     target_expression=y.to_str(),
                     **({"max_samples": max_samples} if max_samples is not None else {}),
                 )
             return split
 
-        if isinstance(self.context, AgentContext):
-            train_context = self.context.train_split()
-            evaluation_context = self.context.evaluation_split()
-            data_split_results['train'] = evaluate_split(
-                train_context.data, split_context=train_context, max_samples=10
-            )
-            if evaluation_context.data:
-                data_split_results['validation'] = evaluate_split(
-                    evaluation_context.data, split_context=evaluation_context
-                )
-            else:
-                data_split_results.pop('validation')
-            target = self.context.target
-        var_names = {var.name for var in f.iter_preorder() if isinstance(var, engine.Variable)}
-        ineligibility_reasons = []
-        if y.to_str() != target:
-            ineligibility_reasons.append(
-                f"the left-hand side of the equation is not {target}"
-            )
-        if target in var_names:
-            ineligibility_reasons.append(
-                f"the right-hand side of the equation depends on {target}"
-            )
+        data_split_results = {"train": evaluate_split(train_context, max_samples=10)}
+        if validation_context.data:
+            data_split_results["validation"] = evaluate_split(validation_context)
         for split_name, split_result in data_split_results.items():
             metrics = split_result.get("metrics") or {}
             if not np.isfinite(metrics.get("mse", float("nan"))):
@@ -634,7 +621,7 @@ class BaseTool(ABC, FactoryMixin):
                     f"the formula does not produce a finite MSE on the {split_name} set"
                 )
         evaluation = {
-            "formula": f.to_str(number_format='.8g'),
+            "formula": fitted_f.to_str(number_format='.8g'),
             "target_expression": y.to_str(number_format='.8g'),
             "is_candidate": not ineligibility_reasons,
             "candidate_ineligibility_reasons": ineligibility_reasons,
@@ -669,7 +656,7 @@ class BaseTool(ABC, FactoryMixin):
         }
         if isinstance(self.context, AgentContext):
             data_split_results['train']['metrics'] = empty_metrics
-            if not self.context.evaluation_data():
+            if not self.context.validation_split.data:
                 data_split_results.pop('validation')
             else:
                 data_split_results['validation']['metrics'] = empty_metrics
@@ -734,6 +721,18 @@ class BaseTool(ABC, FactoryMixin):
             f"    R2={metric_pair('r2')};",
             f"    Formula Complexity={three_significant_digits(metrics.get('complexity', '?'))};",
         ])
+        standard_metric_names = {
+            "mse", "rmse", "mae", "mape", "r2", "aic", "bic",
+            "pearson_r", "spearman_r", "complexity",
+        }
+        custom_metric_names = sorted(
+            (set(metrics) | set(validation_metrics or {})) - standard_metric_names
+        )
+        if custom_metric_names:
+            lines.append("Evaluator-specific metrics (Train-set | Validation-set):")
+            lines.extend(
+                f"    {name}={metric_pair(name)};" for name in custom_metric_names
+            )
         if validation_metrics:
             train_rmse = metrics.get("rmse", float("nan"))
             validation_rmse = validation_metrics.get("rmse", float("nan"))

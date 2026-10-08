@@ -1,13 +1,15 @@
-"""Evaluator contracts and built-in implementations."""
-from .base_evaluator import BaseEvaluator, regression_metrics
-from .default_evaluator import DefaultEvaluator
+"""Evaluator contracts, implementations, loading, and reusable utilities."""
+from . import utils
+from .default_evaluator import ContextSplits, DefaultEvaluator, MetricDict, MetricValue
 from .graph_evaluator import GraphEvaluator
-from .template_custom_evaluator import TemplateCustomEvaluator
+from .load_custom_evaluator import load_custom_evaluator
 
 __all__ = [
-    "BaseEvaluator",
+    "ContextSplits",
     "DefaultEvaluator",
     "GraphEvaluator",
-    "TemplateCustomEvaluator",
-    "regression_metrics",
+    "load_custom_evaluator",
+    "MetricDict",
+    "MetricValue",
+    "utils",
 ]

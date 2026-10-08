@@ -265,22 +265,18 @@ custom_python_function(x)
 
 ## SRHarness 评估器接口
 
-符号引擎负责 RHS 表达式，实验协议由 `sr_harness.BaseEvaluator` 定义，并由 `DefaultEvaluator` 提供普通 `(N,)` 数据的默认实现。用户可以继承默认实现，按需改写参数拟合和评价方法：
+符号引擎负责表达式，`DefaultEvaluator` 提供普通 `(N,)` 数据的默认实验协议。用户可以继承它，按需改写候选公式的拟合和评价方法：
 
 ```python
 from sr_harness import DefaultEvaluator
 
 
 class MyEvaluator(DefaultEvaluator):
-    @staticmethod
-    def fit(expression, context, target):
-        return expression.fit(context.data, target).expression
-
-    @staticmethod
-    def evaluate(expression, context, target):
-        prediction = expression.evaluate(context.data)
-        return {"mse": float(((prediction - target) ** 2).mean()),
-                "complexity": len(expression)}
+    @classmethod
+    def evaluate_candidate(cls, f, context):
+        metrics = super().evaluate_candidate(f, context)
+        metrics["custom_metric"] = 0.0
+        return metrics
 ```
 
-这个接口接收结构化表达式、包含当前数据划分的上下文和目标数组，不要求用户了解 Agent、搜索状态或 Web UI。`fit()` 返回的表达式必须已经绑定所有参数值，可以直接通过 `expression.evaluate(context.data)` 求值；`evaluate()` 返回包含 MSE、R²、复杂度等项目的 split metrics。ODE 评估器可以在其中积分轨迹，`GraphEvaluator` 可以读取关系表，特殊任务也可以自行决定拟合参数和返回哪些指标。
+`fit/evaluate` 处理一般的 `y = f` 等式，`fit_candidate/evaluate_candidate` 只处理可提交的目标公式。Evaluator 返回仅含数值的扁平指标字典；复杂度、诊断和格式化由工具层统一添加。

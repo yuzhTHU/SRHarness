@@ -4,15 +4,18 @@ from __future__ import annotations
 import argparse
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from ..evaluator import DefaultEvaluator
 
 
 class AgentContext:
     """One authoritative context containing data, metadata, and runtime arguments."""
 
-    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, num_nodes: int | None = None, evaluator: Any = None, workspace: str | Path | Any | None = None):
+    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, num_nodes: int | None = None, evaluator: DefaultEvaluator | None = None, workspace: str | Path | Any | None = None):
         if args is not None and not isinstance(args, argparse.Namespace):
             raise TypeError("args must be an argparse.Namespace")
         self.args = args or argparse.Namespace()
@@ -43,11 +46,13 @@ class AgentContext:
             self.variable_axes = {name: tuple(axes) for name, axes in variable_axes.items()}
         self.variable_structures = dict(variable_structures or {})
         self.num_nodes = num_nodes
+        from ..evaluator import DefaultEvaluator, GraphEvaluator
         if evaluator is None:
-            from ..evaluator import DefaultEvaluator, GraphEvaluator
             evaluator = GraphEvaluator() if self.variable_structures else DefaultEvaluator()
-        self.evaluator = evaluator
-        self._split_cache: dict[str, dict[str, np.ndarray]] | None = None
+        if not isinstance(evaluator, DefaultEvaluator):
+            raise TypeError("evaluator must be a DefaultEvaluator instance")
+        self.evaluator: DefaultEvaluator = evaluator
+        self._split_cache: dict[str, AgentContext] | None = None
         self._lock = threading.RLock()
         self._validate(allow_incomplete=not self.data or self.target is None)
 
@@ -99,24 +104,19 @@ class AgentContext:
         with self._lock:
             self._split_cache = None
 
-    def _splits(self) -> dict[str, dict[str, np.ndarray]]:
+    def _splits(self) -> dict[str, AgentContext]:
         with self._lock:
             if self._split_cache is None:
-                if self.evaluator is None:
-                    raise ValueError("context.evaluator is required to split data")
-                splits = self.evaluator.split_data(self)
-                if set(splits) != {"train", "evaluation"}:
-                    raise ValueError("BaseEvaluator.split_data() must return train and evaluation mappings")
+                splits = self.evaluator.split(self)
+                if set(splits) != {"train", "validation"}:
+                    raise ValueError("DefaultEvaluator.split() must return train and validation contexts")
+                if any(not isinstance(split, AgentContext) for split in splits.values()):
+                    raise TypeError("DefaultEvaluator.split() values must be AgentContext instances")
                 self._split_cache = splits
             return self._split_cache
 
-    def train_data(self) -> dict[str, np.ndarray]:
-        return self._splits()["train"]
-
-    def evaluation_data(self) -> dict[str, np.ndarray]:
-        return self._splits()["evaluation"]
-
-    def _split_context(self, data: dict[str, np.ndarray]) -> AgentContext:
+    def with_data(self, data: dict[str, np.ndarray]) -> AgentContext:
+        """Create a context view over ``data`` while preserving runtime configuration."""
         return AgentContext(
             args=self.args, data=data, target=self.target,
             variable_descriptions={name: self.variable_descriptions[name] for name in data},
@@ -125,11 +125,13 @@ class AgentContext:
             num_nodes=self.num_nodes, evaluator=self.evaluator, workspace=self.workspace,
         )
 
+    @property
     def train_split(self) -> AgentContext:
-        return self._split_context(self.train_data())
+        return self._splits()["train"]
 
-    def evaluation_split(self) -> AgentContext:
-        return self._split_context(self.evaluation_data())
+    @property
+    def validation_split(self) -> AgentContext:
+        return self._splits()["validation"]
 
     def axis_names(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys(axis for axes in self.variable_axes.values() for axis in axes))

@@ -24,8 +24,8 @@
 <tr><td><code>web_fetch</code></td><td><code>url</code><br><code>max_characters</code>（1000–50000）</td><td>读取公共 HTTP/HTTPS 网页；拒绝私网地址、带凭据 URL 和重定向。</td></tr>
 <tr><td><code>read_pdf</code></td><td><code>source</code><br><code>start_page</code><br><code>max_pages</code>（1–50）</td><td>读取工作区 PDF 或公共 URL；下载上限 25 MiB，不修改文件。</td></tr>
 <tr><td><code>read_skill</code></td><td><code>name</code><br><code>file_path</code><br><code>show_tree</code><br><code>query</code></td><td>读取已启用 Skill 的说明和附属文件。Skill 是给 Agent 的指令，可能影响后续工具选择。</td></tr>
-<tr><td><code>commit_data</code></td><td><code>path</code><br><code>target</code><br><code>features</code><br><code>variable_descriptions</code><br><code>provenance_note</code></td><td>校验 CSV/Excel 的有限数值列，并更新内存中的共享数据上下文；源文件不变。</td></tr>
-<tr><td><code>load_context_data</code></td><td><code>path</code>（默认 <code>context.data</code>）</td><td>校验 manifest 与 NPY 文件，成功后更新内存中的共享数据上下文；文件不变。</td></tr>
+<tr><td><code>commit_data</code></td><td><code>path</code><br><code>target</code><br><code>features</code><br><code>variable_descriptions</code><br><code>provenance_note</code></td><td>校验 CSV/Excel 的有限数值列，并在工作区生成 <code>context.data/</code>；不直接修改内存上下文。</td></tr>
+<tr><td><code>load_context_data</code></td><td><code>path</code>（默认 <code>context.data</code>）</td><td>校验 manifest 与 NPY 文件并报告问题；不直接修改内存上下文。</td></tr>
 </tbody></table>
 <p class="muted">可以在数据准备 Agent 的“设置 → 能力”中停用不需要的工具。启用自定义工具或 Skill 后，实际能力可能超出本页列出的默认范围。</p>
 

@@ -66,8 +66,8 @@ class EvaluateCodeTool(BaseTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
             show_diagnostics: Whether metrics should include compact residual diagnostics.
         """
-        data = self.context.train_data()
-        evaluation_data = self.context.evaluation_data()
+        data = self.context.train_split.data
+        evaluation_data = self.context.validation_split.data
         y = y or self.context.target
         y = y.strip().strip('"').strip("'")
         eq_y = self.parse_formula(y)

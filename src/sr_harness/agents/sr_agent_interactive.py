@@ -41,7 +41,8 @@ class SRAgentInteractive(SRAgent):
         llm_max_tokens: int = 4096,
         max_workers: int = 0,
         validation_fraction: float = 0.2,
-        split_by: str = "ood",
+        split_by: str = "random",
+        split_ood_variable: str | None = None,
         split_random_state: int = 42,
         ranking_metric: str = "mse",
         larger_is_better: bool = False,
@@ -60,7 +61,8 @@ class SRAgentInteractive(SRAgent):
         Args:
             llm_provider: LLM 提供商名称。
             llm_model: 模型名称。
-            tools: 可用工具名列表。None 表示使用默认工具集（全部工具减去 code_executor）。
+            tools: 可用工具名列表。None 表示使用默认工具集（全部工具减去 code_executor
+                和仅用于数据准备或评测器构建的上下文工具）。
             skills: 可供 Agent 读取的 skill 名称。None 表示使用全部 skill。
             verbose: 是否启用详细日志。
             tool_parser: 工具解析器类型。
@@ -75,6 +77,7 @@ class SRAgentInteractive(SRAgent):
             max_workers: 并行工作进程数（0 表示不并行）。
             validation_fraction: 验证集比例。
             split_by: 验证集划分方式，可选 "random" 或 "ood"。
+            split_ood_variable: OOD 划分使用的变量名；随机划分时可留空。
             split_random_state: 数据划分随机种子。
             ranking_metric: 候选公式排序所用的指标键；默认使用 mse。
             larger_is_better: 排序指标是否越大越好；默认按越小越好排序。
@@ -89,9 +92,11 @@ class SRAgentInteractive(SRAgent):
             context: 与数据准备 Agent 共享的数据和工作区上下文。
         """
         if use_workspace:
-            excluded_tools = {"code_executor", "commit_data"}
+            excluded_tools = {"code_executor"}
         else:
-            excluded_tools = {"workspace_code_executor", "workspace_shell", "commit_data"}
+            excluded_tools = {"workspace_code_executor", "workspace_shell"}
+        if tools is None:
+            excluded_tools.update({"validate_context_data", "validate_evaluator"})
         self.excluded_tools = excluded_tools
 
         super().__init__(
@@ -112,6 +117,7 @@ class SRAgentInteractive(SRAgent):
             max_workers=max_workers,
             validation_fraction=validation_fraction,
             split_by=split_by,
+            split_ood_variable=split_ood_variable,
             split_random_state=split_random_state,
             ranking_metric=ranking_metric,
             larger_is_better=larger_is_better,
@@ -131,6 +137,21 @@ class SRAgentInteractive(SRAgent):
         self.interaction_manager.bind_run_state(self.run_state)
         self.human_input_callback = human_input_callback or self.interaction_manager.ask_human
         self._last_iteration_had_tool_calls = True
+        self._forced_interruption_pending = False
+        self._force_stop_event = self.interaction_manager.force_stop_event()
+        self._bind_tool_cancellation()
+
+    def _bind_tool_cancellation(self) -> None:
+        """Share the hard-interrupt event with every active tool instance."""
+        if self._force_stop_event is not None:
+            for tool in self.tools or []:
+                tool.cancel_event = self._force_stop_event
+
+    def initialize_tools(self, context: AgentContext) -> None:
+        """Initialize tools and attach the active hard-interrupt event."""
+        super().initialize_tools(context)
+        if hasattr(self, "_force_stop_event"):
+            self._bind_tool_cancellation()
 
     @contextmanager
     def prepare_tool_context(self, tool_context: AgentContext):
@@ -228,6 +249,7 @@ class SRAgentInteractive(SRAgent):
                 "max_workers",
                 "validation_fraction",
                 "split_by",
+                "split_ood_variable",
                 "split_random_state",
                 "ranking_metric",
                 "larger_is_better",
@@ -254,6 +276,7 @@ class SRAgentInteractive(SRAgent):
                     )
             self.context.args.validation_fraction = self.validation_fraction
             self.context.args.split_by = self.split_by
+            self.context.args.split_ood_variable = self.split_ood_variable
             self.context.args.split_random_state = self.split_random_state
             self.context.invalidate_splits()
             self.context.args.llm_provider = self.llm_provider
@@ -261,6 +284,7 @@ class SRAgentInteractive(SRAgent):
             self.context.args.llm_max_tokens = self.llm_max_tokens
             self.context.args.enabled_skills = sorted(self.enabled_skills)
             self.initialize_tools(self.context)
+            self._bind_tool_cancellation()
             self.model_router.base_provider = self.llm_provider
             self.model_router.base_model = self.llm_model
             self.model_router.enabled = self.auto_routing
@@ -286,6 +310,14 @@ class SRAgentInteractive(SRAgent):
         Returns:
             str | None: The operation result.
         """
+        force_event = getattr(self, "_force_stop_event", None)
+        if getattr(self, "_forced_interruption_pending", False) or (
+            force_event is not None and force_event.is_set()
+        ):
+            buffer.append({"role": "user", "content": "用户强制中止"})
+            self._forced_interruption_pending = False
+            self.interaction_manager.consume_force_stop()
+            return None
         best_candidate = self.best_candidate()
         if (
             best_candidate is not None
@@ -305,6 +337,8 @@ class SRAgentInteractive(SRAgent):
             not self._last_iteration_had_tool_calls
             and self.interaction_manager.should_request_guidance_after_tool_free_response()
         ):
+            if self.interaction_manager.pause_after_tool_free_response():
+                return None
             guidance = self.human_input_callback(
                 "The Agent replied without calling a tool and has yielded control. "
                 "Provide further guidance to continue the symbolic-regression search."
@@ -456,9 +490,13 @@ class SRAgentInteractive(SRAgent):
                 "model": route.model,
             })
         last_stream_emit: dict[int, float] = {}
+        latest_stream_updates: dict[int, dict[str, Any]] = {}
 
         def stream_callback(update: dict[str, Any]) -> None:
             K = max(1, min(int(update.get("sample", 1)), self.local_sample_size))
+            latest_stream_updates[K] = update
+            if self._force_stop_event is not None and self._force_stop_event.is_set():
+                raise InterruptedError("用户强制中止")
             now = time.monotonic()
             if (
                 update.get("type") == "delta"
@@ -483,9 +521,23 @@ class SRAgentInteractive(SRAgent):
                 C=C,
                 stream_callback=stream_callback,
             )
+        except InterruptedError:
+            self._forced_interruption_pending = True
+            responses = []
+            for K in range(1, self.local_sample_size + 1):
+                update = latest_stream_updates.get(K, {})
+                message = {
+                    "role": "assistant",
+                    "content": update.get("content", ""),
+                }
+                if update.get("reasoning"):
+                    message["reasoning"] = update["reasoning"]
+                responses.append((message["content"], [], message))
+            usage = {"token": {}, "price": {}}
         except Exception as exc:
             for K, response_id in response_ids.items():
                 self.emit("assistant_error", {
+                    **latest_stream_updates.get(K, {}),
                     "response_id": response_id,
                     "coord": coord | {"K": K},
                     "provider": route.provider,
@@ -546,8 +598,6 @@ class SRAgentInteractive(SRAgent):
         results = []
         for action in actions:
             tool_schema = self.tool_schema(action.name)
-            self.emit("activity", {"phase": "checkpoint", "tool": action.name})
-            self.interaction_manager.wait_until_running()
             self.emit("activity", {"phase": "tool", "tool": action.name})
             self.emit("tool_start", {"call": action, "tool_schema": tool_schema})
             started_at = time.monotonic()

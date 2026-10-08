@@ -462,6 +462,10 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
         start_time = time.monotonic()
         deadline = start_time + timeout_seconds
         while time.monotonic() < deadline:
+            cancellation_event = getattr(self, "cancel_event", None)
+            if cancellation_event is not None and cancellation_event.is_set():
+                self.terminate_process(process)
+                raise InterruptedError("Workspace code execution was stopped by the user")
             try:
                 result = result_queue.get(timeout=0.05)
                 break

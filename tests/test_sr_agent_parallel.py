@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import numpy as np
+import pytest
 from types import SimpleNamespace
 
 from sr_harness.core import (
@@ -82,6 +83,7 @@ def test_interactive_agent_waits_for_guidance_after_tool_free_response():
     agent.best_candidate = lambda: None
     agent.interaction_manager = SimpleNamespace(
         should_request_guidance_after_tool_free_response=lambda: True,
+        pause_after_tool_free_response=lambda: False,
     )
     prompts = []
     agent.human_input_callback = lambda prompt: prompts.append(prompt) or "Try a power law."
@@ -118,6 +120,44 @@ def test_interactive_agent_continues_without_waiting_after_tool_call():
 
     assert agent.handle_iteration_complete(buffer, R=1, L=2, C=1) is None
     assert buffer == []
+
+
+def test_web_tool_free_response_pauses_without_asking_a_question():
+    agent = object.__new__(SRAgentInteractive)
+    agent._last_iteration_had_tool_calls = False
+    agent._perfect_candidate_announced = False
+    agent.best_candidate = lambda: None
+    pauses = []
+    agent.interaction_manager = SimpleNamespace(
+        should_request_guidance_after_tool_free_response=lambda: True,
+        pause_after_tool_free_response=lambda: pauses.append(True) or True,
+    )
+    agent.human_input_callback = lambda prompt: (_ for _ in ()).throw(
+        AssertionError("a tool-free response must not create an artificial question")
+    )
+
+    assert agent.handle_iteration_complete([], R=1, L=2, C=1) is None
+    assert pauses == [True]
+
+
+def test_safe_pause_does_not_block_tools_already_requested_this_turn(monkeypatch):
+    agent = object.__new__(SRAgentInteractive)
+    events = []
+    agent.tools = []
+    agent._force_stop_event = None
+    agent.interaction_manager = SimpleNamespace(
+        publish=lambda kind, payload: events.append((kind, payload)),
+        wait_until_running=lambda: (_ for _ in ()).throw(
+            AssertionError("safe pause must wait until the next turn boundary")
+        ),
+    )
+    result = ToolCallResult(ok=True, result={"mse": 0.0}, result_str="MSE=0", meta_data={})
+    monkeypatch.setattr(SRAgent, "execute_action", lambda self, actions: [result])
+
+    returned = agent.execute_action([ToolCall("submit_formula", {"f": "x"}, id="call-1")])
+
+    assert returned == [result]
+    assert [kind for kind, _ in events] == ["activity", "tool_start", "tool_result", "activity"]
 
 
 def test_interactive_agent_honors_pending_control_before_automatic_guidance():
@@ -311,6 +351,7 @@ def test_split_data_ood_uses_high_t_values_for_validation(tmp_path):
     agent = SRAgent(
         llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
         save_path=str(tmp_path), validation_fraction=0.2, split_by="ood",
+        split_ood_variable="t",
     )
     train, validation = agent._split_data(
         {"x": np.arange(10.0), "t": np.array([8, 1, 5, 0, 9, 3, 7, 2, 6, 4])},
@@ -320,15 +361,17 @@ def test_split_data_ood_uses_high_t_values_for_validation(tmp_path):
     assert validation["t"].tolist() == [8, 9]
 
 
-def test_split_data_ood_falls_back_to_T_and_prefers_t(tmp_path):
+def test_split_data_ood_uses_the_explicitly_selected_variable(tmp_path):
     agent = SRAgent(
         llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
         save_path=str(tmp_path), validation_fraction=0.25, split_by="ood",
+        split_ood_variable="T",
     )
     _, validation_T = agent._split_data(
         {"x": np.arange(4.0), "T": np.array([300, 500, 200, 400])},
         {"y": np.arange(4.0)},
     )
+    agent.split_ood_variable = "t"
     _, validation_t = agent._split_data(
         {"t": np.array([4, 1, 3, 2]), "T": np.array([100, 400, 300, 200])},
         {"y": np.arange(4.0)},
@@ -362,6 +405,7 @@ def test_split_data_uses_manifest_structure_metadata_in_network_mode(tmp_path):
     agent = SRAgent(
         llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
         save_path=str(tmp_path), validation_fraction=0.2, split_by="ood",
+        split_ood_variable="time",
         context=context,
     )
 
@@ -377,17 +421,16 @@ def test_split_data_uses_manifest_structure_metadata_in_network_mode(tmp_path):
     np.testing.assert_array_equal(validation["links"], links)
 
 
-def test_split_data_ood_falls_back_to_first_input_variable(tmp_path):
+def test_split_data_ood_requires_an_explicit_variable(tmp_path):
     agent = SRAgent(
         llm_provider="unused", llm_model="unused", tools=["unit_parallel_tool"],
         save_path=str(tmp_path), validation_fraction=0.2, split_by="ood",
     )
-    train, validation = agent._split_data(
-        {"x": np.array([8, 1, 5, 0, 9, 3, 7, 2, 6, 4])},
-        {"y": np.arange(10.0)},
-    )
-    assert train["x"].tolist() == [0, 1, 2, 3, 4, 5, 6, 7]
-    assert validation["x"].tolist() == [8, 9]
+    with pytest.raises(ValueError, match="split_ood_variable is required"):
+        agent._split_data(
+            {"x": np.array([8, 1, 5, 0, 9, 3, 7, 2, 6, 4])},
+            {"y": np.arange(10.0)},
+        )
 
 
 def test_split_data_random_uses_requested_train_and_validation_sizes(tmp_path):
@@ -465,7 +508,7 @@ def test_update_buffer_injects_current_pareto_front(tmp_path):
 
     status = buffer[-1]["content"]
     assert "No Pareto front yet" not in status
-    assert "Validation R²=0.97" in status
+    assert "Validation MSE=0.2" in status
     assert "Formula=x + y" in status
 
 

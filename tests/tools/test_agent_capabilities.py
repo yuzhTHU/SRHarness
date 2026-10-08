@@ -49,7 +49,7 @@ def test_eic_result_can_reenter_candidate_search_state():
     assert result["eic_diagnostics"]["worst_subtree"] == result["worst_subtree"]
 
 
-def test_new_candidate_is_audited_without_spending_an_llm_round():
+def test_new_candidate_is_not_automatically_audited_with_eic():
     values = np.linspace(1.0, 2.0, 32)
     context = {"data": {"x": values, "y": values}, "target": "y"}
     candidate = EvaluateTool(**context)(f="x", show_diagnostics=False)
@@ -71,8 +71,8 @@ def test_new_candidate_is_audited_without_spending_an_llm_round():
         L=1,
         C=1,
     )
-    assert topk[0].details["eic_diagnostics"]["worst_subtree"] == "root"
-    assert agent.tools_counter.named_count["evaluate_eic"] == 1
+    assert "eic_diagnostics" not in topk[0].details
+    assert agent.tools_counter.named_count.get("evaluate_eic", 0) == 0
 
 
 def test_subagent_uses_isolated_callback_prompt():
@@ -295,6 +295,9 @@ def test_interaction_controller_keeps_only_the_latest_stream_snapshot():
         "data_assistant_delta",
     ]
     assert events[-1]["payload"]["content"] == "latest"
+    batch = controller.event_batch(after_seq=1)
+    assert not batch["truncated"]
+    assert [event["seq"] for event in batch["events"]] == [3, 4]
 
     controller.publish(
         "data_assistant",
@@ -307,6 +310,18 @@ def test_interaction_controller_keeps_only_the_latest_stream_snapshot():
         "activity",
         "data_assistant",
     ]
+
+
+def test_interaction_controller_reports_only_true_buffer_eviction():
+    controller = InteractionController()
+    for index in range(1002):
+        controller.publish("activity", {"index": index})
+
+    batch = controller.event_batch(after_seq=1)
+
+    assert batch["truncated"]
+    assert batch["evicted_through_seq"] == 2
+    assert batch["events"][0]["seq"] == 3
 
 
 def test_model_router_uses_base_for_simple_task_and_strong_for_complex_task():
@@ -378,6 +393,13 @@ def test_interaction_controller_round_trip_and_commands():
     assert controller.status()["paused"] is True
     controller.command("resume")
     assert controller.status()["paused"] is False
+    controller.command("pause", "pause after this turn")
+    controller.command("force_stop", "force this turn")
+    assert controller.status()["paused"] is True
+    assert controller.status()["force_stop_requested"] is True
+    assert controller.force_stop_event.is_set()
+    assert controller.consume_force_stop() is True
+    assert controller.status()["force_stop_requested"] is False
 
 
 def test_create_app_requires_explicit_controller(tmp_path):

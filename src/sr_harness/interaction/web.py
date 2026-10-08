@@ -94,6 +94,14 @@ class WebInteractionManager(InteractionManager):
         """Run the ``wait until running`` operation."""
         self.session.controller.wait_until_running()
 
+    def force_stop_event(self):
+        """Expose cancellation to streaming APIs and cancellable tools."""
+        return self.session.controller.force_stop_event
+
+    def consume_force_stop(self) -> bool:
+        """Consume the forced interruption after recording it in conversation."""
+        return self.session.controller.consume_force_stop()
+
     def take_runtime_settings(self):
         """Run the ``take runtime settings`` operation."""
         with self.session.lock:
@@ -125,6 +133,11 @@ class WebInteractionManager(InteractionManager):
         """Avoid competing with an already queued pause or search transition."""
         status = self.session.controller.status()
         return not status["paused"] and status["pending_transition"] is None
+
+    def pause_after_tool_free_response(self) -> bool:
+        """Yield to the composer without presenting an artificial question card."""
+        self.session.controller.request_pause()
+        return True
 
     def publish(self, kind: str, payload) -> None:
         """Publish .
