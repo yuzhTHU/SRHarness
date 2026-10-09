@@ -22,21 +22,26 @@ def create_app(
     log_dir: str | Path = DEFAULT_LOG_DIR,
     *,
     session=None,
+    conversation_registry=None,
 ) -> FastAPI:
     """Create app.
 
     Args:
         log_dir: The log dir value.
         session: The session value.
+        conversation_registry: Optional persistent conversation registry.
 
     Returns:
         FastAPI: The operation result.
     """
     app = FastAPI(title="SRHarness Search Viewer")
     app.state.log_dir = Path(log_dir).resolve()
-    app.state.interaction_manager = (
-        session.sr_interaction_manager if session is not None else SRInteractionManager()
-    )
+    app.state.session = session
+    app.state.conversation_registry = conversation_registry
+    app.state.interaction_manager = SRInteractionManager() if session is None else None
+    if conversation_registry is not None:
+        from .conversations import mount_conversations
+        mount_conversations(app, conversation_registry)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/")
@@ -50,6 +55,10 @@ def create_app(
     @app.get("/data-agent-safety")
     def data_agent_safety():
         return FileResponse(STATIC_DIR / "data-agent-safety.html")
+
+    @app.get("/context-data-guide")
+    def context_data_guide():
+        return FileResponse(STATIC_DIR / "context-data-guide.html")
 
     @app.get("/evaluator-guide")
     def evaluator_guide():
@@ -75,16 +84,19 @@ def create_app(
 
     @app.get("/api/control/status")
     def control_status():
-        return app.state.interaction_manager.status()
+        manager = session.sr_interaction_manager if session is not None else app.state.interaction_manager
+        return manager.status()
 
     @app.get("/api/control/events")
     def control_events(after_seq: int = Query(0, ge=0)):
-        return app.state.interaction_manager.get_recent_events(after_seq)
+        manager = session.sr_interaction_manager if session is not None else app.state.interaction_manager
+        return manager.get_recent_events(after_seq)
 
     @app.post("/api/control/command")
     def control_command(payload: dict = Body(...)):
         try:
-            return app.state.interaction_manager.command(
+            manager = session.sr_interaction_manager if session is not None else app.state.interaction_manager
+            return manager.command(
                 str(payload.get("action", "")),
                 str(payload.get("message", "")) or None,
             )

@@ -40,7 +40,7 @@ class ConstantFitTool(BaseTool):
             raise TypeError("y must be a string expression or None.")
         original = engine.parse(
             self.normalize_formula(eq),
-            variables={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
+            symbols={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
         )
         leaves = [node for node in original.iter_preorder() if isinstance(node, engine.Number)]
         if not leaves:
@@ -79,9 +79,9 @@ class ConstantFitTool(BaseTool):
             for leaf, choice in zip(original_leaves, choices):
                 replacement = engine.parse(
                     choice["expression"],
-                    variables={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
+                    symbols={"pi": engine.Variable("pi"), "e": engine.Variable("e")},
                 )
-                expression = expression.replace(leaf, replacement, no_warn=True)
+                expression = expression.replace(leaf, replacement)
             formula = expression.to_str()
             try:
                 candidate = self.parse_formula(formula)

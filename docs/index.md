@@ -113,16 +113,23 @@ if result["best_candidate"] is not None:
 sr-harness run --host 127.0.0.1 --port 11001
 ```
 
-未指定 `--workspace` 时，系统使用临时工作区。也可以指定一个持久化工作区，并把任意数量的已有文件或目录只读挂载到工作区根目录：
+`--workspace-dir` 保存对话注册表及每个对话各自的持久化工作区。未指定时，如果提供了 `--save-path` 或 `--save-dir`，系统会将对应保存路径用作工作区目录；否则使用临时目录并发出数据可能丢失的警告。已有文件或目录可以只读挂载到每个新对话的工作区根目录：
 
 ```bash
-sr-harness run --workspace ./workspace --mount ./data.csv ./papers ./raw-tables --port 11001
+sr-harness run --workspace-dir ./workspaces --mount ./data.csv ./papers ./raw-tables --port 11001
 ```
 
 每个输入保留自己的 basename，例如 `./papers` 显示为工作区中的 `papers/`。这些输入可被
 数据准备 Agent、表格预览和下载接口读取，但不能被上传接口、`workspace_shell` 或沙箱代码
 修改。多个输入的 basename 必须唯一；若两个路径都叫 `data.csv`，启动会直接报错，避免
-静默覆盖或产生难以追踪的自动重命名。指定工作区中的普通文件可被 AI 工具修改或删除；当目录非空时，CLI 会在启动时显示警告。
+静默覆盖或产生难以追踪的自动重命名。每个对话的普通工作区文件可被 AI 工具修改或删除。
+
+默认情况下所有浏览器共享对话列表。面向多个互不信任的用户提供服务时，可添加
+`--isolate-users`，按浏览器持久 Cookie 隔离每个用户可见的对话。
+当 `--save-path` 或 `--save-dir` 提供持久保存路径时，服务会定期保存各对话的交互会话快照；
+使用相同路径重启后会恢复时间线、设置、数据上下文、评测器选择和搜索记录。关闭时尚未完成的
+模型输出或工具调用会恢复为“已中断”，不会伪装成仍在运行的任务。快照保存在
+`<save-path>/sessions/` 中。
 
 浏览器打开 `http://127.0.0.1:11001/`。启动时不会自动发起模型请求；只有提交数据准备任务或开始搜索后才会调用配置的模型。
 
@@ -348,7 +355,7 @@ Expose the current prompt through the shared tool context.
 
 - `messages`: Conversation messages in provider-compatible order.
 
-#### `Agent.execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult | None]`
+#### `Agent.execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult]`
 
 Execute tool calls serially.
 
@@ -383,14 +390,6 @@ Execute independent tool calls in worker processes.
 
 Turn workspace and web evidence into the shared structured dataset.
 
-#### `DataPreparationAgent.reset_stop(self) -> None`
-
-Clear a previous stop request before starting another user turn.
-
-#### `DataPreparationAgent.request_stop(self) -> None`
-
-Request cooperative cancellation at the next safe boundary.
-
 #### `DataPreparationAgent.initialize_tools(self, context: AgentContext) -> None`
 
 Bind configured skills before constructing context-aware tools.
@@ -413,6 +412,14 @@ Continue the persistent preparation conversation until it yields control.
 **Returns**
 
 - `dict[str, Any]`: The operation result.
+
+## `sr_harness.agents.evaluator_construction_agent`
+
+### `sr_harness.agents.evaluator_construction_agent.EvaluatorConstructionAgent`
+
+Construct and validate evaluator scripts without mutating live context state.
+
+#### `EvaluatorConstructionAgent.run(self, instruction: str) -> dict[str, Any]`
 
 ## `sr_harness.agents.sr_agent`
 
@@ -465,9 +472,9 @@ Run the R-C-L search after data, tools, parser, and API are initialized.
 
 - `Dict[str, Any]`: The operation result.
 
-#### `SRAgent.build_initial_prompt(self, problem_description, X, y, restart_records)`
+#### `SRAgent.create_initial_buffer(self, problem_description, X, y, restart_records)`
 
-Build initial prompt.
+Combine initial prompts with the first progress message for a branch.
 
 
 **Args**
@@ -477,9 +484,29 @@ Build initial prompt.
 - `y`: Target data or target expression.
 - `restart_records`: Ranked candidates used to seed a restart.
 
-#### `SRAgent.build_prompt(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]`
+#### `SRAgent.create_initial_prompt_messages(self, problem_description, X, y, restart_records)`
 
-Build prompt.
+Create the finalized system and user messages without buffer metadata.
+
+#### `SRAgent.create_initial_system_prompt(self, restart_records) -> str`
+
+Create the initial system prompt independently of the branch buffer.
+
+#### `SRAgent.create_initial_user_prompt(self, problem_description, X, y, restart_records) -> str`
+
+Create the initial user prompt independently of the branch buffer.
+
+#### `SRAgent.customize_initial_prompts(self, messages, *, X, y)`
+
+Customize finalized initial prompt messages before buffer insertion.
+
+#### `SRAgent.on_buffer_messages_added(self, messages, **coordinate: int) -> None`
+
+Observe messages after they enter a conversation buffer.
+
+#### `SRAgent.prepare_model_messages(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]`
+
+Prepare the messages sent to the model for one iteration.
 
 
 **Args**
@@ -494,7 +521,7 @@ Build prompt.
 
 - `List[Dict[str, Any]]`: The operation result.
 
-#### `SRAgent.before_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None`
+#### `SRAgent.prepare_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None`
 
 Apply mode-specific control changes before constructing this iteration's prompt.
 
@@ -511,21 +538,11 @@ Apply mode-specific control changes before constructing this iteration's prompt.
 
 - `str | None`: The operation result.
 
-#### `SRAgent.refresh_data(self, buffer: List[Dict[str, Any]]) -> bool`
+#### `SRAgent.refresh_data(self) -> dict[str, Any] | None`
 
-Apply a newly committed shared-data revision at an iteration boundary.
+Apply a newly committed shared-data revision and describe the change.
 
-
-**Args**
-
-- `buffer`: Conversation history buffer.
-
-
-**Returns**
-
-- `bool`: The operation result.
-
-#### `SRAgent.handle_iteration_complete(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None`
+#### `SRAgent.finish_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None`
 
 Return a terminal status when the current search should stop.
 
@@ -571,9 +588,9 @@ Run the ``request llm`` operation.
 - `C`: One-based conversation-branch index.
 - `stream_callback`: Optional callback invoked for streamed model updates.
 
-#### `SRAgent.get_results(self, response_list, R, L, C)`
+#### `SRAgent.execute_tool_calls(self, response_list, R, L, C)`
 
-Return results.
+Execute tool calls from model responses and preserve sample grouping.
 
 
 **Args**
@@ -597,7 +614,7 @@ Persist tool calls from either the LLM or framework-enforced diagnostics.
 - `C`: One-based conversation-branch index.
 - `forced`: The forced value.
 
-#### `SRAgent.update_buffer(self, buffer: List[Dict[str, Any]], response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]], results_list: List[List[ToolCallResult]], node_parents: Dict[str, str], R, L, C)`
+#### `SRAgent.update_conversation(self, buffer: List[Dict[str, Any]], response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]], results_list: List[List[ToolCallResult]], node_parents: Dict[str, str], R, L, C)`
 
 Update buffer.
 
@@ -612,7 +629,7 @@ Update buffer.
 - `L`: One-based refinement-step index.
 - `C`: One-based conversation-branch index.
 
-#### `SRAgent.build_process_message(self, L)`
+#### `SRAgent.build_progress_message(self, L)`
 
 Build process message.
 
@@ -699,25 +716,25 @@ Format progress.
 - `L`: One-based refinement-step index.
 - `C`: One-based conversation-branch index.
 
-#### `SRAgent.record_metric(self, record)`
+#### `SRAgent.get_ranking_metric(self, record)`
 
-Record metric.
-
-
-**Args**
-
-- `record`: Search or candidate record.
-
-#### `SRAgent.sortby(self, record)`
-
-Run the ``sortby`` operation.
+Return the configured ranking metric and its display label.
 
 
 **Args**
 
 - `record`: Search or candidate record.
 
-#### `SRAgent.candidate_dict(record: CandidateRecord) -> dict[str, Any]`
+#### `SRAgent.candidate_sort_key(self, record)`
+
+Return the ranking key for a candidate-like record.
+
+
+**Args**
+
+- `record`: Search or candidate record.
+
+#### `SRAgent.candidate_to_dict(record: CandidateRecord) -> dict[str, Any]`
 
 Adapt a candidate to utilities that consume split results at top level.
 
@@ -749,9 +766,9 @@ Return candidates on the metric-complexity Pareto front.
 
 - `list[CandidateRecord]`: The operation result.
 
-#### `SRAgent.search_result(self, status: str, R: int | None, L: int | None, C: int | None)`
+#### `SRAgent.build_search_result(self, status: str, R: int | None, L: int | None, C: int | None)`
 
-Run the ``search result`` operation.
+Build a serializable search result for the current run state.
 
 
 **Args**
@@ -767,6 +784,14 @@ Run the ``search result`` operation.
 
 Interactive symbolic-regression agent controlled by an interaction manager.
 
+#### `SRAgentInteractive.on_buffer_messages_added(self, messages, **coordinate: int) -> None`
+
+Publish each system/user message exactly when it enters the buffer.
+
+#### `SRAgentInteractive.initialize_tools(self, context: AgentContext) -> None`
+
+Initialize tools and attach the active hard-interrupt event.
+
 #### `SRAgentInteractive.prepare_tool_context(self, tool_context: AgentContext)`
 
 Add interaction resources to the tool context for the duration of a run.
@@ -776,7 +801,7 @@ Add interaction resources to the tool context for the duration of a run.
 
 - `tool_context`: Shared context used to initialize tools.
 
-#### `SRAgentInteractive.before_iteration(self, buffer, R: int, L: int, C: int) -> str | None`
+#### `SRAgentInteractive.prepare_iteration(self, buffer, R: int, L: int, C: int) -> str | None`
 
 Apply queued human guidance before the prompt is constructed.
 
@@ -793,9 +818,13 @@ Apply queued human guidance before the prompt is constructed.
 
 - `str | None`: The operation result.
 
-#### `SRAgentInteractive.handle_iteration_complete(self, buffer, R: int, L: int, C: int) -> str | None`
+#### `SRAgentInteractive.build_data_refresh_message(change: dict[str, Any]) -> dict[str, str]`
 
-Keep interactive runs open after finding an exact candidate.
+Turn a structured data revision into guidance for the next model turn.
+
+#### `SRAgentInteractive.finish_iteration(self, buffer, R: int, L: int, C: int) -> str | None`
+
+Keep interactive runs open and yield tool-free responses to the human.
 
 
 **Args**
@@ -810,17 +839,13 @@ Keep interactive runs open after finding an exact candidate.
 
 - `str | None`: The operation result.
 
-#### `SRAgentInteractive.build_initial_prompt(self, problem_description, X, y, restart_records)`
+#### `SRAgentInteractive.create_initial_system_prompt(self, restart_records) -> str`
 
-Build initial prompt.
+Create the interactive system prompt with workspace guidance.
 
+#### `SRAgentInteractive.customize_initial_prompts(self, messages, *, X, y)`
 
-**Args**
-
-- `problem_description`: Natural-language description of the discovery task.
-- `X`: Input feature arrays keyed by variable name.
-- `y`: Target data or target expression.
-- `restart_records`: Ranked candidates used to seed a restart.
+Apply UI-provided descriptions and prompt overrides.
 
 #### `SRAgentInteractive.request_llm(self, prompt, R: int, L: int, C: int)`
 
@@ -881,16 +906,6 @@ Persist tool calls and expose framework-enforced calls to the UI.
 - `C`: One-based conversation-branch index.
 - `forced`: The forced value.
 
-#### `SRAgentInteractive.emit(self, kind: str, payload: Any) -> None`
-
-Publish an event through the configured interaction manager.
-
-
-**Args**
-
-- `kind`: Event or resource kind.
-- `payload`: Serializable event payload.
-
 #### `SRAgentInteractive.execute_action_parallel(self, actions, max_workers: int)`
 
 Execute action parallel.
@@ -906,6 +921,10 @@ Execute action parallel.
 ### `sr_harness.api.base_api.BaseAPI`
 
 Common request, parser, and tool-call behavior for LLM providers.
+
+#### `BaseAPI.cancel(self) -> None`
+
+Request cancellation when a provider offers no stronger primitive.
 
 #### `BaseAPI.build_parser(self, parser: ToolParserName) -> BaseParser | None`
 
@@ -1463,7 +1482,7 @@ Run the ``decode npz value`` operation.
 
 - `Any`: The operation result.
 
-### `sr_harness.cli.tool.load_context(path: str | Path, target: str | None=None) -> dict[str, Any]`
+### `sr_harness.cli.tool.load_context(path: str | Path, target: str | None=None) -> AgentContext`
 
 Load a BaseTool context from context.npz.
 
@@ -1574,106 +1593,53 @@ Tool calls returned by the provider.
 
 ### `sr_harness.core.context.AgentContext`
 
-Authoritative shared context for agents, evaluators, and tools. Runtime options
-live in ``args: argparse.Namespace``. Scientific state lives directly in
-``data``, ``target``, ``variable_descriptions``, ``variable_axes``, optional
-``variable_structures``/``num_nodes``, ``evaluator``, and ``workspace``.
-Axes are ordinary one-dimensional arrays in ``data``. ``variable_axes`` keys
-are non-axis variables and its values collectively name every axis variable.
-The two groups are disjoint and partition ``data``. Context is not a mapping;
-use ``context.data`` rather than ``context["data"]``.
+One authoritative context containing data, metadata, and runtime arguments.
 
-#### `AgentContext.train_data(self) -> dict[str, np.ndarray]`
+#### `AgentContext.invalidate_splits(self) -> None`
 
-Return the cached training mapping. On the first train/evaluation request, both
-mappings are obtained from ``context.evaluator.split_data(context)``.
 
-#### `AgentContext.evaluation_data(self) -> dict[str, np.ndarray]`
 
-Return the cached held-out evaluation mapping.
+#### `AgentContext.with_data(self, data: dict[str, np.ndarray]) -> AgentContext`
+
+Create a context view over ``data`` while preserving runtime configuration.
 
 #### `AgentContext.train_split(self) -> AgentContext`
 
-Create a context view over ``train_data()`` while sharing arguments, evaluator,
-workspace, and NumPy arrays.
 
-#### `AgentContext.evaluation_split(self) -> AgentContext`
 
-Create the corresponding context view over ``evaluation_data()``.
+#### `AgentContext.validation_split(self) -> AgentContext`
+
+
+
+#### `AgentContext.axis_names(self) -> tuple[str, ...]`
+
+
+
+#### `AgentContext.variable_names(self) -> tuple[str, ...]`
+
+
+
+#### `AgentContext.feature_names(self) -> tuple[str, ...]`
+
+
+
+#### `AgentContext.commit_context_data(self, loaded: dict[str, Any]) -> dict[str, Any]`
+
+
 
 #### `AgentContext.commit_data(self, data: dict[str, Any], *, target: str, features: list[str] | None=None, variable_descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
-Validate and atomically replace the structured dataset.
 
-
-**Args**
-
-- `data`: Data arrays keyed by variable name.
-- `target`: Target name or target values.
-- `features`: Ordered feature-column names; all non-target columns by default.
-- `variable_descriptions`: Human-readable descriptions keyed by column name.
-
-
-**Returns**
-
-    A description of the committed revision and column changes.
 
 #### `AgentContext.add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
-Add aligned feature columns and create a new data revision.
 
-
-**Args**
-
-- `features`: New aligned columns keyed by name.
-- `descriptions`: Descriptions for the new columns.
-
-
-**Returns**
-
-    A description of the committed revision and column changes.
-
-#### `AgentContext.commit_context_data(self, data: dict[str, Any]) -> dict[str, Any]`
-
-Replace structured variables with a validated manifest-backed collection.
-
-The loaded bundle contains arrays, descriptions, axis declarations, structural
-relationships, and optional node count without introducing another data class.
-
-
-**Args**
-
-- `data`: Validated variables and axes loaded by ``ContextDataLoader``.
-
-
-**Returns**
-
-    A description of the committed revision and variable changes.
 
 #### `AgentContext.update_selection(self, *, target: str, features: list[str], variable_descriptions: dict[str, str] | None=None) -> dict[str, Any]`
 
-Update the variables consumed by symbolic regression.
 
-
-**Args**
-
-- `target`: Name of the selected target variable or axis.
-- `features`: Ordered names of selected feature variables or axes.
-- `variable_descriptions`: Updated human-readable descriptions.
-
-
-**Returns**
-
-    A description of the resulting data revision.
 
 #### `AgentContext.schema(self) -> dict[str, Any]`
-
-Return the current structured-data schema.
-
-
-**Returns**
-
-    Column names, roles, row count, revision, descriptions, and provenance.
 
 ## `sr_harness.core.context_data`
 
@@ -1681,32 +1647,24 @@ Return the current structured-data schema.
 
 Raised when a context-data manifest cannot be validated.
 
-### `sr_harness.core.context_data.ContextDataLoader`
+### `sr_harness.core.context_data.load_context_data(directory: str | Path) -> dict[str, Any]`
 
-Validate and load a flat NPY collection described by ``manifest.json``.
+Validate and load one manifest-backed ``context.data`` directory.
 
-#### `ContextDataLoader.inspect(self) -> dict[str, Any]`
+### `sr_harness.core.context_data.inspect_context_data(directory: str | Path) -> dict[str, Any]`
 
-Validate the store and return diagnostics without raising.
+Return validation diagnostics without raising for manifest errors.
 
+### `sr_harness.core.context_data.update_context_data_descriptions(directory: str | Path, descriptions: dict[str, str]) -> dict[str, Any]`
 
-**Returns**
+Update variable and axis descriptions in ``manifest.json``.
 
-    A serializable report containing errors, warnings, and array summaries.
-
-#### `ContextDataLoader.load(self) -> dict[str, Any]`
-
-Validate and load all variables and axes.
-
-
-**Returns**
-
-    An AgentContext-ready bundle of arrays and metadata.
-
-
-**Raises**
-
-- `ContextManifestError`: If the manifest or referenced arrays are invalid.
+The complete store is validated before the edit. An atomic replacement is
+used when the directory permits creating entries. If the directory is
+read-only but ``manifest.json`` itself is writable, the existing file is
+updated in place, matching normal POSIX file-permission semantics. Because
+only existing string-valued description fields are changed, structural
+validity is preserved. The returned mapping matches :func:`load_context_data`.
 
 ## `sr_harness.core.search`
 
@@ -2004,6 +1962,14 @@ Return the coordinate of the most recently recorded search node.
 
 - `SearchCoordinate | None`: The operation result.
 
+#### `SearchRunState.export_state(self) -> dict[str, Any]`
+
+Return enough durable state to rebuild this run after a restart.
+
+#### `SearchRunState.from_state(cls, snapshot: dict[str, Any], save_path: str | Path | None=None) -> 'SearchRunState'`
+
+Rebuild a run from :meth:`export_state` without replaying work.
+
 #### `SearchRunState.node_record(self, node_id: str) -> dict[str, Any] | None`
 
 Run the ``node record`` operation.
@@ -2053,237 +2019,67 @@ Run the ``get`` operation.
 
 - `Any`: The operation result.
 
-## `sr_harness.evaluator`
+## `sr_harness.evaluator.default_evaluator`
 
-评测器模块导出抽象基类 `BaseEvaluator`、普通一维数据实现 `DefaultEvaluator`、图与超图实现 `GraphEvaluator`，以及仅包含 `pass` 的编辑起点 `TemplateCustomEvaluator`。完整协议和示例见[自定义评估协议](#custom-evaluator)。
+### `sr_harness.evaluator.default_evaluator.DefaultEvaluator`
 
-## `sr_harness.interaction.manager`
+Default implementation and extension point for formula evaluation.
 
-### `sr_harness.interaction.manager.InteractionManager`
+#### `DefaultEvaluator.split(cls, context: AgentContext) -> ContextSplits`
 
-Connect an interactive agent to a user interface.
 
-The default implementation is intentionally inert. Frontends may override
-control, prompt preparation, workspace ownership, and event publication
-without taking ownership of the search loop.
 
-#### `InteractionManager.bind_run_state(self, run_state) -> None`
+#### `DefaultEvaluator.fit(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> engine.Expression`
 
-Expose the authoritative in-memory run state to the frontend.
 
 
-**Args**
+#### `DefaultEvaluator.evaluate(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> MetricDict`
 
-- `run_state`: The run state value.
 
-#### `InteractionManager.bind_workspace(self, workspace) -> None`
 
-Expose the active workspace to the frontend.
+#### `DefaultEvaluator.fit_candidate(cls, f: engine.Expression, context: AgentContext) -> engine.Expression`
 
 
-**Args**
 
-- `workspace`: The workspace value.
+#### `DefaultEvaluator.evaluate_candidate(cls, f: engine.Expression, context: AgentContext) -> MetricDict`
 
-#### `InteractionManager.prepare_initial_prompt(self, messages, *, X, y)`
+## `sr_harness.evaluator.graph_evaluator`
 
-Apply frontend-owned prompt additions or user overrides.
+### `sr_harness.evaluator.graph_evaluator.GraphEvaluator`
 
+Evaluate variables with ``(..., N/E/H)`` graph-aligned dimensions.
 
-**Args**
+#### `GraphEvaluator.fit(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> engine.Expression`
 
-- `messages`: Conversation messages in provider-compatible order.
-- `X`: Input feature arrays keyed by variable name.
-- `y`: Target data or target expression.
 
-#### `InteractionManager.checkpoint(self) -> list[str]`
 
-Wait at a safe boundary and return queued human guidance.
+#### `GraphEvaluator.evaluate(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> MetricDict`
 
 
-**Returns**
 
-- `list[str]`: The operation result.
+#### `GraphEvaluator.split(cls, context: AgentContext) -> ContextSplits`
 
-#### `InteractionManager.take_search_transition(self) -> str | None`
+## `sr_harness.evaluator.load_custom_evaluator`
 
-Return a queued ``next_c`` or ``next_r`` transition.
+### `sr_harness.evaluator.load_custom_evaluator.evaluator_source(evaluator_id: str) -> str`
 
 
-**Returns**
 
-- `str | None`: The operation result.
+### `sr_harness.evaluator.load_custom_evaluator.evaluator_catalog() -> list[dict[str, str]]`
 
-#### `InteractionManager.wait_until_running(self) -> None`
 
-Wait at a tool boundary while the frontend has paused the run.
 
-#### `InteractionManager.take_runtime_settings(self) -> dict[str, Any] | None`
+### `sr_harness.evaluator.load_custom_evaluator.create_builtin_evaluator(evaluator_id: str) -> DefaultEvaluator`
 
-Return and consume runtime settings queued by the frontend.
 
 
-**Returns**
+### `sr_harness.evaluator.load_custom_evaluator.evaluator_filename(class_name: str) -> str`
 
-- `dict[str, Any] | None`: The operation result.
 
-#### `InteractionManager.commit_runtime_settings(self, settings: dict[str, Any]) -> None`
 
-Tell the frontend that queued runtime settings were applied.
+### `sr_harness.evaluator.load_custom_evaluator.load_custom_evaluator(source: str | None=None, file: Path | None=None) -> DefaultEvaluator`
 
-
-**Args**
-
-- `settings`: Runtime settings to validate or apply.
-
-#### `InteractionManager.ask_human(self, message: str) -> str`
-
-Ask the connected user for guidance.
-
-
-**Args**
-
-- `message`: Message text or provider message payload.
-
-
-**Returns**
-
-- `str`: The operation result.
-
-#### `InteractionManager.publish(self, kind: str, payload: Any) -> None`
-
-Publish an observable event to the frontend.
-
-
-**Args**
-
-- `kind`: Event or resource kind.
-- `payload`: Serializable event payload.
-
-## `sr_harness.interaction.terminal`
-
-### `sr_harness.interaction.terminal.TerminalInteractionManager`
-
-Read human guidance from the current terminal.
-
-#### `TerminalInteractionManager.ask_human(self, message: str) -> str`
-
-Run the ``ask human`` operation.
-
-
-**Args**
-
-- `message`: Message text or provider message payload.
-
-
-**Returns**
-
-- `str`: The operation result.
-
-## `sr_harness.interaction.web`
-
-### `sr_harness.interaction.web.add_variable_descriptions(messages, descriptions, variables)`
-
-Add variable descriptions.
-
-
-**Args**
-
-- `messages`: Conversation messages in provider-compatible order.
-- `descriptions`: The descriptions value.
-- `variables`: The variables value.
-
-### `sr_harness.interaction.web.WebInteractionManager`
-
-Connect one interactive agent to an :class:`InteractiveSession`.
-
-#### `WebInteractionManager.bind_run_state(self, run_state) -> None`
-
-Bind run state.
-
-
-**Args**
-
-- `run_state`: The run state value.
-
-#### `WebInteractionManager.bind_workspace(self, workspace) -> None`
-
-Bind workspace.
-
-
-**Args**
-
-- `workspace`: The workspace value.
-
-#### `WebInteractionManager.prepare_initial_prompt(self, messages, *, X, y)`
-
-Prepare initial prompt.
-
-
-**Args**
-
-- `messages`: Conversation messages in provider-compatible order.
-- `X`: Input feature arrays keyed by variable name.
-- `y`: Target data or target expression.
-
-#### `WebInteractionManager.checkpoint(self) -> list[str]`
-
-Run the ``checkpoint`` operation.
-
-
-**Returns**
-
-- `list[str]`: The operation result.
-
-#### `WebInteractionManager.take_search_transition(self) -> str | None`
-
-Run the ``take search transition`` operation.
-
-
-**Returns**
-
-- `str | None`: The operation result.
-
-#### `WebInteractionManager.wait_until_running(self) -> None`
-
-Run the ``wait until running`` operation.
-
-#### `WebInteractionManager.take_runtime_settings(self)`
-
-Run the ``take runtime settings`` operation.
-
-#### `WebInteractionManager.commit_runtime_settings(self, settings) -> None`
-
-Commit runtime settings.
-
-
-**Args**
-
-- `settings`: Runtime settings to validate or apply.
-
-#### `WebInteractionManager.ask_human(self, message: str) -> str`
-
-Run the ``ask human`` operation.
-
-
-**Args**
-
-- `message`: Message text or provider message payload.
-
-
-**Returns**
-
-- `str`: The operation result.
-
-#### `WebInteractionManager.publish(self, kind: str, payload) -> None`
-
-Publish .
-
-
-**Args**
-
-- `kind`: Event or resource kind.
-- `payload`: Serializable event payload.
+Load exactly one ``DefaultEvaluator`` subclass as an evaluator package module.
 
 ## `sr_harness.parser.base_parser`
 
@@ -2328,7 +2124,7 @@ Format tool calls.
 
 - `str`: The operation result.
 
-#### `BaseParser.format_tool_result_messages(self, tool_calls: List[ToolCall], results: List[ToolCallResult | None]) -> List[Dict[str, Any]]`
+#### `BaseParser.format_tool_result_messages(self, tool_calls: List[ToolCall], results: List[ToolCallResult]) -> List[Dict[str, Any]]`
 
 Format tool result messages.
 
@@ -2429,7 +2225,7 @@ Format tool calls.
 
 - `str`: The operation result.
 
-#### `OpenAIParser.format_tool_result_messages(self, tool_calls: List[ToolCall], results: List[ToolCallResult | None]) -> List[Dict[str, Any]]`
+#### `OpenAIParser.format_tool_result_messages(self, tool_calls: List[ToolCall], results: List[ToolCallResult]) -> List[Dict[str, Any]]`
 
 Format tool result messages.
 
@@ -2493,111 +2289,99 @@ Format tool calls.
 
 Parser for XML-formatted tool calls.
 
-## `sr_harness.runtime.interaction_controller`
+## `sr_harness.runtime.interaction_manager`
 
-### `sr_harness.runtime.interaction_controller.InteractionController`
+### `sr_harness.runtime.interaction_manager.PendingMessage`
 
-Coordinate pause/resume/stop, injected guidance, events, and replies.
+A user message waiting to be inserted at an agent boundary.
 
-#### `InteractionController.status(self) -> dict[str, Any]`
+### `sr_harness.runtime.interaction_manager.InteractionManager`
 
-Run the ``status`` operation.
+Own the controls and observable event stream of exactly one agent.
 
+#### `InteractionManager.state(self) -> InteractionState`
 
-**Returns**
+Return the authoritative execution state.
 
-- `dict[str, Any]`: The operation result.
+#### `InteractionManager.is_interrupting(self) -> bool`
 
-#### `InteractionController.command(self, action: str, message: str='') -> dict[str, Any]`
+Return whether the active operation should abort promptly.
 
-Run the ``command`` operation.
+#### `InteractionManager.cancellation_signal(self) -> _CancellationSignal`
 
+Expose a read-only Event-like cancellation adapter to tools.
 
-**Args**
+#### `InteractionManager.status(self) -> dict[str, Any]`
 
-- `action`: The action value.
-- `message`: Message text or provider message payload.
+Return a serializable control snapshot.
 
+#### `InteractionManager.command(self, action: InteractionAction, message: str | None=None) -> dict[str, Any]`
 
-**Returns**
+Apply a user control command to this agent.
 
-- `dict[str, Any]`: The operation result.
+#### `InteractionManager.request_pause(self) -> None`
 
-#### `InteractionController.wait_until_running(self) -> None`
+Request a quiet pause, such as after a tool-free response.
 
-Run the ``wait until running`` operation.
+#### `InteractionManager.start_agent_execution(self) -> list[PendingMessage]`
 
-#### `InteractionController.checkpoint(self) -> list[str]`
+Enter running state and consume messages that start this execution.
 
-Run the ``checkpoint`` operation.
+#### `InteractionManager.finish_agent_execution(self) -> None`
 
+Mark a naturally completed agent execution as idle.
 
-**Returns**
+#### `InteractionManager.wait(self) -> Iterator[list[PendingMessage]]`
 
-- `list[str]`: The operation result.
+Yield boundary messages and resume only after the agent inserts them.
 
-#### `InteractionController.take_search_transition(self) -> str | None`
+#### `InteractionManager.cancellable(self, cancel: Callable[[], None]) -> Iterator[None]`
 
-Consume a request to advance to the next branch or restart.
+Register the cancellation callback for the current blocking operation.
 
+#### `InteractionManager.publish_event(self, kind: InteractionEventKind, payload: Mapping[str, Any]) -> dict[str, Any]`
 
-**Returns**
+Append one observable event to this agent's timeline.
 
-- `str | None`: The operation result.
+#### `InteractionManager.get_recent_events(self, after_sequence: int=0) -> dict[str, Any]`
 
-#### `InteractionController.ask(self, message: str, timeout: float | None=None) -> str`
+Return retained events newer than a consumer-owned sequence cursor.
 
-Run the ``ask`` operation.
+#### `InteractionManager.export_state(self) -> dict[str, Any]`
 
+Return the durable portion of this manager's state.
 
-**Args**
+#### `InteractionManager.restore_state(self, snapshot: Mapping[str, Any]) -> bool`
 
-- `message`: Message text or provider message payload.
-- `timeout`: Maximum wait time in seconds.
+Restore durable state and interrupt work that died with the process.
 
+Returns whether an in-flight operation had to be converted into an
+interruption. Runtime callbacks and locks are deliberately never
+restored.
 
-**Returns**
+### `sr_harness.runtime.interaction_manager.SRInteractionManager`
 
-- `str`: The operation result.
+Interaction manager with symbolic-regression branch commands.
 
-#### `InteractionController.reply(self, event_id: str, message: str) -> None`
+#### `SRInteractionManager.command(self, action: SRInteractionAction, message: str | None=None) -> dict[str, Any]`
 
-Run the ``reply`` operation.
+Apply a common command or queue an SR branch transition.
 
+#### `SRInteractionManager.consume_search_transition(self) -> Literal['next_c', 'next_r'] | None`
 
-**Args**
+Consume the newest queued branch transition.
 
-- `event_id`: Identifier of a pending interaction event.
-- `message`: Message text or provider message payload.
+#### `SRInteractionManager.status(self) -> dict[str, Any]`
 
-#### `InteractionController.events(self, after_seq: int=0) -> list[dict[str, Any]]`
+Include the pending SR branch transition in the control snapshot.
 
-Run the ``events`` operation.
+#### `SRInteractionManager.export_state(self) -> dict[str, Any]`
 
+Include pending search transitions in the durable snapshot.
 
-**Args**
+#### `SRInteractionManager.restore_state(self, snapshot: Mapping[str, Any]) -> bool`
 
-- `after_seq`: Last observed event sequence.
-
-
-**Returns**
-
-- `list[dict[str, Any]]`: The operation result.
-
-#### `InteractionController.publish(self, kind: str, payload: dict[str, Any]) -> dict[str, Any]`
-
-Publish .
-
-
-**Args**
-
-- `kind`: Event or resource kind.
-- `payload`: Serializable event payload.
-
-
-**Returns**
-
-- `dict[str, Any]`: The operation result.
+Restore common state plus queued symbolic-search transitions.
 
 ## `sr_harness.runtime.model_router`
 
@@ -2761,41 +2545,6 @@ Create a custom skill file or update a file in an editable skill.
 
 - `Skill`: The operation result.
 
-## `sr_harness.tools.ask_human`
-
-### `sr_harness.tools.ask_human.AskHumanTool`
-
-Implementation of the ask human tool.
-
-#### `AskHumanTool.execute(self, message: str) -> Dict[str, Any]`
-
-Pause execution and request human input needed to continue. Use this as a normal 
-    collaboration step during planning or execution whenever continuing autonomously 
-    would require a meaningful assumption about user intent, scientific goals, constraints, 
-    preferences, evaluation criteria, search direction, or a high-impact tradeoff.
-
-
-**Args**
-
-- `message`: A message containing progress summary followed by a question.
-        The message should first summarize current progress (what we have tried,
-        what the best result is so far, and what we have learned), then asks a clear question
-        about what direction to explore next. A human expert will read this summary and reply with guidance.
-
-#### `AskHumanTool.format_result_dict(cls, result: Dict[str, Any]) -> str`
-
-Format a tool result for the language model.
-
-
-**Args**
-
-- `result`: Result mapping to format or update.
-
-
-**Returns**
-
-- `str`: The operation result.
-
 ## `sr_harness.tools.base_tool`
 
 ### `sr_harness.tools.base_tool.ToolRunAbort`
@@ -2841,6 +2590,10 @@ Subclasses may override this method to provide a clearer presentation.
 **Returns**
 
     Text to append to the model conversation.
+
+#### `BaseTool.cancel(self) -> None`
+
+Request cancellation when a tool offers no stronger primitive.
 
 #### `BaseTool.normalize_formula(cls, eq: str, *, strip_modules: bool=True) -> str`
 
@@ -2901,7 +2654,7 @@ Load OpenAI-compatible function-tool definitions.
 
 #### `BaseTool.load_tool_list(cls, tools_used: list[str] | None=None) -> list[dict]`
 
-Load tool metadata for legacy parsers.
+Load tool metadata for text and JSON parsers.
 
 
 **Args**
@@ -3046,11 +2799,11 @@ This helper lets code-defined models reuse the symbolic tools' metric definition
 
     Fit, correlation, information-criterion, and complexity metrics.
 
-#### `BaseTool.evaluate(self, f: engine.Expression, y: engine.Expression, show_diagnostics: bool=True) -> Dict[str, Any]`
+#### `BaseTool.evaluate(self, f: engine.Expression, y: engine.Expression, show_diagnostics: bool=True, fit: bool=False) -> Dict[str, Any]`
 
 Evaluate a symbolic prediction against a symbolic target.
 
-Formula complexity is ``len(f)``. Residual diagnostics include an error profile, worst samples, and strong residual-variable correlations.
+Metrics, including formula complexity, are supplied by the active evaluator. Residual diagnostics include an error profile, worst samples, and strong residual-variable correlations.
 
 
 **Args**
@@ -3058,13 +2811,14 @@ Formula complexity is ``len(f)``. Residual diagnostics include an error profile,
 - `f`: Symbolic prediction expression.
 - `y`: Symbolic target expression.
 - `show_diagnostics`: Whether to include residual diagnostics.
+- `fit`: Whether to fit parameters on the training split before scoring.
 
 
 **Returns**
 
     Candidate eligibility and metrics for each available data split.
 
-#### `BaseTool.failed_evaluation(self, formula: str='(None)', show_diagnostics: bool=True) -> Dict[str, Any]`
+#### `BaseTool.failed_evaluation(self, formula: str='(None)') -> Dict[str, Any]`
 
 Build the common result shape when a formula-producing backend fails.
 
@@ -3072,8 +2826,6 @@ Build the common result shape when a formula-producing backend fails.
 **Args**
 
 - `formula`: Formula or placeholder to report.
-- `show_diagnostics`: Retained for compatibility with successful evaluation calls.
-
 
 **Returns**
 
@@ -3576,44 +3328,6 @@ Run the ``bounded int`` operation.
 
 - `int`: The operation result.
 
-## `sr_harness.tools.commit_data`
-
-### `sr_harness.tools.commit_data.CommitDataTool`
-
-Implementation of the commit data tool.
-
-#### `CommitDataTool.execute(self, path: str, target: str, features: list[str], variable_descriptions: dict[str, str] | None=None, provenance_note: str='') -> dict[str, Any]`
-
-Validate a prepared table and atomically publish it to symbolic regression.
-
-The source file remains in the workspace. Only the selected target and
-feature columns are committed, and every selected column must be finite
-and numeric. Use workspace_code_executor first for cleaning, joining,
-interpolation, encoding, and time alignment.
-
-
-**Args**
-
-- `path`: Relative path to a CSV or Excel file in the workspace.
-- `target`: Column to use as the dependent variable.
-- `features`: Columns to use as independent variables.
-- `variable_descriptions`: Optional human-readable descriptions keyed by column name.
-- `provenance_note`: Short note describing source and transformations.
-
-#### `CommitDataTool.format_result_dict(cls, result: dict[str, Any]) -> str`
-
-Format a tool result for the language model.
-
-
-**Args**
-
-- `result`: Result mapping to format or update.
-
-
-**Returns**
-
-- `str`: The operation result.
-
 ## `sr_harness.tools.constant_fit`
 
 ### `sr_harness.tools.constant_fit.ConstantFitTool`
@@ -4012,44 +3726,20 @@ Format a tool result for the language model.
 
 - `str`: The operation result.
 
-## `sr_harness.tools.load_context_data`
+## `sr_harness.tools.model_test`
 
-### `sr_harness.tools.load_context_data.LoadContextDataTool`
+### `sr_harness.tools.model_test.ModelTestTool`
 
-Implementation of the context-data validation and loading boundary.
+Report a requested value during a model connectivity test.
 
-#### `LoadContextDataTool.execute(self, path: str='context.data') -> dict[str, Any]`
+#### `ModelTestTool.execute(self, answer: str)`
 
-Validate a context-data manifest and load it when valid.
-
-The directory must contain ``manifest.json`` and a flat collection of
-NPY files. This tool reports every detected manifest, filename, dtype,
-dimension, and axis-length problem in one call. A valid collection is
-atomically published as ``context.data`` for subsequent tools and agents.
+Return the value supplied by the model-test request.
 
 
 **Args**
 
-- `path`: Workspace-relative directory containing ``manifest.json``.
-
-
-**Returns**
-
-    Validation diagnostics and the committed context revision when valid.
-
-#### `LoadContextDataTool.format_result_dict(cls, result: dict[str, Any]) -> str`
-
-Format validation diagnostics for the language model.
-
-
-**Args**
-
-- `result`: Structured validation and commit result.
-
-
-**Returns**
-
-    Concise diagnostics or a loaded-variable summary.
+- `answer`: Exact value requested by the test prompt.
 
 ## `sr_harness.tools.nd2`
 
@@ -4350,6 +4040,18 @@ Format a tool result for the language model.
 
 - `str`: The operation result.
 
+## `sr_harness.tools.read_source`
+
+### `sr_harness.tools.read_source.ReadSourceTool`
+
+Inspect installed source files and locate symbol definitions or references.
+
+#### `ReadSourceTool.execute(self, path: str | None=None, symbol: str | None=None, include_implementation: bool=True, include_references: bool=False) -> dict[str, Any]`
+
+
+
+#### `ReadSourceTool.format_result_dict(cls, result: dict[str, Any]) -> str`
+
 ## `sr_harness.tools.relationship_analysis`
 
 ### `sr_harness.tools.relationship_analysis.RelationshipAnalysisTool`
@@ -4531,6 +4233,56 @@ Format a tool result for the language model.
 
 - `str`: The operation result.
 
+## `sr_harness.tools.validate_context_data`
+
+### `sr_harness.tools.validate_context_data.ValidateContextDataTool`
+
+Validate context.data without mutating the live AgentContext.
+
+#### `ValidateContextDataTool.execute(self, path: str='context.data') -> dict[str, Any]`
+
+Validate a manifest-backed context-data directory and explain every repair.
+
+This calls the production ``load_context_data`` loader, so a successful
+result guarantees that InteractiveSession can load the same collection.
+On failure it returns all detectable errors together with specific repair
+suggestions instead of stopping at an opaque exception.
+
+
+**Args**
+
+- `path`: Workspace-relative directory containing manifest.json and flat NPY files.
+
+
+**Returns**
+
+    Validation status, complete diagnostics, array summaries, and repair actions.
+
+#### `ValidateContextDataTool.format_result_dict(cls, result: dict[str, Any]) -> str`
+
+Format complete, actionable diagnostics for the data-preparation Agent.
+
+## `sr_harness.tools.validate_evaluator`
+
+### `sr_harness.tools.validate_evaluator.ValidateEvaluatorTool`
+
+Load an evaluator file in isolation and use it to evaluate one formula.
+
+#### `ValidateEvaluatorTool.execute(self, f: str, evaluator_file: str | None=None, y: str | None=None, fit: bool=False, show_diagnostics: bool=False) -> dict[str, Any]`
+
+Validate a custom evaluator without changing the live context.
+
+
+**Args**
+
+- `evaluator_file`: Optional workspace-relative Python file under context.evaluator/. When omitted, validate the evaluator already attached to the context.
+- `f`: Formula to evaluate.
+- `y`: Optional target expression; defaults to context.target.
+- `fit`: Whether to fit formula parameters first.
+- `show_diagnostics`: Whether to include residual diagnostics.
+
+#### `ValidateEvaluatorTool.format_result_dict(cls, result: dict[str, Any]) -> str`
+
 ## `sr_harness.tools.web_research`
 
 ### `sr_harness.tools.web_research.WebSearchTool`
@@ -4567,7 +4319,7 @@ Fetch readable text from a public HTTP or HTTPS page.
 
 允许工作区内文件访问的沙箱执行器。
 
-#### `WorkspaceSandBoxCodeExecutor.check_workspace_path(cls, path, workspace_dir: str, readonly_mounts: dict[str, str] | None=None, *, write: bool=False) -> str`
+#### `WorkspaceSandBoxCodeExecutor.check_workspace_path(cls, path, workspace_dir: str, readonly_mounts: dict[str, str] | None=None, *, write: bool=False, modify_entry: bool=False) -> str`
 
 Validate a path and return its normalized location inside the workspace.
 
@@ -4578,6 +4330,8 @@ Validate a path and return its normalized location inside the workspace.
 - `workspace_dir`: Workspace root directory.
 - `readonly_mounts`: Read-only workspace names mapped to source paths.
 - `write`: Whether the caller intends to modify the path.
+- `modify_entry`: Whether the operation modifies the path's directory entry
+        instead of writing an existing file's contents in place.
 
 
 **Returns**
@@ -4792,7 +4546,7 @@ Set a file or directory tree's advisory filesystem lock.
 
 - `ValueError`: If the path is invalid, missing, or belongs to a startup mount.
 
-#### `Workspace.resolve(self, relative_path: str, *, write: bool=False) -> Path | None`
+#### `Workspace.resolve(self, relative_path: str, *, write: bool=False, modify_entry: bool=False) -> Path | None`
 
 Resolve a relative path inside the workspace.
 
@@ -4803,6 +4557,9 @@ Resolve a relative path inside the workspace.
 
 - `relative_path`: Relative path supplied by the caller.
 - `write`: Whether the caller intends to modify the resolved path.
+- `modify_entry`: Whether the operation creates, removes, renames, or replaces
+        a directory entry. Such operations require a writable parent directory;
+        an in-place file-content write only requires a writable file.
 
 
 **Returns**
@@ -4896,7 +4653,7 @@ Execute one command segment after pipeline parsing.
 
 ## `sr_harness.web.app`
 
-### `sr_harness.web.app.create_app(log_dir: str | Path=DEFAULT_LOG_DIR, *, controller: InteractionController, session=None) -> FastAPI`
+### `sr_harness.web.app.create_app(log_dir: str | Path=DEFAULT_LOG_DIR, *, session=None, conversation_registry=None) -> FastAPI`
 
 Create app.
 
@@ -4904,13 +4661,85 @@ Create app.
 **Args**
 
 - `log_dir`: The log dir value.
-- `controller`: The controller value.
 - `session`: The session value.
+- `conversation_registry`: Optional persistent conversation registry.
 
 
 **Returns**
 
 - `FastAPI`: The operation result.
+
+## `sr_harness.web.conversations`
+
+### `sr_harness.web.conversations.ConversationSessionProxy`
+
+Resolve attribute access to the session bound to the current request.
+
+#### `ConversationSessionProxy.bind(self, session: InteractiveSession)`
+
+
+
+#### `ConversationSessionProxy.reset(self, token) -> None`
+
+
+
+#### `ConversationSessionProxy.current_session(self) -> InteractiveSession`
+
+
+
+### `sr_harness.web.conversations.ConversationRegistry`
+
+Persist conversation metadata and lazily own one session per conversation.
+
+#### `ConversationRegistry.default_session(self) -> InteractiveSession`
+
+
+
+#### `ConversationRegistry.persist(self) -> None`
+
+Atomically persist every materialized InteractiveSession.
+
+#### `ConversationRegistry.resolve(self, client_id: str, selected_id: str | None) -> tuple[dict[str, Any], InteractiveSession]`
+
+
+
+#### `ConversationRegistry.list(self, client_id: str, selected_id: str | None=None) -> dict[str, Any]`
+
+
+
+#### `ConversationRegistry.create(self, client_id: str, name: str | None=None) -> dict[str, Any]`
+
+
+
+#### `ConversationRegistry.select(self, client_id: str, conversation_id: str) -> dict[str, Any]`
+
+
+
+#### `ConversationRegistry.rename(self, client_id: str, conversation_id: str, name: str) -> dict[str, Any]`
+
+
+
+#### `ConversationRegistry.archive(self, client_id: str, conversation_id: str, selected_id: str) -> tuple[dict[str, Any], dict[str, Any]]`
+
+Archive a conversation and choose the conversation that remains selected.
+
+#### `ConversationRegistry.export(self, client_id: str, conversation_id: str) -> tuple[Path, str]`
+
+Create a temporary ZIP containing a conversation and its retained state.
+
+#### `ConversationRegistry.close(self) -> None`
+
+
+
+### `sr_harness.web.conversations.mount_conversations(app, registry: ConversationRegistry) -> None`
+
+Bind browser identity, conversation selection, and registry endpoints.
+
+## `sr_harness.web.demo_data`
+
+### `sr_harness.web.demo_data.build_demo(kind: str) -> tuple[dict[str, np.ndarray], dict[str, Any], str]`
+
+Return arrays, a context.data manifest, and the suggested target variable.
 
 ## `sr_harness.web.platform`
 
@@ -4934,9 +4763,57 @@ Own one run for the lifetime of the server; no account/session registry.
 
 Release temporary resources owned by the session.
 
+#### `InteractiveSession.interrupt_active_work(self) -> None`
+
+Force active model/tool operations toward a safe shutdown boundary.
+
 #### `InteractiveSession.snapshot(self)`
 
 Return a serializable snapshot of the current session.
+
+#### `InteractiveSession.export_persistent_state(self) -> dict[str, Any]`
+
+Return a JSON-safe snapshot that can be restored in a new process.
+
+#### `InteractiveSession.restore_persistent_state(self, snapshot: dict[str, Any]) -> None`
+
+Restore a durable snapshot and terminate operations lost on restart.
+
+#### `InteractiveSession.evaluator_configuration(self)`
+
+Return the selected evaluator and every available evaluator.
+
+#### `InteractiveSession.evaluator_editable(self) -> bool`
+
+Return whether evaluator mutation is safe for the active search.
+
+#### `InteractiveSession.configure_evaluator(self, payload)`
+
+Validate and select an evaluator before symbolic regression starts.
+
+#### `InteractiveSession.test_evaluator(self, payload)`
+
+Validate the selected evaluator against the best available formula.
+
+#### `InteractiveSession.assist_evaluator(self, payload)`
+
+Let a restricted agent construct, exercise, and repair an evaluator.
+
+#### `InteractiveSession.start_evaluator_assistance(self, payload)`
+
+Start evaluator construction in a cancellable background thread.
+
+#### `InteractiveSession.stop_evaluator_assistance(self)`
+
+Request cancellation of the active evaluator-construction turn.
+
+#### `InteractiveSession.configure_evaluator_agent(self, payload)`
+
+Validate and persist evaluator-construction agent model settings.
+
+#### `InteractiveSession.test_evaluator_agent_model(self, payload)`
+
+Test evaluator-construction agent model settings without applying them.
 
 #### `InteractiveSession.capabilities(self, agent: str='search')`
 
@@ -5067,7 +4944,7 @@ Validate variable descriptions.
 
 - `payload`: Serializable event payload.
 
-#### `InteractiveSession.create_demo(self)`
+#### `InteractiveSession.create_demo(self, kind: str='polynomial')`
 
 Create and load a manifest-backed sample dataset.
 
@@ -5080,6 +4957,10 @@ Create and load a manifest-backed sample dataset.
 **Raises**
 
 - `FileExistsError`: If ``context.data`` already exists and is not empty.
+
+#### `InteractiveSession.reload_context_data(self)`
+
+Reload ``context.data`` from the workspace into the shared context.
 
 #### `InteractiveSession.validate_settings(payload, initial=False)`
 
@@ -5100,6 +4981,10 @@ Validate data agent settings.
 
 - `payload`: Serializable event payload.
 
+#### `InteractiveSession.validate_evaluator_agent_settings(payload)`
+
+Validate the restricted evaluator-agent model settings.
+
 #### `InteractiveSession.configure_data_agent(self, payload)`
 
 Run the ``configure data agent`` operation.
@@ -5117,6 +5002,20 @@ Test plain completion and tool-call support without changing agent history.
 **Args**
 
 - `payload`: Data-agent settings currently entered in the Web UI.
+
+
+**Returns**
+
+    Connectivity and parsed tool-call diagnostics.
+
+#### `InteractiveSession.test_model(self, payload)`
+
+Test the symbolic-regression model settings without applying them.
+
+
+**Args**
+
+- `payload`: Runtime settings currently entered in the Web UI.
 
 
 **Returns**

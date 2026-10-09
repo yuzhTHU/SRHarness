@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -34,10 +36,11 @@ def test_named_parameter_default_and_fit():
 
 def test_expression_fit_and_evaluate_accept_a_context_directly():
     x = np.linspace(-2.0, 2.0, 21)
-    context = {
-        "data": {"x": x},
-        "target": 3.0 * x - 1.0,
-    }
+    context = SimpleNamespace(
+        data={"x": x},
+        target=3.0 * x - 1.0,
+        num_nodes=None,
+    )
 
     fitted = engine.parse("param('slope') * x + param('bias')").fit(context).expression
 
@@ -45,7 +48,12 @@ def test_expression_fit_and_evaluate_accept_a_context_directly():
         "slope": pytest.approx(3.0),
         "bias": pytest.approx(-1.0),
     }
-    assert np.allclose(fitted.evaluate(context), context["target"], atol=1e-5)
+    assert np.allclose(fitted.evaluate(context), context.target, atol=1e-5)
+
+
+def test_value_mapping_is_not_interpreted_as_a_context_envelope():
+    with pytest.raises(KeyError, match="symbol 'x'"):
+        engine.parse("x").evaluate({"data": {"x": np.array([1.0])}})
 
 
 def test_grouped_parameter_fit():

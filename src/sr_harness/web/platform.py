@@ -28,6 +28,35 @@ def mount_platform(app, session: InteractiveSession):
     """
     app.state.session = session
 
+    def context_preview_groups():
+        with session.lock:
+            axis_names = session.context.axis_names()
+            groups = []
+            for axis in axis_names:
+                variables = [
+                    name for name, dimensions in session.context.variable_axes.items()
+                    if dimensions == (axis,) and session.context.data[name].ndim == 1
+                ]
+                if not variables:
+                    continue
+                groups.append({
+                    "id": f"axis:{axis}", "kind": "axis", "axis": axis,
+                    "axes": [axis], "variables": variables,
+                    "shape": [len(session.context.data[axis])],
+                })
+            for name, dimensions in session.context.variable_axes.items():
+                value = session.context.data[name]
+                if value.ndim <= 1:
+                    continue
+                groups.append({
+                    "id": f"variable:{name}",
+                    "kind": "relation" if name in session.context.relation_names else "variable",
+                    "variable": name,
+                    "axes": list(dimensions), "shape": list(value.shape),
+                    "dtype": str(value.dtype),
+                })
+            return groups
+
     @app.get('/api/session')
     def status():
         return session.snapshot()
@@ -120,13 +149,6 @@ def mount_platform(app, session: InteractiveSession):
         except Exception as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    @app.post('/api/evaluator/agent')
-    def assist_evaluator(payload: dict = Body(...)):
-        try:
-            return session.assist_evaluator(payload)
-        except Exception as exc:
-            raise HTTPException(400, str(exc)) from exc
-
     @app.post('/api/evaluator/agent/start')
     def start_evaluator_assistance(payload: dict = Body(...)):
         try:
@@ -208,6 +230,7 @@ def mount_platform(app, session: InteractiveSession):
             }
         return {
             **json_value(schema),
+            "preview_groups": context_preview_groups(),
             "columns": columns,
             "preview_columns": preview_columns,
             "column_kinds": {
@@ -219,6 +242,297 @@ def mount_platform(app, session: InteractiveSession):
             "data": records,
             "truncated": total > count,
         }
+
+    @app.get('/api/data/context/preview')
+    def data_context_preview(group: str, limit: int = 100):
+        limit = max(1, min(limit, 300))
+        with session.lock:
+            groups = {item["id"]: item for item in context_preview_groups()}
+            selected = groups.get(group)
+            if selected is None:
+                raise HTTPException(404, "Unknown context data preview group")
+            if selected["kind"] == "axis":
+                axis = selected["axis"]
+                columns = [axis, *selected["variables"]]
+                arrays = {name: session.context.data[name] for name in columns}
+                size = len(arrays[axis])
+                count = min(size, limit)
+                return {
+                    **selected, "dtype": str(arrays[axis].dtype),
+                    "columns": columns,
+                    "column_kinds": {axis: "axis"} | {
+                        name: "variable" for name in selected["variables"]
+                    },
+                    "data": [
+                        {name: json_value(arrays[name][index]) for name in columns}
+                        for index in range(count)
+                    ],
+                    "truncated": size > count,
+                }
+
+            name = selected["variable"]
+            value = session.context.data[name]
+            axes = selected["axes"]
+            if selected["kind"] == "relation":
+                num_nodes = session.context.num_nodes or 0
+                relation_limit = min(limit, len(value))
+                candidate_axes = []
+                for order, axis in enumerate(session.context.axis_names()):
+                    if len(session.context.data[axis]) != num_nodes:
+                        continue
+                    uses_as_structure_axis = sum(
+                        dimensions and dimensions[-1] == axis
+                        for variable, dimensions in session.context.variable_axes.items()
+                        if variable not in session.context.relation_names
+                        and variable not in session.context.variable_structures
+                    )
+                    if uses_as_structure_axis:
+                        candidate_axes.append((-uses_as_structure_axis, order, axis))
+                node_axis = min(candidate_axes)[2] if candidate_axes else None
+                labels = (
+                    session.context.data[node_axis]
+                    if node_axis is not None else np.arange(num_nodes)
+                )
+                max_nodes = 160
+                if num_nodes <= max_nodes:
+                    node_ids = list(range(num_nodes))
+                else:
+                    node_ids = []
+                    seen = set()
+                    for row in value[:relation_limit]:
+                        for endpoint in row:
+                            endpoint = int(endpoint)
+                            if endpoint not in seen and len(node_ids) < max_nodes:
+                                seen.add(endpoint)
+                                node_ids.append(endpoint)
+                visible_nodes = set(node_ids)
+                coordinates = [
+                    row for row in value[:relation_limit]
+                    if all(int(endpoint) in visible_nodes for endpoint in row)
+                ]
+                return {
+                    **selected,
+                    "description": session.context.variable_descriptions.get(name, ""),
+                    "node_axis": node_axis,
+                    "nodes": [
+                        {"id": node, "label": json_value(labels[node])}
+                        for node in node_ids
+                    ],
+                    "coordinates": json_value(np.asarray(coordinates)),
+                    "endpoint_count": int(value.shape[1]),
+                    "relation_count": int(value.shape[0]),
+                    "truncated": (
+                        len(coordinates) < len(value) or len(node_ids) < num_nodes
+                    ),
+                }
+            result = {
+                **selected,
+                "description": session.context.variable_descriptions.get(name, ""),
+                "axis_values": {
+                    axis: json_value(session.context.data[axis][:limit])
+                    for axis in axes
+                },
+                "axis_truncated": {
+                    axis: len(session.context.data[axis]) > limit for axis in axes
+                },
+            }
+            if value.ndim == 2:
+                row_count = min(value.shape[0], limit)
+                column_count = min(value.shape[1], limit)
+                result.update({
+                    "values": json_value(value[:row_count, :column_count]),
+                    "truncated": [
+                        value.shape[0] > row_count, value.shape[1] > column_count,
+                    ],
+                })
+            elif value.ndim == 3:
+                flattened = value.reshape(-1)
+                result["sample_values"] = json_value(flattened[:min(8, flattened.size)])
+                if value.dtype.kind in "iufcb" and flattened.size:
+                    numeric = np.asarray(flattened, dtype=float)
+                    finite = numeric[np.isfinite(numeric)]
+                    if finite.size:
+                        result["value_range"] = [float(finite.min()), float(finite.max())]
+            return result
+
+    @app.get('/api/data/context/plot')
+    def data_context_plot(
+        x: str, y: str, hue: str | None = None, size: str | None = None,
+        limit: int = 2000,
+    ):
+        limit = max(1, min(limit, 5000))
+        with session.lock:
+            selected = {
+                channel: name for channel, name in {
+                    "x": x, "y": y, "hue": hue, "size": size,
+                }.items() if name
+            }
+            missing = sorted(set(selected.values()) - set(session.context.data))
+            if missing:
+                raise HTTPException(404, f"Unknown context variables: {missing}")
+            axis_names = set(session.context.axis_names())
+            dimensions = {
+                name: ((name,) if name in axis_names else session.context.variable_axes[name])
+                for name in selected.values()
+            }
+            repeated = {
+                name: axes for name, axes in dimensions.items()
+                if len(set(axes)) != len(axes)
+            }
+            if repeated:
+                raise HTTPException(400, f"Repeated axis names are not supported: {repeated}")
+            broadcast_axes = list(dict.fromkeys(
+                axis for name in selected.values() for axis in dimensions[name]
+            ))
+            broadcast_shape = tuple(
+                len(session.context.data[axis]) for axis in broadcast_axes
+            )
+            total = int(np.prod(broadcast_shape, dtype=np.int64)) if broadcast_shape else 1
+            count = min(total, limit)
+            flat_indices = (
+                np.arange(total, dtype=np.int64) if total <= limit else
+                np.linspace(0, total - 1, count, dtype=np.int64)
+            )
+            coordinates = np.unravel_index(flat_indices, broadcast_shape) if broadcast_shape else ()
+            values = {}
+            numeric = {}
+            for name in selected.values():
+                value = session.context.data[name]
+                source_axes = dimensions[name]
+                permutation = sorted(
+                    range(len(source_axes)), key=lambda index: broadcast_axes.index(source_axes[index])
+                )
+                ordered_axes = tuple(source_axes[index] for index in permutation)
+                aligned = np.transpose(value, permutation) if permutation else value
+                aligned_shape = tuple(
+                    aligned.shape[ordered_axes.index(axis)] if axis in ordered_axes else 1
+                    for axis in broadcast_axes
+                )
+                broadcast = np.broadcast_to(aligned.reshape(aligned_shape), broadcast_shape)
+                sampled = broadcast[coordinates] if broadcast_shape else np.asarray([broadcast.item()])
+                values[name] = json_value(sampled)
+                numeric[name] = value.dtype.kind in "iufcb"
+            return {
+                "channels": selected,
+                "axes": broadcast_axes,
+                "shape": list(broadcast_shape),
+                "total": total,
+                "count": count,
+                "truncated": total > count,
+                "values": values,
+                "numeric": numeric,
+            }
+
+    @app.post('/api/data/context/heatmap')
+    def data_context_heatmap(payload: dict = Body(...)):
+        with session.lock:
+            raw_row = payload.get("row", [])
+            raw_column = payload.get("column", [])
+            if not isinstance(raw_row, list) or not isinstance(raw_column, list):
+                raise HTTPException(400, "row and column must be lists")
+            row = [str(name) for name in raw_row]
+            column = [str(name) for name in raw_column]
+            color = str(payload.get("color", ""))
+            z = str(payload.get("z", ""))
+            try:
+                z_index = int(payload.get("z_index", 0))
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(400, "z_index must be an integer") from exc
+            axis_names = set(session.context.axis_names())
+            names = {*row, *column, *([color] if color else []), *([z] if z else [])}
+            missing = sorted(names - set(session.context.data))
+            if missing:
+                raise HTTPException(404, f"Unknown context variables: {missing}")
+
+            if color:
+                if color in axis_names:
+                    raise HTTPException(400, "Color must be a two- or three-dimensional variable")
+                color_axes = session.context.variable_axes[color]
+                if len(color_axes) not in {2, 3}:
+                    raise HTTPException(400, "Color must be a two- or three-dimensional variable")
+                if len(row) != 1 or row[0] not in axis_names:
+                    raise HTTPException(400, "Row must contain exactly one axis")
+                if len(column) != 1 or column[0] not in axis_names:
+                    raise HTTPException(400, "Column must contain exactly one axis")
+                row_axis, column_axis = row[0], column[0]
+                if row_axis == column_axis or row_axis not in color_axes or column_axis not in color_axes:
+                    raise HTTPException(400, "Row and column must be different axes of the color variable")
+                remaining = [axis for axis in color_axes if axis not in {row_axis, column_axis}]
+                if remaining:
+                    if z != remaining[0]:
+                        raise HTTPException(400, f"Z must be the remaining color axis {remaining[0]!r}")
+                    z_size = len(session.context.data[z])
+                    if not 0 <= z_index < z_size:
+                        raise HTTPException(400, f"z_index must be in [0, {z_size})")
+                    matrix = np.take(
+                        session.context.data[color], z_index,
+                        axis=color_axes.index(z),
+                    )
+                    remaining_axes = tuple(axis for axis in color_axes if axis != z)
+                    z_value = json_value(session.context.data[z][z_index])
+                else:
+                    if z:
+                        raise HTTPException(400, "Z is only used with a three-dimensional color variable")
+                    matrix = session.context.data[color]
+                    remaining_axes = color_axes
+                    z_size = 0
+                    z_value = None
+                if remaining_axes != (row_axis, column_axis):
+                    matrix = np.transpose(matrix, (
+                        remaining_axes.index(row_axis), remaining_axes.index(column_axis),
+                    ))
+                row_labels = session.context.data[row_axis]
+                column_labels = session.context.data[column_axis]
+                mode = "tensor"
+            else:
+                row_is_axis = len(row) == 1 and row[0] in axis_names
+                column_is_axis = len(column) == 1 and column[0] in axis_names
+                if row_is_axis == column_is_axis:
+                    raise HTTPException(
+                        400, "Place one axis in row or column and aligned one-dimensional variables on the other side",
+                    )
+                axis = row[0] if row_is_axis else column[0]
+                variables = column if row_is_axis else row
+                if not variables:
+                    raise HTTPException(400, "Select at least one aligned one-dimensional variable")
+                invalid = [
+                    name for name in variables
+                    if name in axis_names or session.context.variable_axes[name] != (axis,)
+                ]
+                if invalid:
+                    raise HTTPException(400, f"Variables must use only axis {axis!r}: {invalid}")
+                arrays = [session.context.data[name] for name in variables]
+                if row_is_axis:
+                    matrix = np.column_stack(arrays)
+                    row_axis, column_axis = axis, "variables"
+                    row_labels, column_labels = session.context.data[axis], np.asarray(variables)
+                else:
+                    matrix = np.vstack(arrays)
+                    row_axis, column_axis = "variables", axis
+                    row_labels, column_labels = np.asarray(variables), session.context.data[axis]
+                z_size = 0
+                z_value = None
+                mode = "aligned_variables"
+
+            row_count = min(matrix.shape[0], 80)
+            column_count = min(matrix.shape[1], 80)
+            shown = matrix[:row_count, :column_count]
+            return {
+                "mode": mode,
+                "row_axis": row_axis,
+                "column_axis": column_axis,
+                "row_labels": json_value(row_labels[:row_count]),
+                "column_labels": json_value(column_labels[:column_count]),
+                "values": json_value(shown),
+                "shape": list(matrix.shape),
+                "dtype": str(matrix.dtype),
+                "numeric": matrix.dtype.kind in "iufcb",
+                "truncated": row_count < matrix.shape[0] or column_count < matrix.shape[1],
+                "z_axis": z or None,
+                "z_index": z_index if z else None,
+                "z_value": z_value,
+                "z_size": z_size,
+            }
 
     @app.post('/api/data/context/reload')
     def reload_data_context():
@@ -335,9 +649,7 @@ def mount_platform(app, session: InteractiveSession):
                     session.context.variable_descriptions[name] = descriptions[name]
                     changed = True
             if changed:
-                session.context.args.data_revision = int(
-                    getattr(session.context.args, "data_revision", 0)
-                ) + 1
+                session.context.args.data_revision += 1
             session.variable_descriptions = dict(
                 session.context.variable_descriptions
             )

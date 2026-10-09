@@ -56,7 +56,7 @@ Install optional components as needed:
 
 ```bash
 pip install -e ".[web]"       # Web search-tree viewer
-pip install -e ".[tools]"     # PySR, gplearn, PySINDy, and PDF integrations
+pip install -e ".[tools]"     # PySR, PySINDy, and PDF integrations
 pip install -e ".[nn]"        # Experimental neural components
 pip install -e ".[all]"       # Everything above
 ```
@@ -193,20 +193,28 @@ pip install -e ".[web]"
 sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 ```
 
-By default, the workbench uses a temporary workspace. Select a persistent workspace and mount
-existing files or directories into it as read-only inputs when needed:
+`--workspace-dir` stores the conversation registry and one persistent workspace per conversation.
+Without it, an explicit save path is reused as the workspace directory; if neither is provided,
+the workbench uses a temporary directory and warns that conversation records may be lost. Mount
+existing files or directories into every new conversation as read-only inputs when needed:
 
 ```bash
-sr-harness run --workspace ./workspace --mount ./data.csv ./papers --port 8000
+sr-harness run --workspace-dir ./workspaces --mount ./data.csv ./papers --port 8000
 ```
 
 Mounted inputs must have unique basenames. They remain readable by the data-preparation Agent and
-preview APIs, while workspace uploads and tools cannot modify their source contents. Files already
-present in a selected workspace are writable and may be changed or deleted by AI-operated tools;
-the CLI prints a warning when the selected directory is not empty.
+preview APIs, while workspace uploads and tools cannot modify their source contents. Ordinary files
+inside each conversation workspace are writable and may be changed or deleted by AI-operated tools.
+By default all browsers share the conversation list; pass `--isolate-users` to isolate visible
+conversations by a persistent browser cookie. When `--save-path` or `--save-dir` supplies a durable
+save path, the server periodically snapshots each materialized interactive session. Restarting with
+the same path restores its timeline, settings, prepared context, evaluator selection, and search
+records. Model or tool work that was still active at shutdown is restored as interrupted rather than
+as a misleading live task. Snapshots are stored under `<save-path>/sessions/`.
 
-Then open <http://127.0.0.1:8000/>. The Web API and search viewer read the active session's
-in-memory `SearchRunState`; they do not depend on persisted run files.
+Then open <http://127.0.0.1:8000/>. During a process lifetime the Web API and search viewer read the
+active session's in-memory `SearchRunState`; durable session snapshots rebuild that state after a
+server restart.
 
 ![SRHarness data workbench](docs/assets/web-data-workbench.png)
 
@@ -226,8 +234,9 @@ contains three input columns (including one categorical column) and one numeric 
 During a run, **Timeline** shows model reasoning, tool calls, results, token/cost usage, and control
 events, while **Current Context** exposes the messages associated with each R-C-L node. The search
 tree and candidate panel stay linked to those nodes and can switch between all ranked candidates
-and the Pareto front. Guidance, model changes, pause/resume, stop, and inline `ask_human` replies
-take effect at safe operation boundaries. The interface supports Chinese/English text, light/dark
+and the Pareto front. Guidance, model changes, and pause requests take effect at safe operation
+boundaries; a second pause request interrupts the active model or tool operation so the Agent can
+reach that boundary sooner. A tool-free assistant reply naturally yields control to the user. The interface supports Chinese/English text, light/dark
 themes, and resizable or collapsible side panels.
 
 The data-preparation Agent and `SRAgentInteractive` keep separate message histories while sharing
@@ -257,12 +266,11 @@ loop with human control and frontend events. `AgentContext` owns the structured 
 evaluator, runtime arguments, and workspace shared by cooperating agents. Train/evaluation mappings
 are lazily produced by the evaluator and cached by the context.
 
-`SRAgentInteractive` accepts an `InteractionManager` that connects its shared search loop to a
-frontend. Its default `TerminalInteractionManager` handles `ask_human` in a terminal. The Web
-workbench injects a `WebInteractionManager`, which binds the run state and workspace to its session,
-handles pause/resume/stop and queued guidance at safe boundaries, and publishes model, tool, and
-candidate events. Frontend adapters do not own the scientific search state or duplicate the R-C-L
-loop. Model auto-routing can use a cheap base backend for simple/early requests and an optional
+`SRAgentInteractive` accepts an `SRInteractionManager` that connects its search loop to an
+interface. Data preparation and evaluator construction each use their own `InteractionManager`, so
+their controls and timelines remain isolated. These managers own queued guidance, pause and
+interrupt requests, safe-boundary coordination, and observable events; they do not own the
+scientific search state or duplicate the R-C-L loop. Model auto-routing can use a cheap base backend for simple/early requests and an optional
 strong backend for complex or stagnated searches. Configure
 `strong_llm_provider`/`strong_llm_model`, or pass `auto_routing=False` to keep every request on the
 base backend.

@@ -65,17 +65,21 @@ class BaseTool(ABC, FactoryMixin):
             for name, value in values.items():
                 setattr(self.context.args, name, value)
             return
-        supplied = dict(context or {}) | values
+        if context is not None:
+            raise TypeError("context must be an AgentContext or None")
+        supplied = dict(values)
         data = supplied.pop("data", {})
-        target = supplied.pop("target", next(iter(data), None))
+        target = supplied.pop("target", None)
         evaluation_data = supplied.pop("evaluation_data", None)
+        evaluator_provided = "evaluator" in supplied
         evaluator = supplied.pop("evaluator", None)
         workspace = supplied.pop("workspace", supplied.pop("workspace_dir", None))
         supplied.setdefault("validation_fraction", 0)
         args = argparse.Namespace(**supplied)
-        self.context = AgentContext(
-            args=args, data=data, target=target, evaluator=evaluator, workspace=workspace,
-        )
+        context_kwargs = {"args": args, "data": data, "target": target, "workspace": workspace}
+        if evaluator_provided:
+            context_kwargs["evaluator"] = evaluator
+        self.context = AgentContext(**context_kwargs)
         if evaluation_data is not None:
             self.context._split_cache = {
                 "train": self.context.with_data(self.context.data),
@@ -112,6 +116,8 @@ class BaseTool(ABC, FactoryMixin):
             Text to append to the model conversation."""
         return str(result)
 
+    def cancel(self) -> None:
+        """Request cancellation when a tool offers no stronger primitive."""
 
     def __call__(self, *args, **kwargs) -> ToolCallResult:
         """工具调用入口"""
@@ -184,7 +190,7 @@ class BaseTool(ABC, FactoryMixin):
             The parsed symbolic expression."""
         return engine.parse(
             cls.normalize_formula(eq),
-            variables={"pi": np.pi, "e": np.e},
+            symbols={"pi": np.pi, "e": np.e},
         )
 
     @classmethod
@@ -226,7 +232,7 @@ class BaseTool(ABC, FactoryMixin):
 
     @classmethod
     def load_tool_list(cls, tools_used: list[str] | None = None) -> list[dict]:
-        """Load tool metadata for legacy parsers.
+        """Load tool metadata for text and JSON parsers.
 
         Args:
             tools_used: Tool names to include, or ``None`` for all registered tools.
@@ -560,6 +566,8 @@ class BaseTool(ABC, FactoryMixin):
             Candidate eligibility and metrics for each available data split."""
         if not isinstance(f, engine.Expression) or not isinstance(y, engine.Expression):
             raise TypeError("f and y must both be sr_harness_engine.Expression instances.")
+        if self.context.target is None:
+            raise ValueError("context.target must be configured before evaluating formulas")
 
         evaluator = self.context.evaluator
         train_context = self.context.train_split
@@ -629,13 +637,11 @@ class BaseTool(ABC, FactoryMixin):
         }
         return evaluation
 
-    def failed_evaluation(self, formula: str = "(None)", show_diagnostics: bool = True) -> Dict[str, Any]:
+    def failed_evaluation(self, formula: str = "(None)") -> Dict[str, Any]:
         """Build the common result shape when a formula-producing backend fails.
 
         Args:
             formula: Formula or placeholder to report.
-            show_diagnostics: Retained for compatibility with successful evaluation calls.
-
         Returns:
             A non-candidate result with infinite error metrics."""
         empty_metrics = {
@@ -654,16 +660,16 @@ class BaseTool(ABC, FactoryMixin):
             'train': {'metrics': None},
             'validation': {'metrics': None},
         }
-        if isinstance(self.context, AgentContext):
-            data_split_results['train']['metrics'] = empty_metrics
-            if not self.context.validation_split.data:
-                data_split_results.pop('validation')
-            else:
-                data_split_results['validation']['metrics'] = empty_metrics
-            target = self.context.target
+        if self.context.target is None:
+            raise ValueError("context.target must be configured before reporting a failed evaluation")
+        data_split_results['train']['metrics'] = empty_metrics
+        if not self.context.validation_split.data:
+            data_split_results.pop('validation')
+        else:
+            data_split_results['validation']['metrics'] = empty_metrics
         return {
             "formula": formula,
-            "target_expression": target,
+            "target_expression": self.context.target,
             "is_candidate": False,
             "candidate_ineligibility_reasons": ["no valid formula was produced"],
             "data_split_results": data_split_results,

@@ -21,7 +21,7 @@ class _ContextDataReader:
     REQUIRED_ROOT_FIELDS = {"variables", "axes"}
     OPTIONAL_ROOT_FIELDS = {"num_nodes"}
     REQUIRED_VARIABLE_FIELDS = {"file", "description", "axes"}
-    OPTIONAL_VARIABLE_FIELDS = {"structure"}
+    OPTIONAL_VARIABLE_FIELDS = {"kind", "structure"}
     AXIS_SOURCE_FIELDS = {"values", "file", "size"}
     AXIS_FIELDS = {"description", *AXIS_SOURCE_FIELDS}
 
@@ -58,6 +58,7 @@ class _ContextDataReader:
                         {"structure": loaded["variable_structures"][name]}
                         if name in loaded["variable_structures"] else {}
                     ),
+                    **({"kind": "relation"} if name in loaded["relation_names"] else {}),
                     "description": loaded["variable_descriptions"][name],
                 }
                 for name, value in loaded["data"].items()
@@ -196,6 +197,7 @@ class _ContextDataReader:
         loaded_values: dict[str, np.ndarray] = {}
         variable_axes: dict[str, tuple[str, ...]] = {}
         variable_structures: dict[str, str] = {}
+        relation_names: set[str] = set()
         descriptions: dict[str, str] = {}
         used_axes: set[str] = set()
         for name, spec in variables.items():
@@ -218,6 +220,10 @@ class _ContextDataReader:
             if structure is not None and not self._valid_name(structure):
                 errors.append(f"{location}.structure must name an A or T variable")
                 structure = None
+            kind = spec.get("kind")
+            if kind not in {None, "relation"}:
+                errors.append(f"{location}.kind must be 'relation' when provided")
+                kind = None
             expected = f"{name}.npy"
             if spec.get("file") != expected:
                 errors.append(f"{location}.file must be {expected!r}")
@@ -256,6 +262,8 @@ class _ContextDataReader:
             variable_axes[name] = tuple(declared_axes)
             if structure is not None:
                 variable_structures[name] = structure
+            if kind == "relation":
+                relation_names.add(name)
             descriptions[name] = description
             used_axes.update(declared_axes)
 
@@ -263,8 +271,25 @@ class _ContextDataReader:
         if unused_axes:
             errors.append(f"manifest.axes contains unreferenced axes: {unused_axes}")
 
-        if bool(variable_structures) != (num_nodes is not None):
-            errors.append("manifest.num_nodes and variable structure metadata must appear together")
+        if bool(relation_names) != (num_nodes is not None):
+            errors.append("manifest.num_nodes and relation metadata must appear together")
+        for relation_name in relation_names:
+            location = f"variables.{relation_name}"
+            relation = loaded_values.get(relation_name)
+            if relation is None:
+                continue
+            if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
+                errors.append(
+                    f"{location}: relation must have shape (E, 2) or (H, 3), "
+                    f"got {relation.shape}"
+                )
+                continue
+            if relation.dtype.kind not in "iu":
+                errors.append(f"{location}: relation endpoints must use an integer dtype")
+            elif num_nodes is not None and (
+                np.any(relation < 0) or np.any(relation >= num_nodes)
+            ):
+                errors.append(f"{location}: relation endpoints must be in [0, {num_nodes})")
         for variable, structure in variable_structures.items():
             location = f"variables.{variable}.structure"
             if variable == structure:
@@ -272,6 +297,9 @@ class _ContextDataReader:
                 continue
             if structure not in loaded_values:
                 errors.append(f"{location} references missing variable {structure!r}")
+                continue
+            if structure not in relation_names:
+                errors.append(f"{location} must reference a variable with kind 'relation'")
                 continue
             relation = loaded_values[structure]
             if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
@@ -307,6 +335,7 @@ class _ContextDataReader:
             "variable_descriptions": all_descriptions,
             "variable_axes": variable_axes,
             "variable_structures": variable_structures,
+            "relation_names": relation_names,
             "num_nodes": num_nodes,
             "axis_metadata": loaded_axes,
         }

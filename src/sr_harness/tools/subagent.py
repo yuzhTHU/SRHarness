@@ -71,9 +71,19 @@ class SubagentTool(BaseTool):
 
         from ..api import BaseAPI
 
+        provider = getattr(self.context.args, "subagent_llm_provider", None)
+        if provider is None:
+            provider = getattr(self.context.args, "llm_provider", None)
+        model = getattr(self.context.args, "subagent_llm_model", None)
+        if model is None:
+            model = getattr(self.context.args, "llm_model", None)
+        if not isinstance(provider, str) or not provider:
+            raise ValueError("A non-empty subagent or primary LLM provider is required")
+        if not isinstance(model, str) or not model:
+            raise ValueError("A non-empty subagent or primary LLM model is required")
         api = BaseAPI.create(
-            getattr(self.context.args, "subagent_llm_provider", None) or getattr(self.context.args, "llm_provider", None),
-            model=getattr(self.context.args, "subagent_llm_model", None) or getattr(self.context.args, "llm_model", None),
+            provider,
+            model=model,
             tool_list=None,
         )
         result = api(messages, n=1, max_tokens=getattr(self.context.args, "llm_max_tokens", 4096))
@@ -94,7 +104,9 @@ class SubagentTool(BaseTool):
         candidate_formulas: List[str],
         evidence: str,
     ) -> list[dict[str, str]]:
-        tool_catalog = getattr(self.context.args, "tool_catalog", None) or BaseTool.load_tool_classes()
+        tool_catalog = getattr(self.context.args, "tool_catalog", None)
+        if tool_catalog is None:
+            tool_catalog = BaseTool.load_tool_classes()
         tool_names = ", ".join(
             sorted(
                 tool.metadata.name

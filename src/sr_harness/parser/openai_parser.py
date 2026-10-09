@@ -50,7 +50,7 @@ class OpenAIParser(BaseParser):
     def format_tool_result_messages(
         self,
         tool_calls: List[ToolCall],
-        results: List[ToolCallResult | None],
+        results: List[ToolCallResult],
     ) -> List[Dict[str, Any]]:
         """Format tool result messages.
 
@@ -63,11 +63,10 @@ class OpenAIParser(BaseParser):
         """
         messages = []
         for tool_call, result in zip(tool_calls, results):
-            result_str = result.result_str if isinstance(result, ToolCallResult) else str(result)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tool_call.id,
                 "name": tool_call.name,
-                "content": result_str,
+                "content": result.result_str,
             })
         return messages

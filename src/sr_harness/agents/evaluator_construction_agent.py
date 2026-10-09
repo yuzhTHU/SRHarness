@@ -20,14 +20,16 @@ from .agent import Agent
 class EvaluatorConstructionAgent(Agent):
     """Construct and validate evaluator scripts without mutating live context state."""
 
-    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16, interaction_manager: InteractionManager | None = None):
+    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], interaction_manager: InteractionManager, tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser
         self.llm_max_tokens = llm_max_tokens
         self.max_steps = max_steps
         self.context = context
-        self.interaction_manager = interaction_manager or InteractionManager()
+        if not isinstance(interaction_manager, InteractionManager):
+            raise TypeError("interaction_manager must be an InteractionManager")
+        self.interaction_manager = interaction_manager
         self._force_recorded = False
         self.tools = tools
         for tool in self.tools:
@@ -188,8 +190,7 @@ class EvaluatorConstructionAgent(Agent):
                 self._publish("assistant_delta", {**update, **event_context})
 
             try:
-                cancel = getattr(self.api, "cancel", lambda: None)
-                with self.interaction_manager.cancellable(cancel):
+                with self.interaction_manager.cancellable(self.api.cancel):
                     call_result = self.api(
                         self.buffer,
                         n=1,
@@ -261,12 +262,14 @@ class EvaluatorConstructionAgent(Agent):
             results = []
             for call in calls:
                 tool = next((item for item in self.tools if item.metadata.name == call.name), None)
-                cancel = getattr(tool, "cancel", lambda: None)
                 self._publish("tool_started", {
                     "call": {"name": call.name, "params": json_value(call.params), "id": call.id},
                 })
-                with self.interaction_manager.cancellable(cancel):
+                if tool is None:
                     results.extend(self.execute_action([call]))
+                else:
+                    with self.interaction_manager.cancellable(tool.cancel):
+                        results.extend(self.execute_action([call]))
             completed = [{
                 "tool": call.name,
                 "ok": result.ok,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from sr_harness.cli import entrypoint, main, setup_parser
-from sr_harness.cli.run import _resolve_workspace_path
+from sr_harness.cli.run import _resolve_workspace_dir
 from sr_harness.cli.synthetic import build_agent_options
 
 
@@ -40,7 +40,8 @@ def test_run_help_is_delegated(capsys, monkeypatch):
     assert "usage: sr-harness run" in output
     assert "--web" not in output
     assert "--anonymize" not in output
-    assert "--workspace" in output
+    assert "--workspace-dir" in output
+    assert "--isolate-users" in output
     assert "--mount" in output
     assert "--reload" not in output
     assert "--no-browser" not in output
@@ -93,15 +94,14 @@ def test_synthetic_banned_tools_override_selected_tools(monkeypatch):
     assert options["llm_max_tokens"] == 2048
 
 
-def test_workspace_warnings_for_existing_files_and_mounts(tmp_path, capsys):
+def test_workspace_dir_accepts_existing_files_and_reports_mounts(tmp_path, capsys):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "existing.txt").write_text("data")
 
-    assert _resolve_workspace_path(str(workspace), ["input.csv"]) == workspace
+    assert _resolve_workspace_dir(str(workspace), ["input.csv"]) == workspace
     warning = capsys.readouterr().err
-    assert "existing files may be modified or deleted by AI-operated tools" in warning
-    assert "read-only mount points will be created" in warning
+    assert "every new conversation workspace" in warning
 
 
 def test_benchmark_requires_algorithm(capsys, monkeypatch):

@@ -77,7 +77,7 @@ tar (-x|--extract) [-z|--gzip] (-f FILE|--file FILE)
 <h3><code>--mount</code> 启动只读挂载</h3>
 <p>用 <code>sr-harness run --mount PATH ...</code> 提供的文件或目录会显示锁图标。SRHarness 保存逻辑路径与源路径的映射，所有内置工作区写接口都会拒绝修改这些路径；网页不提供解锁操作。它适合把原始数据作为只读输入交给 Agent。</p>
 <pre>sr-harness run \
-  --workspace ./sr-workspace \
+  --workspace-dir ./sr-workspaces \
   --mount ./original-data ./papers</pre>
 <p><code>--mount</code> 是 SRHarness 的应用层只读约束。若 SRHarness 进程本身对源文件具有系统写权限，那么未来启用的自定义工具、存在缺陷的依赖或工作区约束之外的代码仍可能绕过应用层规则。</p>
 
@@ -100,7 +100,7 @@ sudo mount -o remount,bind,ro /mnt/srh-original
 
 # 以无提权能力的独立用户启动，并使用独立输出目录
 sudo -u srharness sr-harness run \
-  --workspace /srv/srharness/work \
+  --workspace-dir /srv/srharness/workspaces \
   --mount /mnt/srh-original</pre>
 <p>在 SRHarness 进程不具备 root、<code>CAP_SYS_ADMIN</code> 或源目录写权限的前提下，Agent 无法通过 <code>chmod</code> 将内核只读挂载变为可写。对于不可替代的数据，离线备份仍是最终保障。</p>
 </main>

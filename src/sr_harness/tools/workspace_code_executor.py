@@ -415,7 +415,7 @@ class WorkspaceCodeExecutorTool(CodeExecutorTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
         """
         # 准备 stdin (已被弃用)
-        data_revision = getattr(self.context.args, "data_revision", None)
+        data_revision = self.context.args.data_revision
         if not hasattr(self, 'stdin_text') or getattr(self, "_stdin_data_revision", None) != data_revision:
             data = self.context.data
             data_dict = self.serialization(data)

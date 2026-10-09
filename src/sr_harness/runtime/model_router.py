@@ -35,10 +35,16 @@ class ModelRouter:
         strong_provider: str | None = None,
         strong_model: str | None = None,
     ):
+        for name, value in (("base_provider", base_provider), ("base_model", base_model)):
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a non-empty string")
+        for name, value in (("strong_provider", strong_provider), ("strong_model", strong_model)):
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be None or a non-empty string")
         self.enabled = enabled
         self.base_provider = base_provider
         self.base_model = base_model
-        self.strong_provider = strong_provider or base_provider
+        self.strong_provider = base_provider if strong_provider is None else strong_provider
         self.strong_model = strong_model
 
     @property

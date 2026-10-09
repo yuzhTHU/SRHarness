@@ -307,13 +307,31 @@ unresolved parameter family.
 
     The number of independent scalar parameter values.
 
+### `sr_harness_engine.analysis.parameter_values(expression: Expression) -> dict[str, Any]`
+
+Collect parameter values already bound into an expression.
+
+### `sr_harness_engine.analysis.unbound_parameters(expression: Expression) -> list[str]`
+
+Return stable names for parameter nodes that have no fitted value.
+
+## `sr_harness_engine.context`
+
+### `sr_harness_engine.context.resolve_context(context: Mapping[str, Any] | Any | None, target: Any=None, num_nodes: int | None=None) -> tuple[Mapping[str, Any], Any, int | None]`
+
+Resolve values, target observations, and node metadata from a context.
+
+A mapping is always interpreted directly as symbol values. Context objects
+must expose a mapping-valued ``data`` field and may expose ``target`` and
+``num_nodes`` metadata.
+
 ## `sr_harness_engine.desugar`
 
 ### `sr_harness_engine.desugar.desugar(expression: Expression) -> Expression`
 
 Compile ``aggr/targ/sour`` nodes into indexed reductions.
 
-    Edge lists use ``(target, source)`` column order. A legacy aggregation
+    Edge lists use ``(target, source)`` column order. A convenience aggregation
     therefore becomes ``sum[j](A[i, j], ...)``: ``j`` is the source index
     being reduced and ``i`` is the surviving target index.
 
@@ -328,10 +346,6 @@ Compile ``aggr/targ/sour`` nodes into indexed reductions.
     The equivalent expression using indexed reductions.
 
 ## `sr_harness_engine.evaluation`
-
-### `sr_harness_engine.evaluation.evaluate`
-
-使用 NumPy 对表达式树求值的公开函数。
 
 ### `sr_harness_engine.evaluation.grouped_parameter_key(node: GroupedParameter) -> str`
 
@@ -393,7 +407,8 @@ Evaluate this expression with NumPy values.
 
 **Args**
 
-- `values`: Values keyed by symbol name.
+- `values`: Values keyed by symbol name, or a context exposing ``data``
+        and optional ``num_nodes`` metadata.
 - `parameters`: Fitted parameter values keyed by parameter name.
 - `time`: Optional sample times.
 - `delay_resolver`: Optional callback that resolves delayed values.
@@ -430,7 +445,7 @@ Return an independent copy.
 
     A deep copy of this expression.
 
-#### `Expression.replace(self, old: Expression, new: Expression, **_: Any) -> Expression`
+#### `Expression.replace(self, old: Expression, new: Expression) -> Expression`
 
 Return a tree in which the exact *old* node is replaced by *new*.
 
@@ -439,14 +454,13 @@ Return a tree in which the exact *old* node is replaced by *new*.
 
 - `old`: Existing expression node to replace.
 - `new`: Replacement expression node.
-- `**_`: Ignored compatibility options.
 
 
 **Returns**
 
     A copied expression tree with matching nodes replaced.
 
-#### `Expression.to_str(self, *, latex: bool=False, number_format: str='', **_: Any) -> str`
+#### `Expression.to_str(self, *, latex: bool=False, number_format: str='') -> str`
 
 Render the expression as plain text or LaTeX.
 
@@ -455,14 +469,13 @@ Render the expression as plain text or LaTeX.
 
 - `latex`: Whether to render LaTeX notation.
 - `number_format`: Format specification for numeric literals.
-- `**_`: Ignored compatibility options.
 
 
 **Returns**
 
     The rendered expression.
 
-#### `Expression.to_tree(self, *, number_format: str='', **_: Any) -> str`
+#### `Expression.to_tree(self, *, number_format: str='') -> str`
 
 Render a compact preorder tree for diagnostics.
 
@@ -470,22 +483,22 @@ Render a compact preorder tree for diagnostics.
 **Args**
 
 - `number_format`: Format specification for numeric literals.
-- `**_`: Ignored compatibility options.
 
 
 **Returns**
 
     A multiline representation of the expression tree.
 
-#### `Expression.fit(self, values: Mapping[str, Any], target: Any, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None, num_nodes: int | None=None)`
+#### `Expression.fit(self, values: Mapping[str, Any], target: Any=None, *, initial: Mapping[str, Any] | None=None, method: str='BFGS', options: Mapping[str, Any] | None=None, num_nodes: int | None=None)`
 
 Fit named and grouped parameters against a target array.
 
 
 **Args**
 
-- `values`: Values keyed by symbol name.
-- `target`: Target name or target values.
+- `values`: Values keyed by symbol name, or a context exposing ``data``,
+        ``target``, and optional ``num_nodes`` metadata.
+- `target`: Target name or target values. Omit when supplied by context.
 - `initial`: Optional initial parameter values.
 - `method`: Optimization method name.
 - `options`: Optional optimizer settings.
@@ -767,6 +780,10 @@ Return the relation whose entry axis is carried by an expression.
 
 ## `sr_harness_engine.optimize`
 
+### `sr_harness_engine.optimize.bind_parameters(expression: Expression, parameters: Mapping[str, Any]) -> Expression`
+
+Return an expression whose parameter nodes contain fitted values.
+
 ### `sr_harness_engine.optimize.FitResult`
 
 Result of fitting an expression to target observations.
@@ -778,7 +795,7 @@ Evaluate the supplied model or expression.
 
 **Args**
 
-- `values`: Values keyed by symbol name.
+- `values`: Values keyed by symbol name or an evaluation context.
 - `time`: Optional sample times.
 - `delay_resolver`: Optional callback that resolves delayed values.
 - `num_nodes`: Explicit node count for indexed expressions.
@@ -921,7 +938,7 @@ Convert an approved symbolic function or reduction call.
 
     The corresponding symbolic expression.
 
-### `sr_harness_engine.parser.parse(source: str, symbols: Mapping[str, Any] | None=None, *, variables: Mapping[str, Any] | None=None) -> Expression`
+### `sr_harness_engine.parser.parse(source: str, symbols: Mapping[str, Any] | None=None) -> Expression`
 
 Parse *source* without using ``eval`` or executing user code.
 
@@ -930,7 +947,6 @@ Parse *source* without using ``eval`` or executing user code.
 
 - `source`: Source text to parse.
 - `symbols`: Optional predefined symbols or numeric constants.
-- `variables`: Deprecated-compatible alias for ``symbols``.
 
 
 **Returns**

@@ -49,7 +49,9 @@ class SINDyTool(BaseTool):
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context.data
-        y = y or self.context.target
+        y = y if y is not None else self.context.target
+        if y is None:
+            raise ValueError("y is required when context.target is not configured")
         y = y.strip().strip('"').strip("'")
         x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []
@@ -109,7 +111,7 @@ class SINDyTool(BaseTool):
             eq_f = self.parse_formula(formula_str)
             evaluation = self.evaluate(f=eq_f, y=eq_y, show_diagnostics=show_diagnostics)
         except Exception as e:
-            evaluation = self.failed_evaluation(show_diagnostics=show_diagnostics)
+            evaluation = self.failed_evaluation()
             exceptions.append(f"SINDy fitting failed: {type(e).__name__}: {e}")
 
         return {

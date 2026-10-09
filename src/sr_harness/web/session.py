@@ -21,7 +21,7 @@ from ..agents.data_preparation_agent import DataPreparationAgent
 from ..agents.evaluator_construction_agent import EvaluatorConstructionAgent
 from ..agents.sr_agent_interactive import SRAgentInteractive
 from ..api import BaseAPI
-from ..core import AgentContext, json_value, load_context_data
+from ..core import AgentContext, SearchRunState, json_value, load_context_data
 from ..evaluator import DefaultEvaluator, GraphEvaluator, load_custom_evaluator
 from ..evaluator.load_custom_evaluator import (
     BUILTIN_EVALUATOR_CLASS_NAMES,
@@ -192,12 +192,23 @@ class InteractiveSession:
         self.evaluator_force_pause_requested = False
         self.evaluator_agent_result = None
         self.sr_agent = None
+        self._restored_data_agent_buffer = None
         self._manifest_description_revision = None
 
     def close(self) -> None:
         """Release temporary resources owned by the session."""
         if not self.workspace_manager.retain:
             self.workspace_manager.cleanup()
+
+    def interrupt_active_work(self) -> None:
+        """Force active model/tool operations toward a safe shutdown boundary."""
+        for manager in (
+            self.sr_interaction_manager,
+            self.data_interaction_manager,
+            self.evaluator_interaction_manager,
+        ):
+            if manager.state in {"running", "pausing"}:
+                manager.command("force_pause")
 
     def snapshot(self):
         """Return a serializable snapshot of the current session."""
@@ -231,6 +242,152 @@ class InteractiveSession:
                     "data_context": json_value(self.context.schema()),
                     **self.sr_interaction_manager.status()}
 
+    def export_persistent_state(self) -> dict[str, Any]:
+        """Return a JSON-safe snapshot that can be restored in a new process."""
+        with self.lock:
+            data_agent_buffer = (
+                list(self.data_agent.buffer)
+                if self.data_agent is not None
+                else self._restored_data_agent_buffer
+            )
+            return json_value({
+                "version": 1,
+                "run_id": self.run_id,
+                "state": self.state,
+                "settings": self.settings,
+                "pending_settings": self.pending_settings,
+                "data_agent_settings": self.data_agent_settings,
+                "evaluator_agent_settings": self.evaluator_agent_settings,
+                "initial_prompt": self.initial_prompt,
+                "prompt_overrides": self.prompt_overrides,
+                "variable_descriptions": self.variable_descriptions,
+                "result": self.result,
+                "data_state": self.data_state,
+                "data_result": self.data_result,
+                "data_agent_buffer": data_agent_buffer,
+                "evaluator_agent_state": self.evaluator_agent_state,
+                "evaluator_agent_result": self.evaluator_agent_result,
+                "context_target": self.context.target,
+                "evaluator": self._evaluator_metadata(),
+                "run_state": self.run_state.export_state() if self.run_state is not None else None,
+                "interactions": {
+                    "search": self.sr_interaction_manager.export_state(),
+                    "data": self.data_interaction_manager.export_state(),
+                    "evaluator": self.evaluator_interaction_manager.export_state(),
+                },
+            })
+
+    def restore_persistent_state(self, snapshot: dict[str, Any]) -> None:
+        """Restore a durable snapshot and terminate operations lost on restart."""
+        expected_fields = {
+            "version", "run_id", "state", "settings", "pending_settings",
+            "data_agent_settings", "evaluator_agent_settings", "initial_prompt",
+            "prompt_overrides", "variable_descriptions", "result", "data_state",
+            "data_result", "data_agent_buffer", "evaluator_agent_state",
+            "evaluator_agent_result", "context_target", "evaluator", "run_state",
+            "interactions",
+        }
+        if set(snapshot) != expected_fields:
+            raise ValueError("Persisted InteractiveSession does not match the current schema")
+        if snapshot["version"] != 1:
+            raise ValueError("Unsupported InteractiveSession snapshot version")
+        with self.lock:
+            self.run_id = str(snapshot["run_id"])
+            restored_settings = dict(snapshot["settings"])
+            if set(restored_settings) != set(self.settings):
+                raise ValueError("Persisted settings do not match the current session schema")
+            self.settings = restored_settings
+            self.pending_settings = snapshot["pending_settings"]
+            restored_data_settings = dict(snapshot["data_agent_settings"])
+            if set(restored_data_settings) != set(self.data_agent_settings):
+                raise ValueError("Persisted data-agent settings do not match the current schema")
+            self.data_agent_settings = restored_data_settings
+            restored_evaluator_settings = dict(snapshot["evaluator_agent_settings"])
+            if set(restored_evaluator_settings) != set(self.evaluator_agent_settings):
+                raise ValueError("Persisted evaluator-agent settings do not match the current schema")
+            self.evaluator_agent_settings = restored_evaluator_settings
+            self.initial_prompt = str(snapshot["initial_prompt"])
+            self.prompt_overrides = dict(snapshot["prompt_overrides"])
+            self.variable_descriptions = dict(snapshot["variable_descriptions"])
+            self.result = snapshot["result"]
+            self.data_result = snapshot["data_result"]
+            self.evaluator_agent_result = snapshot["evaluator_agent_result"]
+            buffer = snapshot["data_agent_buffer"]
+            if buffer is not None and not isinstance(buffer, list):
+                raise TypeError("data_agent_buffer must be a list or None")
+            self._restored_data_agent_buffer = list(buffer) if buffer is not None else None
+            for name in EVALUATOR_CONTEXT_SETTING_NAMES:
+                setattr(self.context.args, name, self.settings[name])
+
+            data_directory = self.workspace / "context.data"
+            if (data_directory / "manifest.json").is_file():
+                self.context.commit_context_data(load_context_data(data_directory))
+                target = snapshot["context_target"]
+                if target is not None and target not in self.context.data:
+                    raise ValueError("Persisted context target is missing from context.data")
+                self.context.target = target
+                if self.variable_descriptions:
+                    self.context.variable_descriptions.update({
+                        name: description
+                        for name, description in self.variable_descriptions.items()
+                        if name in self.context.data
+                    })
+
+            evaluator = snapshot["evaluator"]
+            if not isinstance(evaluator, dict):
+                raise TypeError("evaluator snapshot must be a dictionary")
+            selected = evaluator["selected"]
+            if isinstance(selected, str) and selected.startswith("custom"):
+                custom_file = evaluator["custom_file"]
+                custom_source = evaluator["source"]
+                self.context.evaluator = load_custom_evaluator(
+                    file=Path(custom_file) if custom_file is not None else None,
+                    source=custom_source,
+                )
+            elif selected in {"default", "graph"}:
+                self.context.evaluator = create_builtin_evaluator(selected)
+            else:
+                raise ValueError(f"Unknown persisted evaluator: {selected!r}")
+            self.context.invalidate_splits()
+
+            run_state = snapshot["run_state"]
+            if run_state is not None and not isinstance(run_state, dict):
+                raise TypeError("run_state must be a dictionary or None")
+            self.run_state = SearchRunState.from_state(run_state, save_path=self.run_dir) if run_state is not None else None
+            interactions = snapshot["interactions"]
+            search_interrupted = self.sr_interaction_manager.restore_state(
+                interactions["search"]
+            )
+            data_interrupted = self.data_interaction_manager.restore_state(
+                interactions["data"]
+            )
+            evaluator_interrupted = self.evaluator_interaction_manager.restore_state(
+                interactions["evaluator"]
+            )
+            saved_state = str(snapshot["state"])
+            if saved_state not in {"idle", "starting", "running", "completed", "early_stopped", "interrupted", "failed"}:
+                raise ValueError(f"Unknown persisted session state: {saved_state!r}")
+            if search_interrupted or saved_state in {"starting", "running"}:
+                self.state = "idle"
+                previous_result = self.result if isinstance(self.result, dict) else {}
+                self.result = {**previous_result, "status": "interrupted", "restored_after_restart": True}
+            else:
+                self.state = saved_state
+            saved_data_state = str(snapshot["data_state"])
+            if saved_data_state not in {"idle", "running", "stopping", "stopped", "completed", "failed"}:
+                raise ValueError(f"Unknown persisted data-agent state: {saved_data_state!r}")
+            self.data_state = "stopped" if data_interrupted or saved_data_state in {"running", "stopping"} else saved_data_state
+            saved_evaluator_state = str(snapshot["evaluator_agent_state"])
+            if saved_evaluator_state not in {"idle", "running", "stopping", "stopped", "completed", "failed"}:
+                raise ValueError(f"Unknown persisted evaluator-agent state: {saved_evaluator_state!r}")
+            self.evaluator_agent_state = (
+                "stopped"
+                if evaluator_interrupted or saved_evaluator_state in {"running", "stopping"}
+                else saved_evaluator_state
+            )
+            self.data_force_pause_requested = False
+            self.evaluator_force_pause_requested = False
+
     def _sync_manifest_descriptions(self) -> None:
         """Reflect externally edited manifest descriptions in the live context."""
         manifest_path = self.workspace / "context.data" / "manifest.json"
@@ -259,9 +416,7 @@ class InteractiveSession:
         self._manifest_description_revision = revision
         if changed:
             self.variable_descriptions = dict(self.context.variable_descriptions)
-            self.context.args.data_revision = int(
-                getattr(self.context.args, "data_revision", 0)
-            ) + 1
+            self.context.args.data_revision += 1
 
     def evaluator_configuration(self):
         """Return the selected evaluator and every available evaluator."""
@@ -916,6 +1071,9 @@ class InteractiveSession:
                     skills=settings["skills"],
                     interaction_manager=self.data_interaction_manager,
                 )
+                if self._restored_data_agent_buffer:
+                    self.data_agent.buffer = list(self._restored_data_agent_buffer)
+                    self._restored_data_agent_buffer = None
             else:
                 self.data_agent.llm_provider = settings["llm_provider"]
                 self.data_agent.llm_model = settings["llm_model"]
@@ -1172,7 +1330,6 @@ class InteractiveSession:
                 run_id=self.run_id,
                 use_workspace=True,
             )
-            options.setdefault("max_workers", 0)
             manager = self.sr_interaction_manager
             agent = SRAgentInteractive(
                 interaction_manager=manager,
@@ -1187,7 +1344,7 @@ class InteractiveSession:
             self.run_state = agent.run_state
             with self.lock:
                 self.state = "running"
-            manager.start_agent_execution()
+            agent.initial_messages = manager.start_agent_execution()
             result = agent.run(X, y, description)
         except KeyboardInterrupt as exc:
             result = getattr(exc, "partial_result", {}) | {"status": "interrupted"}

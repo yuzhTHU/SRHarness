@@ -1,4 +1,4 @@
-"""Duck-typed data-context helpers for expression evaluation and fitting."""
+"""Resolve expression inputs from value mappings or context objects."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ def resolve_context(
 ) -> tuple[Mapping[str, Any], Any, int | None]:
     """Resolve values, target observations, and node metadata from a context.
 
-    Ordinary value mappings continue to work. Context-like objects may expose
-    a mapping-valued ``data`` field plus ``target`` and ``num_nodes`` metadata.
+    A mapping is always interpreted directly as symbol values. Context objects
+    must expose a mapping-valued ``data`` field and may expose ``target`` and
+    ``num_nodes`` metadata.
     """
     if context is None:
         values: Mapping[str, Any] = {}
     elif isinstance(context, Mapping):
-        candidate = context.get("data")
-        values = candidate if isinstance(candidate, Mapping) else context
+        values = context
     else:
         candidate = getattr(context, "data", None)
         if not isinstance(candidate, Mapping):
@@ -28,16 +28,10 @@ def resolve_context(
         values = candidate
 
     if num_nodes is None:
-        num_nodes = getattr(values, "num_nodes", None)
-    if num_nodes is None:
         num_nodes = getattr(context, "num_nodes", None)
-    if num_nodes is None and isinstance(context, Mapping):
-        num_nodes = context.get("num_nodes")
 
     if target is None:
         target = getattr(context, "target", None)
-        if target is None and isinstance(context, Mapping):
-            target = context.get("target")
     if isinstance(target, str) and target in values:
         target = values[target]
     return values, target, num_nodes

@@ -29,7 +29,6 @@ class _RelationScope:
     name: str
     table: np.ndarray
     indices: tuple[str, ...]
-    legacy: bool = False
 
     @property
     def bindings(self) -> dict[str, np.ndarray]:
@@ -233,7 +232,7 @@ class _ExpressionEvaluator:
         relation_name, table = self._relation(node.relation)
         if table.shape[1] != 2:
             raise ValueError("aggr currently expects a two-column edge list.")
-        scope = _RelationScope(relation_name, table, ("source", "target"), legacy=True)
+        scope = _RelationScope(relation_name, table, ("source", "target"))
         value = np.asarray(self._eval(node.operand, scope))
         target = table[:, 1]
         fallback = int(target.max()) + 1 if target.size else 0
@@ -245,7 +244,7 @@ class _ExpressionEvaluator:
     def _relation_lift(self, node: RelationLift, scope: _RelationScope | None) -> Any:
         if node.relation is not None:
             name, table = self._relation(node.relation)
-            scope = _RelationScope(name, table, ("source", "target"), legacy=True)
+            scope = _RelationScope(name, table, ("source", "target"))
         if scope is None:
             raise ValueError(f"{node.role} requires a relation argument or an enclosing aggr(...).")
         column = 1 if node.role == "target" else 0

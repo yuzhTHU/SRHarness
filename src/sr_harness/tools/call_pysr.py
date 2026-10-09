@@ -58,7 +58,9 @@ class PySRTool(BaseTool):
             show_diagnostics: Whether final metrics should include compact residual diagnostics.
         """
         data = self.context.data
-        y = y or self.context.target
+        y = y if y is not None else self.context.target
+        if y is None:
+            raise ValueError("y is required when context.target is not configured")
         y = y.strip().strip('"').strip("'")
         x = x or [var for var in data if var != y and is_numeric_array(data[var])]
         exceptions = []
@@ -109,45 +111,22 @@ class PySRTool(BaseTool):
             X_fit = X_matrix
             y_fit = y_vec
 
-        formula_str = None
-        pareto_front = []
-        complexity = 0
-        method = None
-
-        try:
-            formula_str, pareto_front, complexity = self._run_pysr(
-                X_fit, y_fit, features['internal_names'], binary_operators, unary_operators,
-                timeout, maxsize
-            )
-            method = "PySR"
-        except Exception as e:
-            exceptions.append(f"PySR failed: {type(e).__name__}: {e}")
-            _logger.warning(f"PySR failed, trying gplearn fallback: {e}")
+        formula_str, pareto_front, _ = self._run_pysr(
+            X_fit, y_fit, features['internal_names'], binary_operators, unary_operators,
+            timeout, maxsize
+        )
+        formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
+        eq_f = self.parse_formula(formula_str)
+        evaluation = self.evaluate(f=eq_f, y=eq_y, show_diagnostics=show_diagnostics)
+        all_formulas = []
+        for item in pareto_front:
+            formula = self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])
             try:
-                formula_str = self._run_gplearn_fallback(
-                    X_fit, y_fit, features['internal_names'], binary_operators, unary_operators
-                )
-                method = "gplearn"
-            except Exception as e2:
-                exceptions.append(f"gplearn fallback also failed: {type(e2).__name__}: {e2}")
-                method = "failed"
-
-        if formula_str is not None:
-            formula_str = self._restore_feature_names(formula_str, features['internal_names'], features['original_exprs'])
-            eq_f = self.parse_formula(formula_str)
-            evaluation = self.evaluate(f=eq_f, y=eq_y, show_diagnostics=show_diagnostics)
-            all_formulas = []
-            for item in pareto_front:
-                formula = self._restore_feature_names(item["formula"], features['internal_names'], features['original_exprs'])
-                try:
-                    eq_f_pareto = self.parse_formula(formula)
-                    detail = self.evaluate(f=eq_f_pareto, y=eq_y, show_diagnostics=False)
-                    all_formulas.append(detail)
-                except Exception as e:
-                    exceptions.append(f"Failed to evaluate formula {formula!r}: {type(e).__name__}: {e}")
-        else:
-            evaluation = self.failed_evaluation(show_diagnostics=show_diagnostics)
-            all_formulas = []
+                eq_f_pareto = self.parse_formula(formula)
+                detail = self.evaluate(f=eq_f_pareto, y=eq_y, show_diagnostics=False)
+                all_formulas.append(detail)
+            except Exception as e:
+                exceptions.append(f"Failed to evaluate formula {formula!r}: {type(e).__name__}: {e}")
 
         # Generate retry hint if result is poor and timeout can be increased
         retry_hint = None
@@ -155,7 +134,7 @@ class PySRTool(BaseTool):
         selected_split = "validation" if "validation" in split_results else "train"
         selected_metrics = split_results[selected_split]["metrics"]
         mse = selected_metrics.get("mse", float("inf"))
-        if (mse > 1e-3 or formula_str is None) and timeout < MAX_TIMEOUT:
+        if mse > 1e-3 and timeout < MAX_TIMEOUT:
             suggested_timeout = min(timeout * 2, MAX_TIMEOUT)
             retry_hint = (
                 f"PySR did not find a good formula within {timeout}s. "
@@ -164,7 +143,7 @@ class PySRTool(BaseTool):
 
         return {
             **evaluation,
-            "method": method,
+            "method": "PySR",
             # "backend_complexity": complexity,
             "all_formulas": all_formulas,
             "config": {
@@ -231,45 +210,6 @@ class PySRTool(BaseTool):
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
 
-    def _run_gplearn_fallback(self, X, y, x_names, binary_ops, unary_ops):
-        """Fallback to gplearn if PySR (Julia) is unavailable."""
-        from gplearn.genetic import SymbolicRegressor
-
-        op_map = {"+": "add", "-": "sub", "*": "mul", "/": "div"}
-        unary_map = {"sin": "sin", "cos": "cos", "sqrt": "sqrt", "log": "log",
-                     "neg": "neg", "inv": "inv"}
-        func_set = []
-        for op in binary_ops:
-            if op in op_map:
-                func_set.append(op_map[op])
-        for op in unary_ops:
-            if op in unary_map:
-                func_set.append(unary_map[op])
-        if not func_set:
-            func_set = ["add", "sub", "mul", "div", "sin", "cos"]
-
-        sr = SymbolicRegressor(
-            population_size=500,
-            generations=30,
-            tournament_size=20,
-            function_set=func_set,
-            metric='mse',
-            parsimony_coefficient=0.001,
-            random_state=42,
-            verbose=0,
-            feature_names=x_names,
-            stopping_criteria=1e-10,
-            p_crossover=0.7,
-            p_subtree_mutation=0.1,
-            p_hoist_mutation=0.05,
-            p_point_mutation=0.1,
-            max_samples=1.0,
-            n_jobs=1,
-        )
-        sr.fit(X, y)
-        raw_formula = str(sr._program)
-        return self._clean_gplearn_formula(raw_formula)
-
     def _clean_pysr_formula(self, formula: str, x_names: List[str]) -> str:
         """Clean PySR output for SRHarness Engine compatibility.
         PySR already uses variable_names in output when provided via fit(),
@@ -301,13 +241,6 @@ class PySRTool(BaseTool):
         except:
             _logger.warning(f"Failed to parse restored formula {restored!r}, returning unparsed version.")
         return restored
-
-    def _clean_gplearn_formula(self, formula: str) -> str:
-        """Clean gplearn output for SRHarness Engine compatibility."""
-        formula = formula.strip()
-        formula = re.sub(r'\bneg\(([^)]+)\)', r'-(\1)', formula)
-        formula = re.sub(r'\binv\(([^)]+)\)', r'1/(\1)', formula)
-        return formula if formula else "0"
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:

@@ -113,6 +113,7 @@ def test_interactive_guidance_is_added_before_prompt_construction():
     agent.interaction_manager.start_agent_execution()
     agent.interaction_manager.command("message", "compare against a power law")
     agent.runtime_settings_supplier = None
+    agent.initial_messages = []
     agent.refresh_data = lambda *args, **kwargs: False
     buffer = [{"role": "user", "content": "Find a formula."}]
 
@@ -133,6 +134,7 @@ def test_interactive_refreshes_data_before_queued_human_guidance():
     agent.interaction_manager.start_agent_execution()
     agent.interaction_manager.command("message", "continue with the new data")
     agent.runtime_settings_supplier = None
+    agent.initial_messages = []
     agent.refresh_data = lambda: {
         "previous_revision": 3,
         "revision": 4,
@@ -155,6 +157,7 @@ def test_interactive_refreshes_data_before_queued_human_guidance():
 def test_interactive_agent_requests_pause_after_tool_free_response():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
     agent.interaction_manager.start_agent_execution()
@@ -170,6 +173,7 @@ def test_interactive_agent_requests_pause_after_tool_free_response():
 def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = True
+    agent._forced_interruption_pending = False
     agent.best_candidate = lambda: SimpleNamespace(metric=lambda name, split: 0.0)
     agent.interaction_manager = SRInteractionManager()
     agent.interaction_manager.start_agent_execution()
@@ -183,6 +187,7 @@ def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
 def test_web_tool_free_response_pauses_without_asking_a_question():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
     agent.interaction_manager.start_agent_execution()
@@ -209,6 +214,7 @@ def test_safe_pause_does_not_block_tools_already_requested_this_turn(monkeypatch
 def test_interactive_agent_honors_pending_control_before_automatic_guidance():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
     agent.interaction_manager.start_agent_execution()

@@ -76,7 +76,7 @@ class LogFormatter(logging.Formatter):
         super().__init__()
         self.exp_name = exp_name
         self.colorful = colorful
-        self.start_time = start_time or time.time()
+        self.start_time = time.time() if start_time is None else start_time
         self.time_format = time_format
         self.show_lineno_for = show_lineno_for
 

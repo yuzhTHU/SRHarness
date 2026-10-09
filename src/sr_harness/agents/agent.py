@@ -68,7 +68,7 @@ class Agent(ABC, FactoryMixin):
         """
         self.context.args.messages = deepcopy(messages)
 
-    def execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult | None]:
+    def execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult]:
         """Execute tool calls serially.
 
         Args:
@@ -77,7 +77,7 @@ class Agent(ABC, FactoryMixin):
         Returns:
             Results in the same order as ``actions``.
         """
-        results: list[ToolCallResult | None] = []
+        results: list[ToolCallResult] = []
         for action in actions:
             tool = next((item for item in self.tools if item.metadata.name == action.name), None)
             if tool is None:
@@ -128,4 +128,6 @@ class Agent(ABC, FactoryMixin):
             task_results = workers(task for _, task in tasks)
             for (index, _), result in zip(tasks, task_results):
                 results[index] = result
-        return results
+        if any(result is None for result in results):
+            raise RuntimeError("Parallel tool execution did not produce one result per call")
+        return [result for result in results if result is not None]

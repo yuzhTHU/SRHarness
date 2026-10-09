@@ -40,15 +40,20 @@ class DataPreparationAgent(Agent):
         tool_parser: str | BaseParser = "openai",
         llm_max_tokens: int = 4096,
         skills: list[str] | None = None,
-        interaction_manager: InteractionManager | None = None,
+        interaction_manager: InteractionManager,
     ):
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser
         self.llm_max_tokens = llm_max_tokens
         self.turn_count = 0
-        skill_manager = getattr(context.args, "skill_manager", None) or SkillManager()
-        context.args.skill_manager = skill_manager
+        if hasattr(context.args, "skill_manager"):
+            skill_manager = context.args.skill_manager
+            if not isinstance(skill_manager, SkillManager):
+                raise TypeError("context.args.skill_manager must be a SkillManager")
+        else:
+            skill_manager = SkillManager()
+            context.args.skill_manager = skill_manager
         self.skills = (
             list(skills)
             if skills is not None
@@ -57,7 +62,9 @@ class DataPreparationAgent(Agent):
                 if name not in self.DEFAULT_EXCLUDED_SKILLS
             ]
         )
-        self.interaction_manager = interaction_manager or InteractionManager()
+        if not isinstance(interaction_manager, InteractionManager):
+            raise TypeError("interaction_manager must be an InteractionManager")
+        self.interaction_manager = interaction_manager
         self.tool_cls_list = BaseTool.load_tool_classes(tools or self.DEFAULT_TOOLS)
         self.tools_counter = ParallelTimer(unit="call")
         self.tools = None
@@ -82,11 +89,14 @@ class DataPreparationAgent(Agent):
                 "file, description, and axes; its file must be <variable>.npy and its axes list must follow array "
                 "dimension order. Each axis entry must contain description and exactly one of: values for a "
                 "short inline JSON array, file for <axis>.npy, or size for a positive positional length. "
+                "Mark every edge-list or hyperedge-list variable itself with kind: relation; relation arrays "
+                "must contain integer endpoint indices and require num_nodes at the manifest root. "
                 "For each variable whose final dimension depends on an edge list A or hyperedge list T, "
                 "set that variable's structure field to the name of A or T. The referenced relation must "
                 "be an integer (E, 2) or (H, 3) array whose endpoints are in [0, num_nodes), and the "
                 "dependent variable must have shape (..., E) or (..., H). Do not add structure to A or T "
-                "itself, and never infer a relation from a variable name. "
+                "itself, and never infer a relation from a variable name. Prefer explicit values such as "
+                "['target', 'source'] for short semantic axes instead of an anonymous size. "
                 "Do not add format, version, revision, problem, attributes, shape, or dtype fields. Describe "
                 "units and other meaning in description. Preserve existing variable files unless the user "
                 "asks to replace them. NPY variables may contain numeric, Boolean, or string values. Preserve "
@@ -203,8 +213,7 @@ class DataPreparationAgent(Agent):
                 })
 
             try:
-                cancel = getattr(self.api, "cancel", lambda: None)
-                with self.interaction_manager.cancellable(cancel):
+                with self.interaction_manager.cancellable(self.api.cancel):
                     call_result = self.api(
                         prompt,
                         n=1,
@@ -287,9 +296,11 @@ class DataPreparationAgent(Agent):
             self._publish("tool_started", {"call": call, "tool_schema": schema})
             started_at = time.monotonic()
             tool = next((item for item in self.tools if item.metadata.name == call.name), None)
-            cancel = getattr(tool, "cancel", lambda: None)
-            with self.interaction_manager.cancellable(cancel):
+            if tool is None:
                 result = super().execute_action([call])[0]
+            else:
+                with self.interaction_manager.cancellable(tool.cancel):
+                    result = super().execute_action([call])[0]
             self._publish("tool_completed", {
                 "call": call,
                 "tool_schema": schema,

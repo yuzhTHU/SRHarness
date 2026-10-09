@@ -49,7 +49,7 @@ class GraphEvaluator(DefaultEvaluator):
         else:
             raise ValueError(f"invalid split_by value: {context.args.split_by}")
 
-        relation_names = set(context.variable_structures.values())
+        relation_names = context.relation_names
         target_axes = context.variable_axes.get(context.target, ())
         sample_axis = target_axes[0] if target_axes else None
 

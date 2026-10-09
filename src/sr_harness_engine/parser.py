@@ -250,22 +250,16 @@ class ExpressionParser(ast.NodeVisitor):
 def parse(
     source: str,
     symbols: Mapping[str, Any] | None = None,
-    *,
-    variables: Mapping[str, Any] | None = None,
 ) -> Expression:
     """Parse *source* without using ``eval`` or executing user code.
 
     Args:
         source: Source text to parse.
         symbols: Optional predefined symbols or numeric constants.
-        variables: Deprecated-compatible alias for ``symbols``.
 
     Returns:
         The parsed canonical expression.
     """
-    if symbols is not None and variables is not None:
-        raise TypeError("Use either symbols or variables, not both.")
-    symbols = variables if variables is not None else symbols
     return ExpressionParser(symbols).parse(source)
 
 

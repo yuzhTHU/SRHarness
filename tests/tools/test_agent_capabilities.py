@@ -5,7 +5,7 @@ import threading
 import numpy as np
 import pytest
 
-from sr_harness.runtime import InteractionController
+from sr_harness.runtime import InteractionManager, SRInteractionManager
 from sr_harness.web.app import create_app
 from sr_harness.runtime import ModelRouter
 from sr_harness.core import AgentContext, SearchRunState, ToolCall
@@ -274,54 +274,73 @@ def test_network_split_preserves_graph_axes():
     assert np.array_equal(validation["G"], edges)
 
 
-def test_interaction_controller_keeps_only_the_latest_stream_snapshot():
-    controller = InteractionController()
-    controller.publish("data_assistant_start", {"response_id": "reply-1"})
-    controller.publish(
-        "data_assistant_delta",
+def test_interaction_manager_keeps_only_the_latest_stream_snapshot():
+    manager = InteractionManager()
+    manager.publish_event("assistant_started", {"response_id": "reply-1"})
+    manager.publish_event(
+        "assistant_delta",
         {"response_id": "reply-1", "content": "first"},
     )
-    controller.publish("activity", {"phase": "model"})
-    controller.publish(
-        "data_assistant_delta",
+    manager.publish_event("workspace_changed", {"path": "artifact.txt"})
+    manager.publish_event(
+        "assistant_delta",
         {"response_id": "reply-1", "content": "latest"},
     )
 
-    events = controller.events()
+    events = manager.get_recent_events()["events"]
 
     assert [event["kind"] for event in events] == [
-        "data_assistant_start",
-        "activity",
-        "data_assistant_delta",
+        "assistant_started",
+        "workspace_changed",
+        "assistant_delta",
     ]
     assert events[-1]["payload"]["content"] == "latest"
-    batch = controller.event_batch(after_seq=1)
+    batch = manager.get_recent_events(after_sequence=1)
     assert not batch["truncated"]
     assert [event["seq"] for event in batch["events"]] == [3, 4]
 
-    controller.publish(
-        "data_assistant",
+    manager.publish_event(
+        "assistant_completed",
         {"response_id": "reply-1", "content": "complete"},
     )
 
-    events = controller.events()
+    events = manager.get_recent_events()["events"]
     assert [event["kind"] for event in events] == [
-        "data_assistant_start",
-        "activity",
-        "data_assistant",
+        "assistant_started",
+        "workspace_changed",
+        "assistant_completed",
     ]
 
 
-def test_interaction_controller_reports_only_true_buffer_eviction():
-    controller = InteractionController()
+def test_interaction_manager_reports_only_true_buffer_eviction():
+    manager = InteractionManager()
     for index in range(1002):
-        controller.publish("activity", {"index": index})
+        manager.publish_event("workspace_changed", {"index": index})
 
-    batch = controller.event_batch(after_seq=1)
+    batch = manager.get_recent_events(after_sequence=1)
 
     assert batch["truncated"]
-    assert batch["evicted_through_seq"] == 2
+    assert batch["discarded_through"] == 2
     assert batch["events"][0]["seq"] == 3
+
+
+def test_interaction_manager_rejects_snapshot_schema_drift():
+    manager = InteractionManager()
+    snapshot = manager.export_state()
+    snapshot["deprecated_field"] = None
+
+    with pytest.raises(ValueError, match="current schema"):
+        manager.restore_state(snapshot)
+
+
+def test_interaction_manager_rejects_inconsistent_snapshot_sequence():
+    manager = InteractionManager()
+    manager.publish_event("workspace_changed", {"path": "context.data"})
+    snapshot = manager.export_state()
+    snapshot["next_sequence"] = 1
+
+    with pytest.raises(ValueError, match="next_sequence"):
+        manager.restore_state(snapshot)
 
 
 def test_model_router_uses_base_for_simple_task_and_strong_for_complex_task():
@@ -372,38 +391,54 @@ def test_subagent_prompt_contains_grounded_sr_mandate():
     assert "evaluate_eic" in prompt
 
 
-def test_interaction_controller_round_trip_and_commands():
-    controller = InteractionController()
+def test_interaction_manager_waits_at_boundary_and_resumes_with_message():
+    manager = InteractionManager()
+    manager.command("message", "initial guidance")
+    assert [message.content for message in manager.start_agent_execution()] == [
+        "initial guidance"
+    ]
+    manager.command("pause")
     received = {}
 
-    thread = threading.Thread(
-        target=lambda: received.setdefault("answer", controller.ask("Choose?", timeout=2))
-    )
+    def wait_at_boundary():
+        with manager.wait() as messages:
+            received["messages"] = [message.content for message in messages]
+
+    thread = threading.Thread(target=wait_at_boundary)
     thread.start()
-    while not controller.events():
+    while manager.state != "paused":
         thread.join(0.01)
-    question = controller.events()[0]
-    controller.reply(question["id"], "continue")
+    manager.command("message", "try a power law")
     thread.join(2)
-    assert received["answer"] == "continue"
 
-    controller.command("message", "try a power law")
-    assert controller.checkpoint() == ["try a power law"]
-    controller.command("pause")
-    assert controller.status()["paused"] is True
-    controller.command("resume")
-    assert controller.status()["paused"] is False
-    controller.command("pause", "pause after this turn")
-    controller.command("force_stop", "force this turn")
-    assert controller.status()["paused"] is True
-    assert controller.status()["force_stop_requested"] is True
-    assert controller.force_stop_event.is_set()
-    assert controller.consume_force_stop() is True
-    assert controller.status()["force_stop_requested"] is False
+    assert received["messages"] == ["try a power law"]
+    assert manager.state == "running"
+    manager.finish_agent_execution()
 
 
-def test_create_app_requires_explicit_controller(tmp_path):
-    with pytest.raises(TypeError):
-        create_app(tmp_path)
-    app = create_app(tmp_path, controller=InteractionController())
-    assert isinstance(app.state.controller, InteractionController)
+def test_sr_interaction_manager_transition_resumes_a_paused_boundary():
+    manager = SRInteractionManager()
+    manager.start_agent_execution()
+    manager.request_pause()
+    received = {}
+
+    def wait_at_boundary():
+        with manager.wait() as messages:
+            received["messages"] = messages
+
+    thread = threading.Thread(target=wait_at_boundary)
+    thread.start()
+    while manager.state != "paused":
+        thread.join(0.01)
+    manager.command("next_r")
+    thread.join(2)
+
+    assert received["messages"] == []
+    assert manager.consume_search_transition() == "next_r"
+    assert manager.state == "running"
+    manager.finish_agent_execution()
+
+
+def test_create_app_owns_a_viewer_interaction_manager(tmp_path):
+    app = create_app(tmp_path)
+    assert isinstance(app.state.interaction_manager, InteractionManager)

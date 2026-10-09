@@ -59,7 +59,7 @@ def test_common_nonlinear_functions_are_elementwise():
 
 
 def test_known_constants_can_be_bound_while_parsing():
-    model = engine.parse("pi * r**2", variables={"pi": np.pi})
+    model = engine.parse("pi * r**2", symbols={"pi": np.pi})
 
     assert np.allclose(model.evaluate({"r": np.array([1.0, 2.0])}), [np.pi, 4 * np.pi])
 

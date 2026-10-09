@@ -26,11 +26,10 @@ def save_args(args: Any, args_path: Path, excluded_keys=("saved_time", "command"
         if not isinstance(old_args, dict):
             raise ValueError(f"Expected {args_path} to contain a JSON object, got {type(old_args).__name__}")
 
-        try:
-            saved_time = old_args.get("saved_time")
-            timestamp = datetime.fromisoformat(saved_time.strip())
-        except (ValueError, AttributeError):
-            timestamp = datetime.fromtimestamp(args_path.stat().st_mtime)
+        saved_time = old_args["saved_time"]
+        if not isinstance(saved_time, str):
+            raise TypeError(f"Expected {args_path} saved_time to be a string")
+        timestamp = datetime.fromisoformat(saved_time.strip())
         timestamp = timestamp.strftime('%Y%m%d_%H%M%S')
 
         backup_path = args_path.with_name(f"{args_path.stem}.{timestamp}{args_path.suffix}")

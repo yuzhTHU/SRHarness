@@ -65,6 +65,8 @@ def test_split_data_is_cached_and_split_contexts_share_arrays_and_runtime_state(
 def test_agent_context_rejects_redundant_mapping_access_and_invalid_metadata():
     with np.testing.assert_raises_regex(TypeError, "DefaultEvaluator instance"):
         AgentContext(evaluator=object())
+    with np.testing.assert_raises_regex(TypeError, "DefaultEvaluator instance"):
+        AgentContext(evaluator=None)
     with np.testing.assert_raises(TypeError):
         AgentContext(data={"x": [1]}, target="x")["data"]
     with np.testing.assert_raises_regex(ValueError, "keys must equal data keys"):

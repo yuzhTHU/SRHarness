@@ -11,19 +11,22 @@ import numpy as np
 if TYPE_CHECKING:
     from ..evaluator import DefaultEvaluator
 
+_DEFAULT_EVALUATOR = object()
+
 
 class AgentContext:
     """One authoritative context containing data, metadata, and runtime arguments."""
 
-    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, num_nodes: int | None = None, evaluator: DefaultEvaluator | None = None, workspace: str | Path | Any | None = None):
+    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, relation_names: set[str] | None = None, num_nodes: int | None = None, evaluator: DefaultEvaluator | object = _DEFAULT_EVALUATOR, workspace: str | Path | Any | None = None):
         if args is not None and not isinstance(args, argparse.Namespace):
             raise TypeError("args must be an argparse.Namespace")
-        self.args = args or argparse.Namespace()
+        self.args = args if args is not None else argparse.Namespace()
         defaults = {
             "validation_fraction": 0.0,
             "split_by": "random",
             "split_random_state": 42,
             "split_ood_variable": None,
+            "data_revision": 0,
         }
         for name, value in defaults.items():
             if not hasattr(self.args, name):
@@ -45,10 +48,11 @@ class AgentContext:
         else:
             self.variable_axes = {name: tuple(axes) for name, axes in variable_axes.items()}
         self.variable_structures = dict(variable_structures or {})
+        self.relation_names = set(relation_names or self.variable_structures.values())
         self.num_nodes = num_nodes
         from ..evaluator import DefaultEvaluator, GraphEvaluator
-        if evaluator is None:
-            evaluator = GraphEvaluator() if self.variable_structures else DefaultEvaluator()
+        if evaluator is _DEFAULT_EVALUATOR:
+            evaluator = GraphEvaluator() if self.relation_names else DefaultEvaluator()
         if not isinstance(evaluator, DefaultEvaluator):
             raise TypeError("evaluator must be a DefaultEvaluator instance")
         self.evaluator: DefaultEvaluator = evaluator
@@ -77,19 +81,31 @@ class AgentContext:
         for axis in axes:
             if self.data[axis].ndim != 1:
                 raise ValueError(f"axis variable {axis!r} must be one-dimensional")
-        if (self.num_nodes is None) != (not self.variable_structures):
-            raise ValueError("variable_structures and num_nodes must appear together")
+        if (self.num_nodes is None) != (not self.relation_names):
+            raise ValueError("relation_names and num_nodes must appear together")
         if self.num_nodes is not None and (
             isinstance(self.num_nodes, bool)
             or not isinstance(self.num_nodes, int)
             or self.num_nodes < 1
         ):
             raise ValueError("num_nodes must be a positive integer")
+        for relation_name in self.relation_names:
+            if relation_name not in names:
+                raise ValueError("relation_names must reference entries in data")
+            relation = self.data[relation_name]
+            if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
+                raise ValueError(f"relation variable {relation_name!r} must have shape (E, 2) or (H, 3)")
+            if relation.dtype.kind not in "iu":
+                raise ValueError(f"relation variable {relation_name!r} must contain integer endpoints")
+            if np.any(relation < 0) or np.any(relation >= self.num_nodes):
+                raise ValueError(f"relation variable {relation_name!r} endpoints must be in [0, {self.num_nodes})")
         for variable, structure in self.variable_structures.items():
             if variable not in names or structure not in names:
                 raise ValueError("variable_structures must reference entries in data")
             if variable == structure:
                 raise ValueError("a structured variable cannot reference itself")
+            if structure not in self.relation_names:
+                raise ValueError("variable_structures values must name relation variables")
             relation = self.data[structure]
             if relation.ndim != 2 or relation.shape[1] not in {2, 3}:
                 raise ValueError(f"structure variable {structure!r} must have shape (E, 2) or (H, 3)")
@@ -104,8 +120,16 @@ class AgentContext:
         with self._lock:
             self._split_cache = None
 
+    def _sync_builtin_evaluator(self) -> None:
+        from ..evaluator import DefaultEvaluator, GraphEvaluator
+        if type(self.evaluator) not in {DefaultEvaluator, GraphEvaluator}:
+            return
+        self.evaluator = GraphEvaluator() if self.relation_names else DefaultEvaluator()
+
     def _splits(self) -> dict[str, AgentContext]:
         with self._lock:
+            if self.target is None:
+                raise ValueError("target must be configured before splitting AgentContext")
             if self._split_cache is None:
                 splits = self.evaluator.split(self)
                 if set(splits) != {"train", "validation"}:
@@ -122,6 +146,7 @@ class AgentContext:
             variable_descriptions={name: self.variable_descriptions[name] for name in data},
             variable_axes={name: axes for name, axes in self.variable_axes.items() if name in data},
             variable_structures={name: structure for name, structure in self.variable_structures.items() if name in data and structure in data},
+            relation_names=self.relation_names & set(data),
             num_nodes=self.num_nodes, evaluator=self.evaluator, workspace=self.workspace,
         )
 
@@ -150,10 +175,12 @@ class AgentContext:
             name: tuple(axes) for name, axes in loaded["variable_axes"].items()
         }
         self.variable_structures = dict(loaded["variable_structures"])
+        self.relation_names = set(loaded["relation_names"])
         self.num_nodes = loaded["num_nodes"]
+        self._sync_builtin_evaluator()
         self.target = self.target if self.target in values else None
         self.invalidate_splits()
-        self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+        self.args.data_revision += 1
         self._validate(allow_incomplete=True)
         return {"revision": self.args.data_revision, "variables": list(values)}
 
@@ -168,9 +195,11 @@ class AgentContext:
             self.variable_descriptions = {name: str((variable_descriptions or {}).get(name, "")) for name in arrays}
             self.variable_axes = {name: () for name in arrays}
             self.variable_structures = {}
+            self.relation_names = set()
             self.num_nodes = None
+            self._sync_builtin_evaluator()
             self.invalidate_splits()
-            self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+            self.args.data_revision += 1
             self._validate()
         return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "columns": list(arrays), "rows": len(arrays[target])}
 
@@ -190,21 +219,23 @@ class AgentContext:
         self.variable_descriptions = {name: descriptions.get(name, "") for name in self.data}
         self.variable_axes = {name: axes for name, axes in self.variable_axes.items() if name in keep_variables}
         self.variable_structures = {name: structure for name, structure in self.variable_structures.items() if name in self.data and structure in self.data}
-        if not self.variable_structures:
+        self.relation_names &= set(self.data)
+        if not self.relation_names:
             self.num_nodes = None
+        self._sync_builtin_evaluator()
         self.invalidate_splits()
-        self.args.data_revision = int(getattr(self.args, "data_revision", 0)) + 1
+        self.args.data_revision += 1
         self._validate()
         return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "selection_changed": True}
 
     def schema(self) -> dict[str, Any]:
         axes = set(self.axis_names())
         return {
-            "revision": int(getattr(self.args, "data_revision", 0)), "num_nodes": self.num_nodes,
+            "revision": self.args.data_revision, "num_nodes": self.num_nodes,
             "target": self.target, "features": list(self.feature_names()), "columns": list(self.data),
             "rows": len(self.data[self.target]) if self.target in self.data else 0,
             "variable_descriptions": dict(self.variable_descriptions),
-            "variables": {name: {"shape": list(value.shape), "dtype": str(value.dtype), "axes": list(self.variable_axes.get(name, ())), "description": self.variable_descriptions[name]} for name, value in self.data.items() if name not in axes},
+            "variables": {name: {"shape": list(value.shape), "dtype": str(value.dtype), "axes": list(self.variable_axes.get(name, ())), "description": self.variable_descriptions[name], **({"kind": "relation"} if name in self.relation_names else {})} for name, value in self.data.items() if name not in axes},
             "axes": {name: {"size": len(self.data[name]), "dtype": str(self.data[name].dtype), "description": self.variable_descriptions[name]} for name in axes},
         }
 

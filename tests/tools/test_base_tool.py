@@ -245,6 +245,7 @@ class TestBaseToolExportAndCall:
                 "split_by": "random",
                 "split_random_state": 42,
                 "split_ood_variable": None,
+                "data_revision": 0,
             },
         }
         assert result.result_str == str(result.result)

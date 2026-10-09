@@ -203,7 +203,7 @@ def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypat
 
     api = OpenRouterAPI(
         model="qwen/qwen3.6-flash",
-        parser="openai",
+        tool_parser_name="openai",
         tool_list=[DemoTool],
     )
     chunks, return_value = _consume(api([{"role": "user", "content": "use the tool"}]))
@@ -244,7 +244,7 @@ def test_openrouter_stream_callback_receives_incremental_snapshots(monkeypatch):
     updates = []
     api = OpenRouterAPI(
         model="deepseek/deepseek-v4-flash-0731",
-        parser="openai",
+        tool_parser_name="openai",
         tool_list=[DemoTool],
     )
 
@@ -395,7 +395,7 @@ def test_openrouter_skips_malformed_native_tool_calls(monkeypatch):
 
     api = OpenRouterAPI(
         model="deepseek/deepseek-v4-pro",
-        parser="openai",
+        tool_parser_name="openai",
         tool_list=[DemoTool],
     )
     chunks, return_value = _consume(api([{"role": "user", "content": "use the tool"}]))
@@ -417,7 +417,7 @@ def test_openrouter_text_parser_injects_tool_prompt_and_parses_action(monkeypatc
 
     api = OpenRouterAPI(
         model="qwen/qwen3.6-flash",
-        parser="text",
+        tool_parser_name="text",
         tool_list=[DemoTool],
     )
     _chunks, return_value = _consume(api([{"role": "user", "content": "call demo"}]))
@@ -441,7 +441,7 @@ def test_siliconflow_qwen_text_parser_injects_tool_prompt_and_parses_action(monk
 
     monkeypatch.setattr("sr_harness.api.siliconflow_api.requests.request", fake_request)
 
-    api = SiliconFlowAPI(model="Qwen3-8B", parser="text", tool_list=[DemoTool])
+    api = SiliconFlowAPI(model="Qwen3-8B", tool_parser_name="text", tool_list=[DemoTool])
     _chunks, return_value = _consume(api([{"role": "user", "content": "call demo"}]))
 
     payload = payloads[0]
@@ -472,7 +472,7 @@ def test_siliconflow_qwen_native_tools_are_sent_and_tool_calls_are_extracted(mon
 
     monkeypatch.setattr("sr_harness.api.siliconflow_api.requests.request", fake_request)
 
-    api = SiliconFlowAPI(model="Qwen3-8B", parser="openai", tool_list=[DemoTool])
+    api = SiliconFlowAPI(model="Qwen3-8B", tool_parser_name="openai", tool_list=[DemoTool])
     chunks, return_value = _consume(api([{"role": "user", "content": "call demo"}]))
 
     payload = payloads[0]

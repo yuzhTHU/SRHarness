@@ -226,7 +226,9 @@ class SearchRunState:
         agent_metadata: dict[str, Any] | None = None,
         run_id: str | None = None,
     ):
-        self.run_id = run_id or uuid.uuid4().hex
+        if run_id is not None and (not isinstance(run_id, str) or not run_id):
+            raise ValueError("run_id must be None or a non-empty string")
+        self.run_id = uuid.uuid4().hex if run_id is None else run_id
         self.ranking_metric = ranking_metric
         self.larger_is_better = larger_is_better
         self.nodes: dict[str, SearchNode] = {}
@@ -468,6 +470,80 @@ class SearchRunState:
                 return None
             node_id = next(reversed(self.nodes))
             return self.nodes[node_id].coordinate
+
+    def export_state(self) -> dict[str, Any]:
+        """Return enough durable state to rebuild this run after a restart."""
+        with self._lock:
+            return {
+                "version": 1,
+                "run_id": self.run_id,
+                "ranking_metric": self.ranking_metric,
+                "larger_is_better": self.larger_is_better,
+                "nodes": [node.to_dict(include_detail=True) for node in self.nodes.values()],
+                "candidates": [candidate.to_dict() for candidate in self._candidates],
+            }
+
+    @classmethod
+    def from_state(cls, snapshot: dict[str, Any], save_path: str | Path | None = None) -> "SearchRunState":
+        """Rebuild a run from :meth:`export_state` without replaying work."""
+        expected_fields = {
+            "version", "run_id", "ranking_metric", "larger_is_better",
+            "nodes", "candidates",
+        }
+        if set(snapshot) != expected_fields:
+            raise ValueError("Persisted SearchRunState does not match the current schema")
+        if snapshot["version"] != 1:
+            raise ValueError("Unsupported SearchRunState snapshot version")
+        state = cls.__new__(cls)
+        state.run_id = str(snapshot["run_id"])
+        state.ranking_metric = str(snapshot["ranking_metric"])
+        state.larger_is_better = bool(snapshot["larger_is_better"])
+        state.nodes = {}
+        state._candidates = []
+        state._lock = threading.RLock()
+        state._save_path = Path(save_path) if save_path is not None else None
+        state._nodes_path = state._save_path / "nodes.jsonl" if state._save_path else None
+        state._result_path = state._save_path / "result.json" if state._save_path else None
+        nodes = snapshot["nodes"]
+        if not isinstance(nodes, list) or any(not isinstance(item, dict) for item in nodes):
+            raise TypeError("Persisted search nodes must be a list of dictionaries")
+        for item in nodes:
+            coord = item["coord"]
+            parents = tuple(
+                ParentLink(
+                    parent_node_id=str(parent["node_id"]),
+                    relation=parent["relation"],
+                )
+                for parent in item["parents"]
+            )
+            node = SearchNode(
+                run_id=str(item["run_id"]),
+                node_id=str(item["node_id"]),
+                node_label=str(item["node_label"]),
+                coordinate=SearchCoordinate(
+                    R=int(coord["R"]),
+                    C=int(coord["C"]),
+                    L=int(coord["L"]),
+                    K=int(coord["K"]),
+                ),
+                parents=parents,
+                created_at=str(item["created_at"]),
+                core=dict(item["core"]),
+                detail=dict(item["detail"]),
+            )
+            state.nodes[node.node_id] = node
+        candidates = snapshot["candidates"]
+        if not isinstance(candidates, list) or any(not isinstance(item, dict) for item in candidates):
+            raise TypeError("Persisted candidates must be a list of dictionaries")
+        state._candidates = [
+            CandidateRecord(
+                formula=str(item["formula"]),
+                node_id=str(item["node_id"]),
+                details=dict(item["details"]),
+            )
+            for item in candidates
+        ]
+        return state
 
     def node_record(self, node_id: str) -> dict[str, Any] | None:
         """Run the ``node record`` operation.

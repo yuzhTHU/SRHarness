@@ -52,6 +52,7 @@ def test_context_data_loads_flat_variables_and_inline_file_and_size_axes(tmp_pat
                 "file": "A.npy",
                 "description": "Directed edge list.",
                 "axes": ["edge", "edge_endpoint"],
+                "kind": "relation",
             },
         },
         "axes": {
@@ -91,6 +92,7 @@ def test_context_data_loads_flat_variables_and_inline_file_and_size_axes(tmp_pat
     np.testing.assert_array_equal(data["data"]["category"], ["urban", "rural", "urban"])
     assert data["variable_axes"]["A"] == ("edge", "edge_endpoint")
     assert data["variable_structures"] == {"edge_signal": "A"}
+    assert data["relation_names"] == {"A"}
     assert data["num_nodes"] == 2
     assert data["variable_descriptions"]["population"].startswith("Population")
     np.testing.assert_array_equal(data["data"]["node"], ["Beijing", "Shanghai"])
@@ -208,7 +210,7 @@ def test_relation_metadata_validates_shape_dtype_and_endpoint_range(tmp_path):
                     "axes": ["edge"],
                     "structure": "links",
                 },
-                "links": {"file": "links.npy", "description": "Directed endpoint pairs.", "axes": ["edge", "endpoint"]},
+                "links": {"file": "links.npy", "description": "Directed endpoint pairs.", "axes": ["edge", "endpoint"], "kind": "relation"},
         },
         "axes": {
             "edge": {"size": 2, "description": "Edge position."},
@@ -249,7 +251,7 @@ def test_validate_context_data_tool_only_validates_workspace_files(tmp_path):
     assert result["repairs"] == []
     assert "ready for InteractiveSession" in result["next_action"]
     assert not context.data
-    assert not hasattr(context.args, "data_revision")
+    assert context.args.data_revision == 0
 
 
 def test_validate_context_data_tool_returns_actionable_repairs(tmp_path):

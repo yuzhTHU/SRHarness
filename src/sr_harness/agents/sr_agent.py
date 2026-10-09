@@ -12,7 +12,7 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from ..api import BaseAPI
 from ..tools import BaseTool
 from ..parser import BaseParser
@@ -22,9 +22,6 @@ from ..utils import ParallelTimer, NamedTimer, Timer
 from ..utils import format_pareto_front, render_markdown, tag2ansi, setup_logging
 from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, ToolCall, ToolCallResult
 from .agent import Agent
-
-if TYPE_CHECKING:
-    from ..evaluator import DefaultEvaluator
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
 
@@ -62,7 +59,7 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
-        evaluator: DefaultEvaluator | None = None,
+        excluded_tools: set[str] | None = None,
     ):
         """初始化 Agent。
 
@@ -95,7 +92,7 @@ class SRAgent(Agent):
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与其它 Agent 共享的数据和工作区上下文。None 表示新建独立上下文。
-            evaluator: 自定义公式拟合与评估协议。设置后通过共享 context 提供给工具。
+            excluded_tools: 从自动发现的工具集中排除的工具名。None 使用基础 Agent 的默认集合。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         log_path = Path(save_path) / "info.log" if save_path is not None else None
@@ -105,9 +102,11 @@ class SRAgent(Agent):
             force=False,
         )
 
-        if not hasattr(self, "excluded_tools"):
-            # Workspace executors require explicit workspace permissions.
-            self.excluded_tools = {"workspace_code_executor", "validate_context_data"}
+        # Workspace executors require explicit workspace permissions.
+        self.excluded_tools = set(
+            {"workspace_code_executor", "validate_context_data"}
+            if excluded_tools is None else excluded_tools
+        )
 
         tool_cls_list = []
         for tool_cls in BaseTool.load_tool_classes():
@@ -147,7 +146,9 @@ class SRAgent(Agent):
         self.larger_is_better = larger_is_better
         self.force_initial_diagnostics = force_initial_diagnostics
         self.auto_routing = auto_routing
-        self.strong_llm_provider = strong_llm_provider or llm_provider
+        self.strong_llm_provider = (
+            llm_provider if strong_llm_provider is None else strong_llm_provider
+        )
         self.strong_llm_model = strong_llm_model
         self.model_router = ModelRouter(
             enabled=auto_routing,
@@ -227,17 +228,11 @@ class SRAgent(Agent):
         self.tools_counter = ParallelTimer(unit='call') # 工具调用统计
         self.save_path = save_path
         self.context = context if context is not None else AgentContext()
-        if evaluator is not None:
-            from ..evaluator import DefaultEvaluator
-            if not isinstance(evaluator, DefaultEvaluator):
-                raise TypeError("evaluator must be a DefaultEvaluator instance")
-            self.context.evaluator = evaluator
         self.context.args.validation_fraction = validation_fraction
         self.context.args.split_by = split_by
         self.context.args.split_ood_variable = split_ood_variable
         self.context.args.split_random_state = split_random_state
         self.context.invalidate_splits()
-        self.evaluator = self.context.evaluator
         self.run_state = SearchRunState(
             save_path=save_path,
             ranking_metric=ranking_metric,
@@ -298,7 +293,7 @@ class SRAgent(Agent):
         self.context.invalidate_splits()
         self._active_X = X
         self._active_y = y
-        self._data_revision = int(getattr(self.context.args, "data_revision", 0))
+        self._data_revision = int(self.context.args.data_revision)
         self.context.args.llm_provider = self.llm_provider
         self.context.args.llm_model = self.llm_model
         self.context.args.llm_max_tokens = self.llm_max_tokens
@@ -482,7 +477,8 @@ class SRAgent(Agent):
             variable_descriptions={name: self.context.variable_descriptions.get(name, "") for name in data},
             variable_axes=variable_axes or None,
             variable_structures=variable_structures,
-            num_nodes=self.context.num_nodes if variable_structures else None,
+            relation_names=self.context.relation_names & set(data),
+            num_nodes=self.context.num_nodes if self.context.relation_names & set(data) else None,
             evaluator=self.context.evaluator,
             workspace=self.context.workspace,
         )
@@ -662,9 +658,7 @@ class SRAgent(Agent):
 
     def refresh_data(self) -> dict[str, Any] | None:
         """Apply a newly committed shared-data revision and describe the change."""
-        if not hasattr(self, "context") or not hasattr(self, "_data_revision"):
-            return None
-        revision = int(getattr(self.context.args, "data_revision", 0))
+        revision = int(self.context.args.data_revision)
         if revision == self._data_revision:
             return None
         if self.context.target is None or not self.context.feature_names():

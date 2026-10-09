@@ -153,7 +153,7 @@ class TestPySRTool:
         assert result["config"]["timeout"] == 120
         assert train_metrics(result)["mse"] < 1e-12
 
-    def test_execute_uses_gplearn_fallback_when_pysr_fails(self, monkeypatch):
+    def test_execute_reports_pysr_failure_without_switching_algorithms(self, monkeypatch):
         x = np.linspace(0.0, 5.0, 10)
         y = x + 2
         tool = make_tool({"x": x}, y)
@@ -161,18 +161,12 @@ class TestPySRTool:
         def fake_run_pysr(self, *args, **kwargs):
             raise RuntimeError("julia unavailable")
 
-        def fake_fallback(self, X, y_fit, x_names, binary_ops, unary_ops):
-            return "x1 + 2"
-
         monkeypatch.setattr(PySRTool, "_run_pysr", fake_run_pysr)
-        monkeypatch.setattr(PySRTool, "_run_gplearn_fallback", fake_fallback)
 
-        result = tool.execute(binary_operators=["+"], unary_operators=[])
+        result = tool(binary_operators=["+"], unary_operators=[])
 
-        assert result["method"] == "gplearn"
-        assert result["formula"] == "x + 2"
-        assert train_metrics(result)["mse"] < 1e-12
-        assert any("PySR failed" in item for item in result["exceptions"])
+        assert result.ok is False
+        assert "julia unavailable" in result.result_str
 
     def test_invalid_x_vars_raise_when_no_valid_inputs(self):
         x = np.arange(5.0)

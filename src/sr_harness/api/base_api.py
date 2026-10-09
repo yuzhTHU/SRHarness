@@ -32,11 +32,8 @@ class BaseAPI(ABC, FactoryMixin):
         model: str | None = None,
         tool_list: ToolList | None = None,
         tool_parser_name: ToolParserName = "text",
-        parser: ToolParserName | None = None,
     ):
         self.model = model
-        if parser is not None:
-            tool_parser_name = parser
         self.tool_list = tool_list
         self.tool_parser_name = tool_parser_name
         self.tool_parser = self.build_parser(tool_parser_name)
@@ -54,6 +51,9 @@ class BaseAPI(ABC, FactoryMixin):
             kwargs["stream_callback"] = stream_callback
         generator = self._request(messages, **kwargs)
         return APICallResult(generator, self.tool_parser)
+
+    def cancel(self) -> None:
+        """Request cancellation when a provider offers no stronger primitive."""
 
     @abstractmethod
     def _request(

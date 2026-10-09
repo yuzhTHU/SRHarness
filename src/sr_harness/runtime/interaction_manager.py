@@ -49,7 +49,7 @@ class PendingMessage:
 
 
 class _CancellationSignal:
-    """Compatibility view for tools which expect ``cancel_event.is_set()``."""
+    """Read-only Event-like view of the manager's interruption state."""
 
     def __init__(self, manager: "InteractionManager") -> None:
         self._manager = manager
@@ -70,6 +70,10 @@ class InteractionManager:
         "workspace_changed", "execution_completed", "execution_failed",
         "command_received", "state_changed", "search_position_changed",
         "topk_updated",
+    }
+    _STATE_FIELDS = {
+        "version", "state", "messages", "events", "next_sequence",
+        "discarded_through", "event_capacity",
     }
 
     def __init__(self, *, event_capacity: int = 1000) -> None:
@@ -173,7 +177,7 @@ class InteractionManager:
                 if self._state != "paused":
                     self._set_state_locked("paused")
                 self._cancel_current = None
-                while not self._messages:
+                while not self._has_boundary_input_locked():
                     self._condition.wait()
                 messages = self._consume_messages_locked()
                 paused = True
@@ -225,10 +229,125 @@ class InteractionManager:
                 "server_time": time.time(),
             }
 
+    def export_state(self) -> dict[str, Any]:
+        """Return the durable portion of this manager's state."""
+        with self._condition:
+            return {
+                "version": 1,
+                "state": self._state,
+                "messages": [
+                    {"content": message.content, "created_at": message.created_at}
+                    for message in self._messages
+                ],
+                "events": [dict(event) for event in self._events],
+                "next_sequence": self._next_sequence,
+                "discarded_through": self._discarded_through,
+                "event_capacity": self._events.maxlen,
+            }
+
+    def restore_state(self, snapshot: Mapping[str, Any]) -> bool:
+        """Restore durable state and interrupt work that died with the process.
+
+        Returns whether an in-flight operation had to be converted into an
+        interruption. Runtime callbacks and locks are deliberately never
+        restored.
+        """
+        with self._condition:
+            if set(snapshot) != self._STATE_FIELDS:
+                raise ValueError("Persisted interaction state does not match the current schema")
+            if snapshot["version"] != 1:
+                raise ValueError("Unsupported InteractionManager snapshot version")
+            previous = snapshot["state"]
+            if previous not in {"idle", "running", "pausing", "interrupting", "paused"}:
+                raise ValueError(f"Unknown persisted interaction state: {previous!r}")
+            capacity = snapshot["event_capacity"]
+            if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+                raise ValueError("Persisted event_capacity must be positive")
+            events = snapshot["events"]
+            if not isinstance(events, list) or any(not isinstance(event, Mapping) for event in events):
+                raise TypeError("Persisted events must be a list of mappings")
+            required_event_fields = {"seq", "id", "kind", "timestamp", "payload"}
+            if any(set(event) != required_event_fields for event in events):
+                raise ValueError("Persisted events must use the current event schema")
+            if any(event["kind"] not in self._EVENT_KINDS for event in events):
+                raise ValueError("Persisted events contain an unsupported event kind")
+            if any(
+                not isinstance(event["seq"], int)
+                or isinstance(event["seq"], bool)
+                or event["seq"] < 1
+                or not isinstance(event["id"], str)
+                or not event["id"]
+                or not isinstance(event["timestamp"], (int, float))
+                or isinstance(event["timestamp"], bool)
+                or not isinstance(event["payload"], Mapping)
+                for event in events
+            ):
+                raise TypeError("Persisted events contain invalid field values")
+            if [event["seq"] for event in events] != sorted({event["seq"] for event in events}):
+                raise ValueError("Persisted event sequences must be unique and increasing")
+            self._events = deque(
+                (dict(event) for event in events),
+                maxlen=capacity,
+            )
+            messages = snapshot["messages"]
+            if not isinstance(messages, list) or any(not isinstance(item, Mapping) for item in messages):
+                raise TypeError("Persisted messages must be a list of mappings")
+            if any(set(item) != {"content", "created_at"} for item in messages):
+                raise ValueError("Persisted messages must use the current message schema")
+            if any(
+                not isinstance(item["content"], str)
+                or not item["content"]
+                or not isinstance(item["created_at"], (int, float))
+                or isinstance(item["created_at"], bool)
+                for item in messages
+            ):
+                raise TypeError("Persisted messages contain invalid field values")
+            self._messages = deque(
+                PendingMessage(item["content"], item["created_at"])
+                for item in messages
+            )
+            discarded_through = snapshot["discarded_through"]
+            if (
+                not isinstance(discarded_through, int)
+                or isinstance(discarded_through, bool)
+                or discarded_through < 0
+            ):
+                raise ValueError("Persisted discarded_through must be a non-negative integer")
+            self._discarded_through = discarded_through
+            highest_sequence = max(
+                (event["seq"] for event in self._events),
+                default=0,
+            )
+            next_sequence = snapshot["next_sequence"]
+            if (
+                not isinstance(next_sequence, int)
+                or isinstance(next_sequence, bool)
+                or next_sequence <= highest_sequence
+                or next_sequence <= discarded_through
+            ):
+                raise ValueError("Persisted next_sequence is inconsistent with retained events")
+            self._next_sequence = next_sequence
+            interrupted = previous in {"running", "pausing", "interrupting", "paused"}
+            self._state = "idle"
+            self._cancel_current = None
+            if interrupted:
+                self._publish_event_locked(
+                    "command_received",
+                    {"action": "force_pause", "restored_after_restart": True},
+                )
+                self._publish_event_locked(
+                    "state_changed",
+                    {"previous": previous, "current": "idle", "interrupted": True},
+                )
+            return interrupted
+
     def _consume_messages_locked(self) -> list[PendingMessage]:
         messages = list(self._messages)
         self._messages.clear()
         return messages
+
+    def _has_boundary_input_locked(self) -> bool:
+        return bool(self._messages)
 
     def _set_state_locked(self, state: InteractionState) -> None:
         previous = self._state
@@ -274,6 +393,8 @@ class InteractionManager:
 class SRInteractionManager(InteractionManager):
     """Interaction manager with symbolic-regression branch commands."""
 
+    _STATE_FIELDS = InteractionManager._STATE_FIELDS | {"search_transitions"}
+
     def __init__(self, *, event_capacity: int = 1000) -> None:
         super().__init__(event_capacity=event_capacity)
         self._search_transitions: deque[Literal["next_c", "next_r"]] = deque()
@@ -294,6 +415,9 @@ class SRInteractionManager(InteractionManager):
         with self._condition:
             return self._search_transitions.popleft() if self._search_transitions else None
 
+    def _has_boundary_input_locked(self) -> bool:
+        return bool(self._messages or self._search_transitions)
+
     def status(self) -> dict[str, Any]:
         """Include the pending SR branch transition in the control snapshot."""
         with self._condition:
@@ -302,3 +426,22 @@ class SRInteractionManager(InteractionManager):
                 self._search_transitions[-1] if self._search_transitions else None
             )
             return status
+
+    def export_state(self) -> dict[str, Any]:
+        """Include pending search transitions in the durable snapshot."""
+        with self._condition:
+            state = super().export_state()
+            state["search_transitions"] = list(self._search_transitions)
+            return state
+
+    def restore_state(self, snapshot: Mapping[str, Any]) -> bool:
+        """Restore common state plus queued symbolic-search transitions."""
+        interrupted = super().restore_state(snapshot)
+        with self._condition:
+            transitions = snapshot["search_transitions"]
+            if not isinstance(transitions, list) or any(
+                action not in {"next_c", "next_r"} for action in transitions
+            ):
+                raise ValueError("Persisted search_transitions contains an invalid action")
+            self._search_transitions = deque(transitions)
+        return interrupted

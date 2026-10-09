@@ -9,7 +9,7 @@ from .tree import children, iter_preorder, with_children
 def desugar(expression: Expression) -> Expression:
     """Compile ``aggr/targ/sour`` nodes into indexed reductions.
 
-        Edge lists use ``(target, source)`` column order. A legacy aggregation
+        Edge lists use ``(target, source)`` column order. A convenience aggregation
         therefore becomes ``sum[j](A[i, j], ...)``: ``j`` is the source index
         being reduced and ``i`` is the surviving target index.
 

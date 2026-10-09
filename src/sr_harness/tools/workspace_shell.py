@@ -263,6 +263,9 @@ class Workspace:
         if not src.exists():
             raise FileNotFoundError(f"Workspace input does not exist: {src}")
         dst = self._path / src.name
+        if dst.is_symlink() and dst.resolve() == src:
+            self._readonly_mounts[dst] = src
+            return dst
         if dst.exists() or dst.is_symlink():
             raise FileExistsError(
                 f"Workspace input name {dst.name!r} is already in use; "

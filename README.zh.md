@@ -54,7 +54,7 @@ pip install -e ".[dev]"
 
 ```bash
 pip install -e ".[web]"       # Web 搜索树查看器
-pip install -e ".[tools]"     # PySR、gplearn、PySINDy 和 PDF 文本提取
+pip install -e ".[tools]"     # PySR、PySINDy 和 PDF 文本提取
 pip install -e ".[nn]"        # 实验性神经网络组件
 pip install -e ".[all]"       # 安装以上全部组件
 ```
@@ -194,7 +194,7 @@ sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 默认使用临时工作区。如需保留工作区并使用已有资料，可以指定工作区目录，并将多个文件或目录只读挂载到其根目录：
 
 ```bash
-sr-harness run --workspace ./workspace --mount ./data.csv ./papers --port 8000
+sr-harness run --workspace-dir ./workspace --mount ./data.csv ./papers --port 8000
 ```
 
 挂载输入的 basename 必须唯一。数据准备 Agent 和预览接口可以读取这些内容，但上传接口与
@@ -216,8 +216,9 @@ X/Y/Hue/Size 槽位以快速预览变量关系。SRHarness 会根据这些
 
 运行期间，“执行时间线”展示模型推理、工具调用及结果、token/费用用量和控制事件；
 “当前上下文”展示各个 R-C-L 节点对应的消息。搜索树与候选公式面板会联动到相应节点，
-候选公式可在全部排名结果和 Pareto front 之间切换。研究者指导、模型修改、暂停/继续、
-停止以及 `ask_human` 回复会在安全的操作边界生效。界面支持中英文、明暗主题，以及可调整
+候选公式可在全部排名结果和 Pareto front 之间切换。研究者指导、模型修改和暂停请求会在
+安全的操作边界生效；再次点击暂停会中断当前模型输出或工具调用，使 Agent 更快抵达边界。
+Agent 回复但未调用工具时会自然交还控制权。界面支持中英文、明暗主题，以及可调整
 宽度或折叠的左右面板。
 
 ### 研究后端、Subagent 与双向交互
@@ -231,10 +232,9 @@ X/Y/Hue/Size 槽位以快速预览变量关系。SRHarness 会根据这些
 三项研究工具的说明由各自 `get_doc()` 动态注册为
 只读 runtime skill，不在内置 `skills/` 目录维护副本。
 
-`SRAgentInteractive` 通过 `InteractionManager` 连接具体交互界面，同时继续使用统一的搜索
-循环。默认的 `TerminalInteractionManager` 在终端中处理 `ask_human`；Web 工作台则注入
-`WebInteractionManager`，负责将运行状态和工作区绑定到 Web Session，在安全边界处理暂停、
-恢复、停止和研究者意见，并发布模型、工具与候选事件。界面适配器不持有科研搜索状态，
+`SRAgentInteractive` 通过 `SRInteractionManager` 连接交互界面；数据准备 Agent 与评测器构建
+Agent 则各自拥有独立的 `InteractionManager`，因此三者的控制和时间线不会相互干扰。管理器
+负责排队研究者消息、暂停与中断请求、安全边界协调以及事件发布，但不持有科研搜索状态，
 也不复制 R-C-L 循环。
 
 auto-routing 用于模型后端选择：简单任务和早期探索使用基础后端；配置了

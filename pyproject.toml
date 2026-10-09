@@ -42,7 +42,6 @@ nn = [
 ]
 tools = [
     "pysr>=1.5.10",
-    "gplearn>=0.4.3",
     "pysindy>=2.1.0",
     "pypdf>=5.0.0",
 ]

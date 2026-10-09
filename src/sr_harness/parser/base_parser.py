@@ -85,7 +85,7 @@ class BaseParser(ABC, FactoryMixin):
     def format_tool_result_messages(
         self,
         tool_calls: List[ToolCall],
-        results: List[ToolCallResult | None],
+        results: List[ToolCallResult],
     ) -> List[Dict[str, Any]]:
         """Format tool result messages.
 

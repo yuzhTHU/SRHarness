@@ -33,8 +33,12 @@ class DefaultEvaluator:
 
     @classmethod
     def fit_candidate(cls, f: engine.Expression, context: AgentContext) -> engine.Expression:
+        if context.target is None:
+            raise ValueError("context.target must be configured before fitting a candidate")
         return cls.fit(f, engine.Symbol(context.target), context)
 
     @classmethod
     def evaluate_candidate(cls, f: engine.Expression, context: AgentContext) -> MetricDict:
+        if context.target is None:
+            raise ValueError("context.target must be configured before evaluating a candidate")
         return cls.evaluate(f, engine.Symbol(context.target), context)

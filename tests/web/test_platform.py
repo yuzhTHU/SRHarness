@@ -21,14 +21,18 @@ from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
 from sr_harness.core import APICallResult, SearchRunState, ToolCall, load_context_data
 from sr_harness.api import BaseAPI
 from sr_harness.web.app import create_app
-from sr_harness.runtime import InteractionController
 from sr_harness.web.session import InteractiveSession
+
+
+class CancellableFakeAPI:
+    def cancel(self):
+        return None
 
 
 @pytest.fixture
 def platform(tmp_path):
     session = InteractiveSession(tmp_path, agent_options={'tools': ['evaluate_formula', 'workspace_shell']})
-    with TestClient(create_app(tmp_path, controller=session.controller, session=session)) as client:
+    with TestClient(create_app(tmp_path, session=session)) as client:
         yield client, session
 
 
@@ -49,8 +53,8 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'function renderComposerControl()' in page.text
     assert "button.classList.add('send-icon')" in page.text
     assert "if(state==='idle'){const label=_('startExploring');button.innerHTML='<svg" in page.text
-    assert "action:'pause',message:_('safeStopNotice')" in page.text
-    assert "action:'force_stop',message:_('forceStopNotice')" in page.text
+    assert "action:'pause'" in page.text
+    assert "action:'force_pause'" in page.text
     assert "const control=await api('/api/control/command',{action:'message',message:prompt})" in page.text
     assert '.composer #send.send-icon{display:grid;place-items:center;width:34px;height:34px' in page.text
     assert "for(const [inputId,buttonId] of [['R','next-c'],['C','next-r']]" in page.text
@@ -74,6 +78,13 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert '.composer-status-center{position:absolute!important;top:50%;left:50%' in page.text
     assert '.composer>.row #status{padding:0;border-radius:0;background:transparent;color:var(--muted);font-size:11px' in page.text
     assert 'id="plot-variable-palette"' in page.text
+    assert 'id="relationship-preview-mode"' in page.text
+    assert '<option value="table">表格</option>' in page.text
+    assert 'id="data-summary"' not in page.text
+    assert "for(const column of dataPreview.columns)" in page.text
+    assert "pill.ondragend=()=>{if(!plotDragAccepted" in page.text
+    assert "function loadPlotPreview()" in page.text
+    assert "id=\"plot-broadcast-info\"" in page.text
     assert 'id="start-prepared"' not in page.text
     data_view = page.text[page.text.index('id="data-setup"'):page.text.index('id="run-setup"')]
     run_setup = page.text[page.text.index('id="run-setup"'):page.text.index('id="feed"')]
@@ -136,7 +147,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "api('/api/evaluator/test',evaluatorPayload())" in page.text
     assert "api('/api/evaluator/agent/start',{message,source:$('evaluator-code').value})" in page.text
     assert "api('/api/evaluator/agent/stop',{})" in page.text
-    assert "['running','stopping'].includes(session?.evaluator_agent_state)" in page.text
+    assert "['pausing','interrupting'].includes(agentState)" in page.text
     assert "button.classList.toggle('stop',active)" in page.text
     assert "if(evaluatorDirty)await saveEvaluatorConfiguration()" in page.text
     assert '<h3>配置变量描述</h3>' in data_view
@@ -314,7 +325,10 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="save-data-selection"' not in data_view
     assert 'id="data-preview-card"' not in data_insights
     assert 'class="data-card wide relationship-card"' not in data_insights
-    assert '<div class="bar relationship-preview-bar"><span>关系预览</span></div>' in data_insights
+    assert 'id="data-table-preview"' in data_insights
+    assert 'data-preview-scroll' not in data_insights
+    assert 'data-insights-resizer' not in data_insights
+    assert "[['row','ROW'],['column','COL'],['color','MAP'],['z','Z']]" in page.text
     assert '#workspace{border-right:0}#insights-panel{border-left:0}' in page.text
     assert '#workspace>.bar{background:#fff}' in page.text
     assert '#workspace>.bar,.center>.bar{flex:0 0 57px;height:57px;min-height:57px}' in page.text
@@ -355,7 +369,6 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "if(!promptEdited.user)schedulePromptPreview()" not in page.text
     assert "if(!promptEdited.system)schedulePromptPreview()" not in page.text
     assert "system_prompt:$('system-prompt').value.trim(),user_prompt:userPrompt" in page.text
-    assert "session?.state==='running'&&!session.paused&&!questionId" in page.text
     assert "if(e.kind==='user')" in page.text
     assert "showTabHint(_('runStartedHint'))" not in page.text
     assert "syncResearchProblem($('problem-description').value)" in page.text
@@ -375,7 +388,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "api('/api/data/context')" in page.text
     assert 'async function responseError(response' in page.text
     assert 'function compactStreamEventBatch(events)' in page.text
-    assert "if(events.truncated&&seq)notice(_('eventBufferGap'))" in page.text
+    assert "if((searchEvents.truncated&&seq)||(dataEvents.truncated&&dataSeq)||(evaluatorEvents.truncated&&evaluatorSeq))notice(_('eventBufferGap'))" in page.text
     assert "events.events[0].seq>seq+1" not in page.text
     assert "if(e.kind==='evaluator_context')" in page.text
     assert 'function renderDataContextEventCard(e,feed)' in page.text
@@ -384,17 +397,16 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "contextScope:'evaluator'" in page.text
     assert 'function fitProblemDescription()' in page.text
     assert "requestAnimationFrame(fitProblemDescription)" in page.text
-    assert 'function renderTimelineSystemPrompt(' in page.text
-    assert "card.dataset.started=timestamp" in page.text
-    assert "find(event=>Number(event.dataset.started)>Number(timestamp))" in page.text
+    assert "card.dataset.started=e.timestamp" in page.text
+    assert "find(item=>Number(item.dataset.started)>Number(e.timestamp))" in page.text
     assert "statusStarted:performance.now()/1000" in page.text
     assert "state.statusStarted=performance.now()/1000" in page.text
     assert "streamProgress(state.statusStarted,state.status)" in page.text
     assert "const now=performance.now()/1000" in page.text
     assert "serverClockOffsetSeconds" not in page.text
-    assert "renderTimelineSystemPrompt(feed,p,'symbolic-regression',e.timestamp)" in page.text
-    assert "renderTimelineSystemPrompt(feed,p,'data',e.timestamp)" in page.text
-    assert "renderTimelineSystemPrompt(feed,p,'evaluator',e.timestamp)" in page.text
+    assert "if(e.kind==='prompt_added'){renderPromptAdded(e,$('feed'));return}" in page.text
+    assert "if(e.kind==='prompt_added'){renderPromptAdded(e,$('data-agent-feed'),'data');return}" in page.text
+    assert "if(e.kind==='prompt_added'){renderPromptAdded(e,$('evaluator-agent-feed'),'evaluator');return}" in page.text
     assert "if(e.kind==='evaluator_user')" in page.text
     assert '.data-agent-feed .event-kind:is(:hover,:focus)::after' in page.text
     assert "await responseError(response,_('uploadFailed'))" in page.text
@@ -411,6 +423,14 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'workspace_shell' in safety.text
     assert 'workspace_code_executor' in safety.text
     assert '操作系统级只读 bind mount' in safety.text
+    assert 'id="context-data-guide-link"' in page.text
+    assert 'href="/context-data-guide"' in page.text
+    context_data_guide = client.get('/context-data-guide')
+    assert context_data_guide.status_code == 200
+    assert 'SRHarness · context.data 数据规范' in context_data_guide.text
+    assert '硬约束' in context_data_guide.text
+    assert '语义约定' in context_data_guide.text
+    assert '不要泄露待发现的真实公式' in context_data_guide.text
     evaluator_guide = client.get('/evaluator-guide')
     assert evaluator_guide.status_code == 200
     assert 'Evaluator 的接口' in evaluator_guide.text
@@ -434,11 +454,10 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'function unobservePreviewBlocks(parent)' in page.text
     assert 'id="up"' not in page.text
     assert 'id="path"' not in page.text
-    assert ':root[data-theme="dark"] #tree-status' in page.text
     assert 'function applyPromptPreview(preview,systemOnly=false)' in page.text
     assert 'const hasPreparedData=Boolean(session?.supplied_data||useCommittedContext)' in page.text
     assert 'applyPromptPreview(preview,!hasPreparedData)' in page.text
-    assert "if(s.state==='idle')refreshPromptPreview()" in page.text
+    assert "if(s.state==='idle')return refreshPromptPreview()" in page.text
     assert client.get('/viewer').status_code == 200
     initial_prompts = client.post('/api/data/prompts', json={})
     assert initial_prompts.status_code == 200
@@ -529,8 +548,12 @@ def test_demo_dataset_variants(tmp_path, kind, variables, target):
         np.testing.assert_allclose(loaded['data']['dx_dt'], expected)
     else:
         assert loaded['data']['omega'].shape == loaded['data']['x'].shape == loaded['data']['dx_dt'].shape == (481, 10)
-        assert loaded['data']['A'].shape == (17, 2)
+        assert loaded['data']['A'].shape == (34, 2)
         assert set(np.unique(loaded['data']['A'])) == set(range(10))
+        assert loaded['num_nodes'] == 10
+        assert loaded['relation_names'] == {'A'}
+        np.testing.assert_array_equal(loaded['data']['endpoint'], ['target', 'source'])
+        np.testing.assert_array_equal(loaded['data']['node'], [f'node{index}' for index in range(1, 11)])
 
 
 def test_demo_dataset_rejects_unknown_kind(tmp_path):
@@ -674,6 +697,11 @@ def test_context_data_preview_uses_aligned_one_dimensional_variables(platform):
         {'sample': 1, 'x': 2.0, 'y': 4.0},
         {'sample': 2, 'x': 3.0, 'y': 6.0},
     ]
+    heatmap = client.post('/api/data/context/heatmap', json={
+        'row': ['sample'], 'column': ['x', 'y'], 'color': '', 'z': '',
+    })
+    assert heatmap.status_code == 200, heatmap.text
+    assert heatmap.json()['values'] == [[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]]
     prompts = client.post('/api/data/prompts', json={
         'target': 'y', 'features': ['sample', 'x'],
         'variable_descriptions': {'sample': 'Sample index.'},
@@ -696,7 +724,7 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
         'variables': {
                 'theta': {
                     'file': 'theta.npy', 'description': 'Node phases.',
-                    'axes': ['time', 'node'], 'structure': 'A',
+                    'axes': ['time', 'node'],
             },
             'omega': {
                 'file': 'omega.npy', 'description': 'Natural frequencies.',
@@ -704,11 +732,11 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
             },
             'A': {
                 'file': 'A.npy', 'description': 'Directed edge list.',
-                'axes': ['edge', 'endpoint'],
+                'axes': ['edge', 'endpoint'], 'kind': 'relation',
             },
                 'dtheta_dt': {
                     'file': 'dtheta_dt.npy', 'description': 'Phase derivatives.',
-                    'axes': ['time', 'node'], 'structure': 'A',
+                    'axes': ['time', 'node'],
             },
         },
         'axes': {
@@ -733,6 +761,39 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     ]
     assert preview['preview_columns'] == []
     assert preview['data'] == []
+    relation_group = next(
+        group for group in preview['preview_groups'] if group['variable'] == 'A'
+    )
+    assert relation_group['kind'] == 'relation'
+    relation_preview = client.get(
+        '/api/data/context/preview', params={'group': relation_group['id']},
+    )
+    assert relation_preview.status_code == 200, relation_preview.text
+    assert relation_preview.json() == {
+        **relation_group,
+        'description': 'Directed edge list.',
+        'node_axis': 'node',
+        'nodes': [{'id': 0, 'label': 0}, {'id': 1, 'label': 1}],
+        'coordinates': [[0, 1], [1, 0]],
+        'endpoint_count': 2,
+        'relation_count': 2,
+        'truncated': False,
+    }
+    plot_preview = client.get('/api/data/context/plot', params={
+        'x': 'theta', 'y': 'omega', 'hue': 'node', 'size': 'time',
+    })
+    assert plot_preview.status_code == 200, plot_preview.text
+    assert plot_preview.json()['axes'] == ['time', 'node']
+    assert plot_preview.json()['shape'] == [3, 2]
+    assert plot_preview.json()['values']['node'] == [0, 1, 0, 1, 0, 1]
+    assert plot_preview.json()['values']['time'] == [0.0, 0.0, 0.1, 0.1, 0.2, 0.2]
+    heatmap = client.post('/api/data/context/heatmap', json={
+        'row': ['time'], 'column': ['node'], 'color': 'theta', 'z': '',
+    })
+    assert heatmap.status_code == 200, heatmap.text
+    assert heatmap.json()['shape'] == [3, 2]
+    assert heatmap.json()['row_labels'] == [0.0, 0.1, 0.2]
+    assert heatmap.json()['column_labels'] == [0, 1]
 
     response = client.put('/api/data/selection', json={
         'target': 'dtheta_dt',
@@ -803,16 +864,16 @@ def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypat
     assert list(session.context.feature_names()) == ['x', 'z']
 
     session.state = 'running'
-    monkeypatch.setattr(session.controller, 'status', lambda: {
-        'paused': False, 'waiting_at_boundary': False,
+    monkeypatch.setattr(session.sr_interaction_manager, 'status', lambda: {
+        'interaction_state': 'running', 'paused': False, 'waiting_at_boundary': False,
     })
     blocked = client.put('/api/data/selection', json={
         'target': 'y', 'features': ['x', 'z'],
     })
     assert blocked.status_code == 409
 
-    monkeypatch.setattr(session.controller, 'status', lambda: {
-        'paused': True, 'waiting_at_boundary': True,
+    monkeypatch.setattr(session.sr_interaction_manager, 'status', lambda: {
+        'interaction_state': 'paused', 'paused': True, 'waiting_at_boundary': True,
     })
     updated = client.put('/api/data/selection', json={
         'target': 'y', 'features': ['x', 'z'],
@@ -831,7 +892,7 @@ def test_read_only_startup_workspace_inputs_are_visible(tmp_path):
         tmp_path / 'logs',
         workspace_files=[str(source)],
     )
-    with TestClient(create_app(tmp_path, controller=session.controller, session=session)) as client:
+    with TestClient(create_app(tmp_path, session=session)) as client:
         root = client.get('/api/workspace').json()['entries']
         assert {entry['name'] for entry in root} >= {'source'}
         assert 'context.evaluator' not in {entry['name'] for entry in root}
@@ -993,7 +1054,7 @@ def test_provider_api_key_is_synced_to_dotenv_without_being_returned(
     env_path = tmp_path / '.env'
     monkeypatch.delenv('OPENROUTER_API_KEY', raising=False)
     session = InteractiveSession(tmp_path / 'logs', env_path=env_path)
-    app = create_app(tmp_path, controller=session.controller, session=session)
+    app = create_app(tmp_path, session=session)
 
     with TestClient(app) as client:
         initial = client.get(
@@ -1091,7 +1152,7 @@ def test_data_agent_can_be_stopped_independently(platform, monkeypatch):
     assert session.data_thread.is_alive()
     response = client.post('/api/data/agent/stop')
     assert response.status_code == 200, response.text
-    assert response.json()['data_force_stop_requested'] is True
+    assert response.json()['data_force_pause_requested'] is True
     session.data_thread.join(2)
     assert not session.data_thread.is_alive()
     assert session.data_state == 'stopped'
@@ -1122,76 +1183,22 @@ def test_evaluator_agent_can_be_stopped_independently(platform, monkeypatch):
     assert session.evaluator_agent_thread.is_alive()
     response = client.post('/api/evaluator/agent/stop')
     assert response.status_code == 200, response.text
-    assert response.json()['evaluator_force_stop_requested'] is True
+    assert response.json()['evaluator_force_pause_requested'] is True
     session.evaluator_agent_thread.join(2)
     assert not session.evaluator_agent_thread.is_alive()
     assert session.evaluator_agent_state == 'stopped'
     assert session.evaluator_agent_result['status'] == 'stopped'
     assert any(
-        event['kind'] == 'evaluator_complete'
+        event['kind'] == 'execution_failed'
         and event['payload']['status'] == 'stopped'
-        for event in session.controller.events()
+        for event in session.evaluator_interaction_manager.get_recent_events()['events']
     )
-
-
-def test_evaluator_force_stop_preserves_partial_stream_in_buffer(platform):
-    _, session = platform
-    started = threading.Event()
-    agent = EvaluatorConstructionAgent(
-        llm_provider='openrouter', llm_model='test', context=session.context,
-        tools=[],
-    )
-
-    class StreamingAPI:
-        def __call__(self, messages, **kwargs):
-            callback = kwargs['stream_callback']
-
-            def generate():
-                callback({
-                    'type': 'delta', 'sample': 1,
-                    'content': 'partial answer', 'reasoning': 'partial reasoning',
-                })
-                started.set()
-                while not agent._stop_requested.wait(.01):
-                    pass
-                callback({
-                    'type': 'delta', 'sample': 1,
-                    'content': 'partial answer', 'reasoning': 'partial reasoning',
-                })
-                yield from ()
-
-            return APICallResult(generate())
-
-    agent.api = StreamingAPI()
-    outcome = {}
-
-    def run():
-        try:
-            agent.run('Build an evaluator.')
-        except Exception as exc:
-            outcome['error'] = exc
-
-    thread = threading.Thread(target=run)
-    thread.start()
-    assert started.wait(2)
-    agent.request_stop()
-    assert thread.is_alive()
-    agent.request_stop(force=True)
-    thread.join(2)
-
-    assert not thread.is_alive()
-    assert isinstance(outcome['error'], InterruptedError)
-    assert agent.buffer[-2] == {
-        'role': 'assistant', 'content': 'partial answer',
-        'reasoning': 'partial reasoning',
-    }
-    assert agent.buffer[-1] == {'role': 'user', 'content': '用户强制中止'}
 
 
 def test_data_agent_model_test_checks_completion_and_tool_call(platform, monkeypatch):
     client, _ = platform
 
-    class FakeAPI:
+    class FakeAPI(CancellableFakeAPI):
         def __init__(self):
             self.requests = 0
 
@@ -1428,117 +1435,6 @@ class CustomEvaluator(DefaultEvaluator):
         "param('intercept') + param('coefficient_1') * x1 + "
         "param('coefficient_2') * x2"
     )
-
-    class RestrictedAPI:
-        def __init__(self):
-            self.requests = 0
-
-        def __call__(self, messages, **kwargs):
-            self.requests += 1
-
-            def generate():
-                if self.requests == 1:
-                    call = ToolCall('workspace_code_executor', {
-                        'program': (
-                            "import os\n"
-                            "os.makedirs('context.evaluator', exist_ok=True)\n"
-                            f"open('context.evaluator/draft_evaluator.py', 'w').write({custom_source!r})"
-                        ),
-                    }, id='write-evaluator')
-                    yield {
-                        'content': '', 'tool_call': [call],
-                        'message': {'role': 'assistant', 'content': ''},
-                    }
-                elif self.requests == 2:
-                    call = ToolCall(
-                        'validate_evaluator',
-                        {'evaluator_file': 'context.evaluator/draft_evaluator.py', 'f': "param('scale') * x1", 'fit': True},
-                        id='test-evaluator',
-                    )
-                    yield {
-                        'content': '', 'tool_call': [call],
-                        'message': {'role': 'assistant', 'content': ''},
-                    }
-                else:
-                    yield {
-                        'content': 'The evaluator is ready.',
-                        'tool_call': [],
-                        'message': {'role': 'assistant', 'content': 'The evaluator is ready.'},
-                    }
-                return {'usage': {'token': {}, 'price': {}}, 'contents': [], 'tool_calls': []}
-
-            return APICallResult(generate())
-
-    created = {}
-
-    def create_api(provider, **kwargs):
-        created.update(provider=provider, **kwargs)
-        return RestrictedAPI()
-
-    monkeypatch.setattr(BaseAPI, 'create', create_api)
-    settings = client.put('/api/evaluator/agent/settings', json={
-        'llm_provider': 'deepseek',
-        'llm_model': 'deepseek-chat',
-        'tool_parser': 'openai',
-        'llm_max_tokens': 2048,
-        'tools': ['workspace_code_executor', 'validate_evaluator', 'read_skill'],
-        'skills': [],
-        'proxy': '',
-    })
-    assert settings.status_code == 200, settings.text
-    assert settings.json()['evaluator_agent_settings']['llm_model'] == 'deepseek-chat'
-    assert settings.json()['evaluator_agent_settings']['tools'] == [
-        'workspace_code_executor', 'validate_evaluator', 'read_skill',
-    ]
-    assert settings.json()['evaluator_agent_settings']['skills'] == []
-    assisted = client.post('/api/evaluator/agent', json={
-        'message': 'Check this evaluator.',
-        'source': custom_source,
-    })
-    assert assisted.status_code == 200, assisted.text
-    assert assisted.json()['message'] == 'The evaluator is ready.'
-    assert [event['tool'] for event in assisted.json()['tool_events']] == [
-        'workspace_code_executor', 'validate_evaluator',
-    ]
-    assert all(event['ok'] for event in assisted.json()['tool_events'])
-    assert [event['kind'] for event in assisted.json()['timeline_events']] == [
-        'assistant', 'tool_result', 'assistant', 'tool_result', 'assistant',
-    ]
-    assert assisted.json()['timeline_events'][0]['tool_calls'][0]['name'] == 'workspace_code_executor'
-    assert {tool.metadata.name for tool in created['tool_list']} == {
-        'workspace_code_executor', 'validate_evaluator', 'read_skill',
-    }
-    assert created['provider'] == 'deepseek'
-    assert created['model'] == 'deepseek-chat'
-    evaluator_events = [
-        event for event in session.controller.events()
-        if event['kind'].startswith('evaluator_')
-    ]
-    context_events = [
-        event for event in evaluator_events
-        if event['kind'] == 'evaluator_context'
-    ]
-    user_events = [
-        event for event in evaluator_events
-        if event['kind'] == 'evaluator_user'
-    ]
-    assert [event['payload']['content'] for event in user_events] == [
-        'Check this evaluator.',
-    ]
-    assert len(context_events) == 3
-    assert 'Check this evaluator.' in context_events[0]['payload']['messages'][-1]['content']
-    assert context_events[0]['payload']['messages'][-1]['role'] == 'user'
-    assert all(event['payload']['messages'] for event in context_events)
-    for context_event in context_events:
-        turn = context_event['payload']['turn']
-        assistant_start = next(
-            event for event in evaluator_events
-            if event['kind'] == 'evaluator_assistant_start'
-            and event['payload']['turn'] == turn
-        )
-        assert context_event['seq'] < assistant_start['seq']
-
-
 def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monkeypatch):
     client, session = platform
     session.env_path = tmp_path / '.env'
@@ -1580,7 +1476,7 @@ def test_data_agent_validates_prepared_excel_data_for_shared_context(platform, m
         '人口数量': [1412, 1413, 1412, 1410, 1408],
     }).to_excel(source, index=False)
 
-    class FakeDataAPI:
+    class FakeDataAPI(CancellableFakeAPI):
         tool_description_json = []
 
         def __init__(self):
@@ -1645,16 +1541,16 @@ def test_data_agent_validates_prepared_excel_data_for_shared_context(platform, m
     assert session.data_agent.llm_max_tokens == 1234
     assert session.context.target is None
     assert set(session.context.variable_names()) == {'年份', 'GDP', '人口数量'}
-    data_events = session.controller.events()
+    data_events = session.data_interaction_manager.get_recent_events()['events']
     data_event_kinds = [event['kind'] for event in data_events]
-    assert 'data_user' in data_event_kinds
-    assert data_event_kinds.index('data_context') < data_event_kinds.index('data_assistant_start')
-    assert data_event_kinds.index('data_assistant_start') < data_event_kinds.index('data_assistant')
-    context_event = next(event for event in data_events if event['kind'] == 'data_context')
+    assert 'prompt_added' in data_event_kinds
+    assert data_event_kinds.index('context') < data_event_kinds.index('assistant_started')
+    assert data_event_kinds.index('assistant_started') < data_event_kinds.index('assistant_completed')
+    context_event = next(event for event in data_events if event['kind'] == 'context')
     assert context_event['payload']['turn'] == 1
     assert context_event['payload']['messages'][0]['role'] == 'system'
     assert 'data-preparation agent' in context_event['payload']['messages'][0]['content']
-    assistant_event = next(event for event in data_events if event['kind'] == 'data_assistant')
+    assistant_event = next(event for event in data_events if event['kind'] == 'assistant_completed')
     assert assistant_event['payload']['provider'] == 'deepseek'
     assert assistant_event['payload']['model'] == 'data-preparation-model'
     preview = client.get('/api/data/context').json()
@@ -1666,7 +1562,7 @@ def test_data_agent_validates_prepared_excel_data_for_shared_context(platform, m
 def test_data_agent_has_no_turn_limit_and_keeps_cumulative_turns(platform, monkeypatch):
     client, session = platform
 
-    class FakeDataAPI:
+    class FakeDataAPI(CancellableFakeAPI):
         tool_description_json = []
 
         def __init__(self):
@@ -1718,8 +1614,8 @@ def test_data_agent_has_no_turn_limit_and_keeps_cumulative_turns(platform, monke
     assert session.data_agent.turn_count == 15
 
     context_events = [
-        event for event in session.controller.events()
-        if event['kind'] == 'data_context'
+        event for event in session.data_interaction_manager.get_recent_events()['events']
+        if event['kind'] == 'context'
     ]
     assert [event['payload']['turn'] for event in context_events] == list(range(1, 16))
     assert context_events[-1]['payload']['messages'][-1] == {
@@ -1727,68 +1623,12 @@ def test_data_agent_has_no_turn_limit_and_keeps_cumulative_turns(platform, monke
     }
 
 
-def test_question_reconnect_and_stop():
-    controller = InteractionController()
-    results = []
-    thread = threading.Thread(target=lambda: results.append(controller.ask('Continue?')))
-    thread.start()
-    for _ in range(100):
-        if controller.status()['questions']:
-            break
-        time.sleep(.01)
-    question = next(iter(controller.status()['questions']))
-    # Pending questions must survive event buffer eviction/browser reconnect.
-    for _ in range(1001):
-        controller.publish('test', {})
-    controller.reply(question, 'yes')
-    thread.join(2)
-    assert results == ['yes']
-    with pytest.raises(ValueError):
-        controller.reply(question, 'duplicate')
-    controller.command('pause')
-    status = controller.command('message', 'guidance')
-    assert status['paused'] is False
-    controller.wait_until_running()
-    assert controller.checkpoint() == ['guidance']
-    controller.command('stop')
-    with pytest.raises(KeyboardInterrupt):
-        controller.checkpoint()
-
-
-def test_data_agent_is_allowed_while_search_waits_for_human(platform, monkeypatch):
-    client, session = platform
-    session.state = 'running'
-    monkeypatch.setattr(
-        DataPreparationAgent,
-        'run',
-        lambda self, instruction: {'message': f'handled: {instruction}'},
-    )
-    replies = []
-    question_thread = threading.Thread(
-        target=lambda: replies.append(session.controller.ask('Need guidance?')),
-    )
-    question_thread.start()
-    deadline = time.monotonic() + 2
-    while not session.controller.status()['questions'] and time.monotonic() < deadline:
-        time.sleep(.01)
-    question_id = next(iter(session.controller.status()['questions']))
-    try:
-        response = client.post('/api/data/agent', json={'message': 'Update the prepared data.'})
-        assert response.status_code == 200, response.text
-        session.data_thread.join(2)
-        assert session.data_result['message'] == 'handled: Update the prepared data.'
-    finally:
-        session.controller.reply(question_id, 'Continue.')
-        question_thread.join(2)
-    assert replies == ['Continue.']
-
-
 def test_real_search_loop_with_fake_llm(platform, monkeypatch):
     client, session = platform
     prompts = []
     models = []
 
-    class FakeAPI:
+    class FakeAPI(CancellableFakeAPI):
         tool_description_json = []
         def __call__(self, prompt, **kwargs):
             prompts.append(prompt.copy())
@@ -1836,18 +1676,16 @@ def test_real_search_loop_with_fake_llm(platform, monkeypatch):
         {'role': 'system', 'content': 'Custom system prompt'},
         {'role': 'user', 'content': 'Custom user prompt'},
     ]
-    assert all(any(
-        (m.get('content') or '').endswith('Prefer simple formulas') for m in p
-    ) for p in prompts)
-    events = session.controller.events()
+    events = session.sr_interaction_manager.get_recent_events()['events']
     kinds = [e['kind'] for e in events]
     assert all(k in kinds for k in [
-        'user', 'context', 'assistant_start', 'assistant', 'tool_start', 'tool_result', 'topk', 'lifecycle',
+        'prompt_added', 'context', 'assistant_started', 'assistant_completed',
+        'tool_started', 'tool_completed', 'topk_updated', 'execution_completed',
     ])
-    assert kinds.index('user') < kinds.index('context') < kinds.index('assistant_start') < kinds.index('assistant')
-    user_event = next(event for event in events if event['kind'] == 'user')
-    assert user_event['payload']['content'] == 'Custom user prompt'
-    assistant_events = [event for event in events if event['kind'] == 'assistant']
+    assert kinds.index('prompt_added') < kinds.index('context') < kinds.index('assistant_started') < kinds.index('assistant_completed')
+    user_event = next(event for event in events if event['kind'] == 'prompt_added' and event['payload']['message']['role'] == 'user')
+    assert user_event['payload']['message']['content'] == 'Custom user prompt'
+    assistant_events = [event for event in events if event['kind'] == 'assistant_completed']
     assert all(event['payload']['provider'] for event in assistant_events)
     assert all(event['payload']['model'] for event in assistant_events)
     runs = client.get('/api/runs').json()['runs']
@@ -1859,13 +1697,13 @@ def test_advance_to_next_branch_and_restart(platform, monkeypatch):
     client, session = platform
     calls = 0
 
-    class AdvancingAPI:
+    class AdvancingAPI(CancellableFakeAPI):
         tool_description_json = []
 
         def __call__(self, prompt, **kwargs):
             nonlocal calls
             calls += 1
-            session.controller.command('next_c' if calls == 1 else 'next_r')
+            session.sr_interaction_manager.command('next_c' if calls == 1 else 'next_r')
 
             def generate():
                 message = {'role': 'assistant', 'content': f'round {calls}'}
@@ -1887,7 +1725,7 @@ def test_advance_to_next_branch_and_restart(platform, monkeypatch):
     assert calls == 3
     coordinates = [
         event['payload']['coord']
-        for event in session.controller.events()
+        for event in session.sr_interaction_manager.get_recent_events()['events']
         if event['kind'] == 'context'
     ]
     assert coordinates == [
@@ -1901,14 +1739,14 @@ def test_tool_free_search_response_pauses_without_question_card(platform, monkey
     client, session = platform
     prompts = []
 
-    class YieldingAPI:
+    class YieldingAPI(CancellableFakeAPI):
         tool_description_json = []
 
         def __call__(self, prompt, **kwargs):
             prompts.append(prompt)
             turn = len(prompts)
             if turn == 2:
-                session.controller.command('next_r')
+                session.sr_interaction_manager.command('next_r')
 
             def generate():
                 message = {'role': 'assistant', 'content': f'round {turn}'}
@@ -1921,13 +1759,11 @@ def test_tool_free_search_response_pauses_without_question_card(platform, monkey
     response = client.post('/api/session/start', json={'max_refinement_depth': 3})
     assert response.status_code == 200, response.text
     deadline = time.monotonic() + 5
-    while not session.controller.status()['waiting_at_boundary'] and time.monotonic() < deadline:
+    while not session.sr_interaction_manager.status()['waiting_at_boundary'] and time.monotonic() < deadline:
         time.sleep(.01)
-    status = session.controller.status()
+    status = session.sr_interaction_manager.status()
     assert status['paused'] is True
     assert status['waiting_at_boundary'] is True
-    assert status['questions'] == {}
-    assert not any(event['kind'] == 'question' for event in session.controller.events())
 
     reply = client.post(
         '/api/control/command', json={'action': 'message', 'message': 'Try a power law.'},
@@ -1997,39 +1833,3 @@ def test_current_tree_never_scans_history(platform):
     assert response.json()['records'][0]['node_id'] == state.node_id(R=1, C=1, L=1, K=1)
     assert client.get(f'/api/runs/{session.run_id}/records?after_seq=1').json()['records'] == []
     assert client.get('/api/runs/unrelated/records').status_code == 404
-
-
-def test_model_wait_pause_ack_and_stop(platform, monkeypatch):
-    client, session = platform
-    entered, release = threading.Event(), threading.Event()
-    class WaitingAPI:
-        tool_description_json = []
-        def __call__(self, prompt, **kwargs):
-            def generate():
-                entered.set()
-                assert release.wait(5)
-                yield from []
-                return {'usage': {'token': {}, 'price': {}}, 'responses': []}
-            return APICallResult(generate())
-    monkeypatch.setattr(BaseAPI, 'create', lambda *args, **kwargs: WaitingAPI())
-    try:
-        client.post('/api/session/start', json={'max_refinement_depth': 2})
-        assert entered.wait(5)
-        status = client.get('/api/session').json()
-        assert status['activity']['phase'] == 'model'
-        assert status['activity']['coord']['L'] == 1
-        assert status['activity']['model'] == session.settings['llm_model']
-        assert status['activity']['since'] <= status['server_time']
-        client.post('/api/control/command', json={'action': 'pause'})
-        assert not client.get('/api/session').json()['waiting_at_boundary']
-        release.set()
-        deadline = time.monotonic() + 5
-        while not session.controller.status()['waiting_at_boundary'] and time.monotonic() < deadline:
-            time.sleep(.01)
-        assert client.get('/api/session').json()['waiting_at_boundary']
-    finally:
-        release.set()
-        session.controller.command('stop')
-        if session.thread:
-            session.thread.join(5)
-    assert session.state == 'interrupted'

@@ -119,13 +119,12 @@ class Expression:
         """
         return deepcopy(self)
 
-    def replace(self, old: Expression, new: Expression, **_: Any) -> Expression:
+    def replace(self, old: Expression, new: Expression) -> Expression:
         """Return a tree in which the exact *old* node is replaced by *new*.
 
         Args:
             old: Existing expression node to replace.
             new: Replacement expression node.
-            **_: Ignored compatibility options.
 
         Returns:
             A copied expression tree with matching nodes replaced.
@@ -139,14 +138,12 @@ class Expression:
         *,
         latex: bool = False,
         number_format: str = "",
-        **_: Any,
     ) -> str:
         """Render the expression as plain text or LaTeX.
 
         Args:
             latex: Whether to render LaTeX notation.
             number_format: Format specification for numeric literals.
-            **_: Ignored compatibility options.
 
         Returns:
             The rendered expression.
@@ -155,12 +152,11 @@ class Expression:
 
         return render(self, latex=latex, number_format=number_format)
 
-    def to_tree(self, *, number_format: str = "", **_: Any) -> str:
+    def to_tree(self, *, number_format: str = "") -> str:
         """Render a compact preorder tree for diagnostics.
 
         Args:
             number_format: Format specification for numeric literals.
-            **_: Ignored compatibility options.
 
         Returns:
             A multiline representation of the expression tree.

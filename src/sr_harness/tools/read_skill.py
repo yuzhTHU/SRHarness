@@ -37,7 +37,12 @@ class ReadSkill(BaseTool):
 
     def __init__(self, **context):
         super().__init__(**context)
-        self.skill_manager = getattr(self.context.args, "skill_manager", None) or self.default_skill_manager
+        if hasattr(self.context.args, "skill_manager"):
+            self.skill_manager = self.context.args.skill_manager
+            if not isinstance(self.skill_manager, SkillManager):
+                raise TypeError("context.args.skill_manager must be a SkillManager")
+        else:
+            self.skill_manager = self.default_skill_manager
         enabled = getattr(self.context.args, "enabled_skills", None)
         skills = self.skill_manager.load_skills()
         self.enabled_skills = set(enabled) if enabled is not None else set(skills)

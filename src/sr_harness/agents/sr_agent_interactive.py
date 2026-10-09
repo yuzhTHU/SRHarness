@@ -12,7 +12,7 @@ from typing import Any, Callable, List, Optional
 
 from ..api import BaseAPI
 from ..core import AgentContext
-from ..runtime import SRInteractionManager
+from ..runtime import PendingMessage, SRInteractionManager
 from ..tools import BaseTool
 from .sr_agent import SRAgent
 from ..parser import BaseParser
@@ -29,6 +29,7 @@ class SRAgentInteractive(SRAgent):
         self,
         llm_provider: str,
         llm_model: str,
+        interaction_manager: SRInteractionManager,
         tools: List[BaseTool] | None = None,
         skills: List[str] | None = None,
         verbose: bool = False,
@@ -50,7 +51,6 @@ class SRAgentInteractive(SRAgent):
         larger_is_better: bool = False,
         use_workspace: bool = False,
         workspace_files: List[str | Path] | None = None,
-        interaction_manager: SRInteractionManager | None = None,
         force_initial_diagnostics: bool = False,
         auto_routing: bool = True,
         strong_llm_provider: str | None = None,
@@ -97,8 +97,6 @@ class SRAgentInteractive(SRAgent):
             excluded_tools = {"workspace_code_executor", "workspace_shell"}
         if tools is None:
             excluded_tools.update({"validate_context_data", "validate_evaluator"})
-        self.excluded_tools = excluded_tools
-
         super().__init__(
             llm_provider=llm_provider,
             llm_model=llm_model,
@@ -126,6 +124,7 @@ class SRAgentInteractive(SRAgent):
             strong_llm_provider=strong_llm_provider,
             strong_llm_model=strong_llm_model,
             context=context,
+            excluded_tools=excluded_tools,
         )
 
         # 工作区
@@ -133,9 +132,12 @@ class SRAgentInteractive(SRAgent):
         self.workspace_files = workspace_files
 
         # 交互界面
-        self.interaction_manager = interaction_manager or SRInteractionManager()
+        if not isinstance(interaction_manager, SRInteractionManager):
+            raise TypeError("interaction_manager must be an SRInteractionManager")
+        self.interaction_manager = interaction_manager
         self._last_iteration_had_tool_calls = True
         self._forced_interruption_pending = False
+        self.initial_messages: list[PendingMessage] = []
         self.prompt_overrides: dict[str, str] = {}
         self.variable_descriptions: dict[str, str] = {}
         self.runtime_settings_supplier: Callable[[], dict[str, Any] | None] | None = None
@@ -211,7 +213,9 @@ class SRAgentInteractive(SRAgent):
             str | None: The operation result.
         """
         self.interaction_manager.publish_event("search_position_changed", {"R": R, "C": C, "L": L})
-        with self.interaction_manager.wait() as messages:
+        with self.interaction_manager.wait() as boundary_messages:
+            messages = [*self.initial_messages, *boundary_messages]
+            self.initial_messages.clear()
             if data_change := self.refresh_data():
                 self._append_buffer_messages(
                     buffer,
@@ -305,9 +309,11 @@ class SRAgentInteractive(SRAgent):
                 if name in settings:
                     setattr(self, name, settings[name])
             self.strong_llm_provider = (
-                settings.get("strong_llm_provider") or self.llm_provider
+                self.llm_provider
+                if settings.get("strong_llm_provider") is None
+                else settings["strong_llm_provider"]
             )
-            self.strong_llm_model = settings.get("strong_llm_model") or None
+            self.strong_llm_model = settings.get("strong_llm_model")
             if self.force_initial_diagnostics:
                 required_tools = {"statistics_analysis", "relationship_analysis", "read_skill"}
                 if missing := required_tools - requested_tools:
@@ -355,7 +361,7 @@ class SRAgentInteractive(SRAgent):
         Returns:
             str | None: The operation result.
         """
-        if getattr(self, "_forced_interruption_pending", False) or self.interaction_manager.is_interrupting:
+        if self._forced_interruption_pending or self.interaction_manager.is_interrupting:
             prompt = {"role": "user", "content": "用户强制中止"}
             self._append_buffer_messages(buffer, [prompt], R=R, C=C, L=L)
             self._forced_interruption_pending = False
@@ -460,8 +466,7 @@ class SRAgentInteractive(SRAgent):
 
         interrupted = False
         try:
-            cancel = getattr(self.api, "cancel", lambda: None)
-            with self.interaction_manager.cancellable(cancel):
+            with self.interaction_manager.cancellable(self.api.cancel):
                 responses, usage = super().request_llm(
                     prompt,
                     R=R,
@@ -553,9 +558,11 @@ class SRAgentInteractive(SRAgent):
             self.interaction_manager.publish_event("tool_started", {"call": action, "tool_schema": tool_schema})
             started_at = time.monotonic()
             tool = next((item for item in self.tools if item.metadata.name == action.name), None)
-            cancel = getattr(tool, "cancel", lambda: None)
-            with self.interaction_manager.cancellable(cancel):
+            if tool is None:
                 result = super().execute_action([action])[0]
+            else:
+                with self.interaction_manager.cancellable(tool.cancel):
+                    result = super().execute_action([action])[0]
             self.interaction_manager.publish_event("tool_completed", {
                 "call": action,
                 "tool_schema": tool_schema,
