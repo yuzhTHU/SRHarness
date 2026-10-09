@@ -15,7 +15,7 @@ SRHarness is a research runtime for agentic symbolic regression. Language models
 - [The `context.data` Format](context-data.md): reference storage rules for variables, axes, graphs, and hypergraphs
 - [SRHarness WebUI](web-ui.md): complete an interactive search in the browser
 - [SRHarness Engine](engine.md): learn the expression syntax, parameters, and graph structures
-- [API Reference](reference/index.md): look up Python types and method signatures
+- [API Reference](https://yuzhthu.github.io/SRHarness/reference/): look up Python types and method signatures
 
 ## Project links
 

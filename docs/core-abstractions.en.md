@@ -2,7 +2,7 @@
 
 This page defines the contracts of three principal SRHarness extension interfaces. `BaseTool` specifies how tools declare inputs and return results, `BaseParser` normalizes calls between language models and tools, and `Evaluator` defines the data-splitting, parameter-fitting, and metric-computation policy shared by formula-evaluation tools. They live in separate source packages, but together form the stable boundary between `SRAgent` and extensible implementations.
 
-See [SRHarness Agent Workflow](agent.md) for how the Agent coordinates these objects during a search, and the [API Reference](/reference/) for complete class and method signatures.
+See [SRHarness Agent Workflow](agent.md) for how the Agent coordinates these objects during a search, and the [API Reference](https://yuzhthu.github.io/SRHarness/reference/) for complete class and method signatures.
 
 ## `BaseTool` { #base-tool }
 
@@ -207,4 +207,4 @@ Override `fit_candidate()` as well when the fitting objective itself should incl
 
 A custom source file must define exactly one `DefaultEvaluator` subclass. `load_custom_evaluator()` validates and loads the source, instantiates the class, and retains source/file provenance. The WebUI can save, load, and test scripts in `context.evaluator/`, while the Evaluator Construction Agent can create or repair them; see [SRHarness WebUI](web-ui.md#evaluator-configuration).
 
-See the [API Reference](/reference/) for complete signatures and [SRHarness Engine](engine.md) for expression syntax, parameters, and graph evaluation rules.
+See the [API Reference](https://yuzhthu.github.io/SRHarness/reference/) for complete signatures and [SRHarness Engine](engine.md) for expression syntax, parameters, and graph evaluation rules.

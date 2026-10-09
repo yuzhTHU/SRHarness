@@ -446,9 +446,9 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     ) in page.text
     assert 'id="data-agent-safety"' in page.text
     assert "api('/api/workspace/lock',{path,locked},'PUT')" in page.text
-    assert 'href="http://sim1.fiblab.tech:11005/web-ui/#agent-safety"' in page.text
+    assert 'href="https://yuzhthu.github.io/SRHarness/web-ui/#agent-safety"' in page.text
     assert 'id="context-data-guide-link"' in page.text
-    assert 'href="http://sim1.fiblab.tech:11005/context-data/"' in page.text
+    assert 'href="https://yuzhthu.github.io/SRHarness/context-data/"' in page.text
     assert "['evaluator-guide','core-abstractions/#evaluator']" in page.text
     assert "['evaluator-agent-safety','web-ui/#agent-safety']" in page.text
     assert "currentLocale==='en'?'en/':''" in page.text

@@ -52,7 +52,6 @@ plugins:
             - context.data Format: context-data.md
             - SRHarness WebUI: web-ui.md
             - SRHarness Engine: engine.md
-            - API Reference: reference/index.md
   - mkdocstrings:
       handlers:
         python:

@@ -67,7 +67,7 @@ Open `http://127.0.0.1:11001/` in a browser and follow the page through these th
 2. **Task setup:** assign variable roles, edit the variable and problem descriptions, and select or define an evaluation scheme.
 3. **Symbolic regression:** start the symbolic search and return to the first two stages when variables need to be extended or the evaluation scheme needs to change.
 
-![SRHarness symbolic-regression workbench](/assets/webui-symbolic-regression.png)
+![SRHarness symbolic-regression workbench](https://yuzhthu.github.io/SRHarness/assets/webui-symbolic-regression.png)
 
 See [SRHarness WebUI](web-ui.md) for complete operating instructions.
 

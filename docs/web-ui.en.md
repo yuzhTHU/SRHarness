@@ -16,7 +16,7 @@ Open `http://127.0.0.1:11001/`.
 
 ## Layout
 
-![SRHarness data preparation](/assets/webui-data-preparation.png)
+![SRHarness data preparation](https://yuzhthu.github.io/SRHarness/assets/webui-data-preparation.png)
 
 | Area | Purpose |
 |---|---|
@@ -85,7 +85,7 @@ When the SRHarness process has neither root privileges, `CAP_SYS_ADMIN`, nor sou
 
 ## 2. Task Setup
 
-![SRHarness task setup](/assets/webui-task-setup.png)
+![SRHarness task setup](https://yuzhthu.github.io/SRHarness/assets/webui-task-setup.png)
 
 ### Variables and problem
 
@@ -112,7 +112,7 @@ Before starting, review variable configuration, the generated editable user prom
 
 Both system and user prompts appear as timeline cards after the search starts.
 
-![SRHarness symbolic-regression timeline](/assets/webui-symbolic-regression.png)
+![SRHarness symbolic-regression timeline](https://yuzhthu.github.io/SRHarness/assets/webui-symbolic-regression.png)
 
 ### Timeline events
 

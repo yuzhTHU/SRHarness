@@ -238,7 +238,7 @@ evaluate_candidate(f, context)
 
 A general equality uses `fit/evaluate`; a target-eligible formula uses the candidate-specific entry points. An ODE Evaluator can therefore add integration and rollout metrics only for a formal `dx_dt = f(x, t)` candidate without treating every implicit equality as integrable dynamics.
 
-Metrics, random/OOD/chronological splitting, and ODE integration infrastructure are available from `sr_harness.evaluator.utils`. See [SRHarness Core Abstractions](core-abstractions.md#evaluator) for the Evaluator design and extension workflow, and the [API Reference](/reference/) for signatures.
+Metrics, random/OOD/chronological splitting, and ODE integration infrastructure are available from `sr_harness.evaluator.utils`. See [SRHarness Core Abstractions](core-abstractions.md#evaluator) for the Evaluator design and extension workflow, and the [API Reference](https://yuzhthu.github.io/SRHarness/reference/) for signatures.
 
 ## Executable specification
 
@@ -248,4 +248,4 @@ Behavior tests provide runnable examples for basic expressions, parameters, rela
 pytest tests/behavior
 ```
 
-See the [API Reference](/reference/) for every public type and function.
+See the [API Reference](https://yuzhthu.github.io/SRHarness/reference/) for every public type and function.
