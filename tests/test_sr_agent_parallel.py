@@ -266,6 +266,33 @@ def test_agent_exposes_only_skills_from_enabled_tools(tmp_path):
     assert "# Workspace Shell" in parallel_result.result_str
 
 
+def test_agent_allows_explicit_non_default_tools(tmp_path):
+    agent = SRAgent(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=["workspace_code_executor", "validate_context_data"],
+        save_path=str(tmp_path),
+    )
+
+    assert {tool_cls.metadata.name for tool_cls in agent.tool_cls_list} == {
+        "workspace_code_executor",
+        "validate_context_data",
+    }
+
+
+def test_agent_uses_curated_default_tools(tmp_path):
+    agent = SRAgent(
+        llm_provider="unused",
+        llm_model="unused",
+        save_path=str(tmp_path),
+    )
+
+    selected = [tool_cls.metadata.name for tool_cls in agent.tool_cls_list]
+    assert selected == list(SRAgent.DEFAULT_TOOLS)
+    assert "workspace_code_executor" not in selected
+    assert "validate_context_data" not in selected
+
+
 def test_execute_action_parallel_preserves_order_and_records_usage(tmp_path):
     agent = make_agent(tmp_path)
     actions = [

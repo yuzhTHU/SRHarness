@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from abc import ABC, abstractmethod
 from functools import cached_property
 from typing import Any, Callable, Dict, Generator, List, Literal
@@ -179,10 +178,3 @@ class BaseAPI(ABC, FactoryMixin):
             raw=tool_call,
         )
 
-    def setup_proxy(self) -> None:
-        """Configure HTTP/HTTPS proxy variables from MY_PROXY when provided."""
-        if (proxy := os.environ.get("MY_PROXY")) or (proxy := os.environ.get("my_proxy")):
-            os.environ["http_proxy"] = proxy
-            os.environ["HTTP_PROXY"] = proxy
-            os.environ["https_proxy"] = proxy
-            os.environ["HTTPS_PROXY"] = proxy

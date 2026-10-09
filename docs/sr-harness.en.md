@@ -70,7 +70,7 @@ sr-harness run --host 0.0.0.0 --port 11001
 | `--strong-llm-model` | none | Optional stronger model |
 | `--llm-max-tokens` | `4096` | Maximum output tokens per response |
 | `--tool-parser` | `openai` | `openai`, `text`, `json`, or `xml` |
-| `--tools` | all built-ins | Allowed tools |
+| `--tools` | symbolic-regression defaults | Allowed tools; non-default tools may be enabled explicitly |
 | `--ban-tools` | empty | Tools disabled even when allowed above |
 | `--max-workers` | `0` | Parallel tool workers; zero is serial |
 
@@ -116,6 +116,40 @@ sr-harness benchmark \
 ```
 
 `--anonymize` changes Agent-visible names and descriptions, not numeric observations.
+
+## Python API
+
+In addition to the CLI and WebUI, you can construct and run `SRAgent` directly from Python:
+
+```python
+import numpy as np
+from sr_harness import SRAgent
+
+rng = np.random.default_rng(42)
+x1 = rng.uniform(-2, 2, 200)
+x2 = rng.uniform(-2, 2, 200)
+
+agent = SRAgent(
+    llm_provider="openrouter",
+    llm_model="deepseek/deepseek-v4-flash-0731",
+    max_restart_loop=1,
+    global_width=1,
+    max_refinement_depth=5,
+    local_sample_size=1,
+    save_path="logs/python-example",
+)
+result = agent.run(
+    X={"x1": x1, "x2": x2},
+    y={"y": 1 + x1**2 + 2*x1*x2},
+    problem_description="Discover y as a function of x1 and x2.",
+)
+
+if result["best_candidate"] is not None:
+    best = result["candidates"][result["best_candidate"]]
+    print(best["formula"])
+```
+
+See the [API Reference](/reference/) for constructor parameters and return types.
 
 ## Run artifacts
 

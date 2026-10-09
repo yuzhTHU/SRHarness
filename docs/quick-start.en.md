@@ -1,23 +1,33 @@
 # Quick Start
 
-This page covers the two primary entry points: `sr-harness synthetic` and `sr-harness run`. Complete [installation and provider configuration](install.md) first.
+Before starting, complete [installation and provider configuration](install.md).
 
-## Search for a known synthetic equation
+## Use SRHarness to discover a known equation
 
-Generate `x1`, `x2`, and `y` with `y = 1 + x1² + 2x1x2`, then start a low-budget search:
+SRHarness provides a convenient test command that synthesizes data from a specified formula and checks whether the Agent can recover that formula from the data.
+
+The following example generates data with three columns, `x1`, `x2`, and `y`, where the target variable `y` satisfies
+
+$$
+y = 1 + x_1^2 + 2x_1x_2.
+$$
+
+!!! tip
+    Before running the command, configure the API key required by `--llm-provider`. The example below uses OpenRouter and therefore requires `OPENROUTER_API_KEY`. If you configured a different provider, update both `--llm-provider` and `--llm-model` accordingly.
+
+Then start the Agent with a small search budget:
 
 ```bash
 sr-harness synthetic \
   --equation 'y = 1 + x1 ** 2 + 2 * x1 * x2' \
-  --features x1,x2 \
   --n-samples 200 \
   --x-low -2 \
   --x-high 2 \
   --seed 42 \
   --llm-provider openrouter \
-  --llm-model qwen/qwen3.5-flash-02-23 \
+  --llm-model deepseek/deepseek-v4-flash-0731 \
   --save-path ./logs/quick-start \
-  -R 1 -C 1 -L 5 -K 1
+  -R 1 -C 1 -L 10 -K 1
 ```
 
 | Option | Meaning |
@@ -27,12 +37,21 @@ sr-harness synthetic \
 | `-L` | Maximum refinement depth per conversation |
 | `-K` | Model samples at each step |
 
-Run artifacts are written below `--save-path`, including `run.json`, `nodes.jsonl`, `result.json`, `response.jsonl`, and `tool_calls.jsonl`.
+Run artifacts are written below `--save-path`. Common files are listed below:
 
-!!! warning
-    `synthetic` calls the selected model and may incur charges. Verify provider settings with a small `R/C/L/K` budget before scaling up.
+| File | Contents |
+|---|---|
+| `run.json` | Unique run identifier, startup arguments, and Agent configuration |
+| `nodes.jsonl` | Conversation nodes created during the search and the relationships between them |
+| `result.json` | Formulas explored by the Agent, including the candidates that form the Pareto Front and the best result |
+| `response.jsonl` | Raw model responses, token usage, and cost accounting |
+| `tool_calls.jsonl` | Tool-call records |
 
-## Launch the Web workbench
+## Use the WebUI workbench
+
+SRHarness provides an interactive WebUI workbench for preparing data, configuring a task, and running a symbolic-regression search in the browser.
+
+The following command starts the WebUI locally on port `11001` and stores persistent workspaces and run records in `./workspaces` and `./logs/webui`, respectively:
 
 ```bash
 sr-harness run \
@@ -42,17 +61,17 @@ sr-harness run \
   --save-path ./logs/webui
 ```
 
-Open `http://127.0.0.1:11001/` and follow the three stages:
+Open `http://127.0.0.1:11001/` in a browser and follow the page through these three stages:
 
-1. **Data preparation:** upload CSV/Excel data or create a sample dataset; ask the Data Preparation Agent to clean or enrich it when needed.
-2. **Task setup:** assign variable roles, edit descriptions and the research question, then select or customize an Evaluator.
-3. **Symbolic regression:** confirm variables, user prompt, and system prompt before starting the search.
+1. **Data preparation:** upload data (or use one of the provided sample datasets), and ask the in-page Agent to clean, extend, or inspect it when needed.
+2. **Task setup:** assign variable roles, edit the variable and problem descriptions, and select or define an evaluation scheme.
+3. **Symbolic regression:** start the symbolic search and return to the first two stages when variables need to be extended or the evaluation scheme needs to change.
 
-The center timeline shows prompts, model responses, tool calls, and results. The right panel shows the search tree, Top-k candidates, and Pareto Front. During a run, messages can be queued for the next safe boundary and execution can be paused or interrupted.
-
-See [SRHarness WebUI](web-ui.md) for the complete workflow.
+See [SRHarness WebUI](web-ui.md) for complete operating instructions.
 
 ## Mount read-only inputs
+
+For large datasets, use `--mount` to mount local data into the workspace:
 
 ```bash
 sr-harness run \
@@ -60,12 +79,5 @@ sr-harness run \
   --mount ./datasets ./papers/model.pdf
 ```
 
-Each mount keeps its basename in the workspace. Basenames must be unique.
-
-## Next steps
-
-- CLI options, persistence, and routing: [SRHarness](sr-harness.md)
-- Static regression, ODE, and graph examples: [Examples](examples.md)
-- Expression construction and fitting: [SRHarness Engine](engine.md)
-- Python classes and signatures: [API Reference](/reference/)
+Mounted data appears as read-only links in every conversation workspace. This prevents Agents from modifying the source data and avoids consuming additional disk space by copying it. If multiple files or directories are mounted, their names must not conflict.
 

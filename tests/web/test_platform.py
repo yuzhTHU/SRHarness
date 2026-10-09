@@ -1516,20 +1516,23 @@ class CustomEvaluator(DefaultEvaluator):
 def test_data_agent_proxy_setting_persists_to_env_file(platform, tmp_path, monkeypatch):
     client, session = platform
     session.env_path = tmp_path / '.env'
-    for name in ('MY_PROXY', 'my_proxy', 'http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'):
+    for name in ('http_proxy', 'HTTP_PROXY', 'https_proxy', 'HTTPS_PROXY'):
         monkeypatch.delenv(name, raising=False)
 
     response = client.put('/api/data/agent/settings', json={
         'proxy': 'http://127.0.0.1:7890',
     })
     assert response.status_code == 200, response.text
-    assert dotenv_values(session.env_path)['MY_PROXY'] == 'http://127.0.0.1:7890'
+    assert dotenv_values(session.env_path)['HTTP_PROXY'] == 'http://127.0.0.1:7890'
+    assert dotenv_values(session.env_path)['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
+    assert os.environ['HTTP_PROXY'] == 'http://127.0.0.1:7890'
     assert os.environ['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
 
     response = client.put('/api/data/agent/settings', json={'proxy': ''})
     assert response.status_code == 200, response.text
-    assert 'MY_PROXY' not in dotenv_values(session.env_path)
-    assert 'MY_PROXY' not in os.environ
+    assert 'HTTP_PROXY' not in dotenv_values(session.env_path)
+    assert 'HTTPS_PROXY' not in dotenv_values(session.env_path)
+    assert 'HTTP_PROXY' not in os.environ
     assert 'HTTPS_PROXY' not in os.environ
 
 

@@ -144,7 +144,10 @@ Evaluator 的核心入口是 `split`、`fit`、`evaluate`、`fit_candidate` 和 
 4. 进入任务配置：`dx_dt` 为因变量，`x`、`t` 为自变量。
 5. 使用 `DefaultEvaluator` 启动一次搜索，观察逐点导数拟合。
 6. 暂停，返回任务配置。
-7. 让评测器构建 Agent 创建带 `rollout_rmse` 的 Evaluator，并用“测试”验证。
+7. 让评测器构建 Agent 创建带 `rollout_rmse` 的 Evaluator，并用“测试”验证。例如：
+
+   > 创建一个继承 DefaultEvaluator 的 TrajectoryRolloutEvaluator。保留默认指标，并在 evaluate_candidate 中积分候选 ODE，增加 rollout_rmse 指标。
+
 8. 把 `ranking_metric` 改为 `rollout_rmse`。
 9. 回到符号回归页，告诉 Agent 评测方式已经改变并继续探索。
 

@@ -93,7 +93,10 @@ The search tree groups nodes by R–C–L coordinates. Candidate views include *
 4. Set `dx_dt` as target and `x`, `t` as features.
 5. Run an initial search with `DefaultEvaluator`.
 6. Pause and return to Task Setup.
-7. Ask Evaluator Construction Agent for a tested `rollout_rmse` metric.
+7. Ask Evaluator Construction Agent for a tested `rollout_rmse` metric. For example:
+
+   > Create a TrajectoryRolloutEvaluator derived from DefaultEvaluator. Keep the default metrics and add rollout_rmse by integrating candidate ODEs in evaluate_candidate.
+
 8. Select `rollout_rmse` as `ranking_metric`.
 9. Return to Symbolic Regression and ask the Agent to continue with the revised evaluation.
 

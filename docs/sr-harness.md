@@ -98,7 +98,7 @@ sr-harness run --host 0.0.0.0 --port 11001
 | `--strong-llm-model` | 无 | 自动路由的强模型 |
 | `--llm-max-tokens` | `4096` | 单次模型回复最大 token |
 | `--tool-parser` | `openai` | `openai`、`text`、`json` 或 `xml` |
-| `--tools` | 所有内置工具 | 可用工具列表 |
+| `--tools` | 符号回归默认工具集 | 可用工具列表；显式指定时也可启用非默认工具 |
 | `--ban-tools` | 空 | 强制禁用的工具；优先于 `--tools` |
 | `--max-workers` | `0` | 并行工具 worker 数；`0` 表示串行 |
 
@@ -158,6 +158,40 @@ sr-harness benchmark \
 ```
 
 `--anonymize` 只修改 Agent 可见的变量名和描述，不改变数值数据。
+
+## Python API
+
+除 CLI 和 WebUI 外，也可以直接在 Python 中创建并运行 `SRAgent`：
+
+```python
+import numpy as np
+from sr_harness import SRAgent
+
+rng = np.random.default_rng(42)
+x1 = rng.uniform(-2, 2, 200)
+x2 = rng.uniform(-2, 2, 200)
+
+agent = SRAgent(
+    llm_provider="openrouter",
+    llm_model="deepseek/deepseek-v4-flash-0731",
+    max_restart_loop=1,
+    global_width=1,
+    max_refinement_depth=5,
+    local_sample_size=1,
+    save_path="logs/python-example",
+)
+result = agent.run(
+    X={"x1": x1, "x2": x2},
+    y={"y": 1 + x1**2 + 2*x1*x2},
+    problem_description="Discover y as a function of x1 and x2.",
+)
+
+if result["best_candidate"] is not None:
+    best = result["candidates"][result["best_candidate"]]
+    print(best["formula"])
+```
+
+完整构造参数和返回类型见 [API Reference](reference/index.md)。
 
 ## 运行产物
 

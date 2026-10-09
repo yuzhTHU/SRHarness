@@ -6,15 +6,10 @@
 - Linux、macOS，或能够提供等价 Python 环境的系统；
 - 至少一个受支持模型服务的 API Key。
 
-## 从源码安装
+## 从 PyPI 安装
 
 ```bash
-git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
-cd SRHarness
-python3.12 -m venv venv
-source venv/bin/activate
-python -m pip install --upgrade pip
-pip install -e .
+pip install sr-harness
 ```
 
 安装完成后检查入口：
@@ -24,87 +19,98 @@ sr-harness --help
 python -c "import sr_harness, sr_harness_engine; print('SRHarness is ready')"
 ```
 
+## 从源码安装
+
+需要修改 SRHarness、运行测试或构建文档时，使用可编辑安装：
+
+```bash
+git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
+cd SRHarness
+conda create -p ./venv python=3.12 -y
+conda activate ./venv
+python -m pip install --upgrade pip
+pip install -e '.[all]'
+```
+
 ## 可选依赖
 
 SRHarness 将较重或特定场景的依赖拆成 extras：
 
 | Extra | 内容 | 安装命令 |
 |---|---|---|
-| `tools` | PySR、PySINDy、PDF 读取等研究工具 | `pip install -e '.[tools]'` |
-| `nn` | PyTorch 与 PyTorch Geometric | `pip install -e '.[nn]'` |
-| `dev` | pytest、MkDocs、Material、mkdocstrings 与开发辅助依赖 | `pip install -e '.[dev]'` |
-| `all` | 所有可选 extras | `pip install -e '.[all]'` |
+| `tools` | PySR、PySINDy、PDF 读取等研究工具 | `pip install 'sr-harness[tools]'` |
+| `nn` | PyTorch 与 PyTorch Geometric | `pip install 'sr-harness[nn]'` |
+| `dev` | pytest、MkDocs、Material、mkdocstrings 与开发辅助依赖 | `pip install 'sr-harness[dev]'` |
+| `all` | 所有可选 extras | `pip install 'sr-harness[all]'` |
 
 例如，同时安装研究工具和开发依赖：
 
 ```bash
-pip install -e '.[tools,dev]'
+pip install 'sr-harness[tools,dev]'
 ```
 
+在源码目录中开发时，将上面的命令换成 `pip install -e '.[tools,dev]'`。
+
 !!! note
-    PySR、PyTorch 等依赖的安装时间和平台要求明显高于核心包。只使用默认 Engine 和 WebUI 时，不必安装全部 extras。
+    PySR、PyTorch 等依赖的安装时间更长，并且可能有额外的平台要求。仅希望体验 SRHarness 时，不必安装全部 extras；需要相应功能时再按需安装即可。
 
 ## 配置模型服务
 
-复制环境变量模板：
-
-```bash
-test -f .env || cp .env.sample .env
-```
-
-然后填写所用 provider 的凭据。例如 OpenRouter：
+在运行目录中创建 `.env`，或者在 shell 中设置所用 provider 的环境变量。例如 OpenRouter：
 
 ```dotenv
 OPENROUTER_API_KEY="sk-or-v1-..."
 ```
 
+从源码安装时，也可以执行 `test -f .env || cp .env.sample .env` 并编辑生成的 `.env` 模板。
+
 常用环境变量包括：
 
-| Provider | 环境变量 |
-|---|---|
-| OpenRouter | `OPENROUTER_API_KEY` |
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| Gemini | `GEMINI_API_KEY` |
-| SiliconFlow | `SILICONFLOW_API_KEY` |
-| OpenAI/Azure OpenAI | `OPENAI_API_KEY`、`OPENAI_ENDPOINT`、`OPENAI_API_VERSION` |
+| Provider | 环境变量 | 申请 API Key |
+|---|---|---|
+| OpenRouter | `OPENROUTER_API_KEY` | [OpenRouter Keys](https://openrouter.ai/settings/keys) |
+| DeepSeek | `DEEPSEEK_API_KEY` | [DeepSeek Platform](https://platform.deepseek.com/api_keys) |
+| Gemini | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/app/apikey) |
+| SiliconFlow | `SILICONFLOW_API_KEY` | [SiliconFlow API Keys](https://cloud.siliconflow.cn/account/ak) |
+| OpenAI/Azure OpenAI | `OPENAI_API_KEY`、`OPENAI_ENDPOINT`、`OPENAI_API_VERSION` | [OpenAI API Keys](https://platform.openai.com/api-keys) / [Azure Portal](https://portal.azure.com/) |
 
-也可以在 WebUI 的 Agent 设置中输入 API Key。WebUI 不会把已有 Key 的明文重新显示到输入框中。
+也可以在 [WebUI](web-ui.md) 中配置 API Key。配置的 API Key 将被保存到启动 `sr-harness run` 时所在目录的 `.env` 文件中，并应用到当前服务进程。
 
 ## 代理
 
-需要网络代理时可以设置 `MY_PROXY`：
+需要网络代理时，设置 `HTTP_PROXY` 和 `HTTPS_PROXY`，例如：
 
 ```bash
-export MY_PROXY=http://127.0.0.1:7890
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-部分 provider 也会遵循标准的 `HTTP_PROXY` 和 `HTTPS_PROXY`。
+也可以在 [WebUI](web-ui.md) 中配置网络代理。配置的代理地址将被用于 HTTP 和 HTTPS 请求，并被保存到 `.env` 中。
 
 ## 验证安装
-
-先执行不产生模型费用的检查：
-
-```bash
-sr-harness tool list
-pytest tests/engine tests/behavior
-```
 
 启动 WebUI：
 
 ```bash
-sr-harness run --workspace-dir ./workspaces --port 8000
+sr-harness run --save-path ./sr-harness --host 127.0.0.1 --port 8000
 ```
 
-浏览器打开 `http://127.0.0.1:8000/`。服务启动本身不会调用模型；提交 Agent 请求或启动符号回归后才会产生模型请求。
+并在浏览器打开 `http://127.0.0.1:8000/`。
 
 ## 构建文档
 
+可从 GitHub 获取项目源码并构建文档：
+
 ```bash
+git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
+cd SRHarness
 pip install -e '.[dev]'
 mkdocs serve
 ```
 
-文档默认位于 `http://127.0.0.1:8000/`。发布前可执行严格构建：
+并在浏览器打开 `http://127.0.0.1:8001/`。
+
+发布前可执行严格构建：
 
 ```bash
 mkdocs build --strict

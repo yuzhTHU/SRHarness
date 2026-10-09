@@ -58,11 +58,6 @@ EVALUATOR_CONTEXT_SETTING_NAMES = (
 )
 
 HIDDEN_CAPABILITY_TOOLS = frozenset({"code_executor"})
-SEARCH_DEFAULT_EXCLUDED_TOOLS = frozenset({
-    "delegate_subagent", "evaluate_eic", "nd2", "read_source", "sr4mdl",
-    "validate_context_data", "validate_evaluator", "workspace_code_executor",
-    "workspace_shell",
-})
 EVALUATOR_DEFAULT_TOOLS = (
     "read_source", "workspace_shell", "workspace_code_executor",
     "validate_evaluator", "read_skill",
@@ -116,10 +111,19 @@ class InteractiveSession:
         self.context.args.skill_manager = self._capability_skill_manager
         self.env_path = Path(env_path or Path.cwd() / ".env").resolve()
         env_values = dotenv_values(self.env_path) if self.env_path.exists() else {}
+        file_http_proxy = env_values.get("HTTP_PROXY") or env_values.get("http_proxy")
+        file_https_proxy = env_values.get("HTTPS_PROXY") or env_values.get("https_proxy")
+        if file_http_proxy:
+            os.environ.setdefault("HTTP_PROXY", file_http_proxy)
+        if file_https_proxy:
+            os.environ.setdefault("HTTPS_PROXY", file_https_proxy)
         configured_proxy = (
-            env_values.get("MY_PROXY")
-            or os.environ.get("MY_PROXY")
-            or os.environ.get("my_proxy")
+            os.environ.get("HTTPS_PROXY")
+            or os.environ.get("https_proxy")
+            or os.environ.get("HTTP_PROXY")
+            or os.environ.get("http_proxy")
+            or file_https_proxy
+            or file_http_proxy
             or ""
         )
         self.settings = {
@@ -788,8 +792,8 @@ class InteractiveSession:
             ]
         else:
             default_tools = [
-                name for name in tool_names
-                if name not in SEARCH_DEFAULT_EXCLUDED_TOOLS
+                name for name in SRAgentInteractive.DEFAULT_TOOLS
+                if name in tool_names
             ]
             default_skills = [skill["name"] for skill in skills]
         return {
@@ -880,14 +884,13 @@ class InteractiveSession:
         if not self.env_path.exists():
             self.env_path.touch(mode=0o600)
         if proxy:
-            set_key(self.env_path, "MY_PROXY", proxy, quote_mode="always")
-            os.environ["MY_PROXY"] = proxy
+            set_key(self.env_path, "HTTP_PROXY", proxy, quote_mode="always")
+            set_key(self.env_path, "HTTPS_PROXY", proxy, quote_mode="always")
             for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
                 os.environ[name] = proxy
         else:
-            unset_key(self.env_path, "MY_PROXY")
-            os.environ.pop("MY_PROXY", None)
-            os.environ.pop("my_proxy", None)
+            unset_key(self.env_path, "HTTP_PROXY")
+            unset_key(self.env_path, "HTTPS_PROXY")
             for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
                 if previous and os.environ.get(name) == previous:
                     os.environ.pop(name, None)
@@ -924,18 +927,15 @@ class InteractiveSession:
         Yields:
             Control while the temporary environment is active.
         """
-        names = ("MY_PROXY", "my_proxy", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY")
+        names = ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY")
         previous = {name: os.environ.get(name) for name in names}
         try:
             if proxy:
-                os.environ["MY_PROXY"] = proxy
-                for name in names[2:]:
+                for name in names:
                     os.environ[name] = proxy
             else:
-                os.environ.pop("MY_PROXY", None)
-                os.environ.pop("my_proxy", None)
                 configured = str(self.data_agent_settings.get("proxy", ""))
-                for name in names[2:]:
+                for name in names:
                     if configured and os.environ.get(name) == configured:
                         os.environ.pop(name, None)
             yield

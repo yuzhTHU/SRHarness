@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sr-harness"
-version = "1.7.1"
+version = "1.0.0rc1"
 description = "SRHarness: a harness for agentic symbolic regression"
 readme = "README.md"
 requires-python = ">=3.12"

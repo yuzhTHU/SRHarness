@@ -5,6 +5,7 @@ import pytest
 from sr_harness.cli import entrypoint, main, setup_parser
 from sr_harness.cli.run import _resolve_workspace_dir
 from sr_harness.cli.synthetic import build_agent_options
+from sr_harness.agents import SRAgent
 
 
 def test_main_help_lists_subcommands(capsys, monkeypatch):
@@ -69,10 +70,16 @@ def test_synthetic_defaults(monkeypatch):
     assert args.max_restart_loop == 1
     assert args.split_by == "random"
     assert args.force_initial_diagnostics is True
+    assert args.tools is None
     assert args.ban_tools == []
     assert args.llm_max_tokens == 4096
     assert args.verbose is False
     assert args.debug is True
+
+    options = build_agent_options(args)
+    assert options["tools"] == list(SRAgent.DEFAULT_TOOLS)
+    assert "workspace_code_executor" not in options["tools"]
+    assert "validate_context_data" not in options["tools"]
 
 
 def test_synthetic_banned_tools_override_selected_tools(monkeypatch):

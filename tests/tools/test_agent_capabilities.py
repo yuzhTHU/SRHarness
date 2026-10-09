@@ -20,6 +20,20 @@ from sr_harness.tools.subagent import SubagentTool
 from sr_harness.tools.web_research import WebFetchTool, WebSearchTool
 
 
+def test_sr_harness_engine_syntax_is_a_builtin_skill(tmp_path):
+    manager = SkillManager(
+        built_in_directory="src/sr_harness/skills",
+        custom_directory=tmp_path / "custom",
+    )
+    skill = manager.get_skill("sr-harness-engine-syntax")
+    content = manager.read_skill(skill.name)
+
+    assert skill.readonly is True
+    assert "sum[j](A[i, j]" in content
+    assert "gather(A[i, j]" in content
+    assert "grouped_param" in content
+
+
 def test_eic_is_reproducible_and_finite():
     tool = EICTool(data={"x": np.linspace(1.0, 2.0, 64)})
     first = tool.execute("x + x**2", repeats=4, random_state=7)

@@ -3,12 +3,12 @@ site_description: Long-form documentation for SRHarness and SRHarness-Engine
 repo_url: https://github.com/yuzhTHU/SRHarness
 repo_name: yuzhTHU/SRHarness
 docs_dir: docs
+dev_addr: 127.0.0.1:8001
 strict: true
 nav:
   - Overview: index.md
   - Install: install.md
   - Quick Start: quick-start.md
-  - Examples: examples.md
   - SRHarness: sr-harness.md
   - SRHarness WebUI: web-ui.md
   - SRHarness Engine: engine.md
@@ -42,7 +42,6 @@ plugins:
             - Overview: index.md
             - Install: install.md
             - Quick Start: quick-start.md
-            - Examples: examples.md
             - SRHarness: sr-harness.md
             - SRHarness WebUI: web-ui.md
             - SRHarness Engine: engine.md
@@ -67,6 +66,8 @@ markdown_extensions:
   - admonition
   - attr_list
   - tables
+  - pymdownx.arithmatex:
+      generic: true
   - toc:
       permalink: true
       toc_depth: 3
@@ -79,3 +80,6 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
 extra_css:
   - stylesheets/extra.css
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

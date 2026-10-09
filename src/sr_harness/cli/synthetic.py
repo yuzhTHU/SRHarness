@@ -13,7 +13,6 @@ from pathlib import Path
 from datetime import datetime
 from socket import gethostname
 from sr_harness import SRAgent
-from sr_harness.tools import BaseTool
 from sr_harness.utils import add_minus_flags, format_pareto_front, log_exception, sanitize_filename, save_args, seed_all, setup_logging, tag2ansi
 
 
@@ -101,8 +100,8 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--strong_llm_model", default=None, help=(
         "Optional strong model for complex tasks or escalation after two unsuccessful rounds."
     ))
-    parser.add_argument("--tools", default=BaseTool.all_registered_names, type=str, nargs='+', help=(
-        "Optional list of tools to use. Default is all built-in tools."
+    parser.add_argument("--tools", default=None, type=str, nargs='+', help=(
+        "Optional list of tools to use. Default is the symbolic-regression tool set."
     ))
     parser.add_argument("--ban_tools", default=[], type=str, nargs='+', help=(
         "Optional list of tools to ban. Takes precedence over --tools."
@@ -207,9 +206,8 @@ def build_agent_options(args: argparse.Namespace) -> dict:
         dict: The operation result.
     """
     options = {name: getattr(args, name) for name in AGENT_OPTION_NAMES}
-    options["tools"] = [
-        tool for tool in options["tools"] if tool not in args.ban_tools
-    ]
+    selected_tools = SRAgent.DEFAULT_TOOLS if options["tools"] is None else options["tools"]
+    options["tools"] = [tool for tool in selected_tools if tool not in args.ban_tools]
     if not 0 <= options["validation_fraction"] < 1:
         raise ValueError("validation_fraction must be in [0, 1).")
     if options["max_workers"] < 0:

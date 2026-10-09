@@ -1,29 +1,33 @@
 # Quick Start
 
-本页分别用 `sr-harness synthetic` 和 `sr-harness run` 跑通命令行与 WebUI 两条主路径。开始前请先完成[安装和模型配置](install.md)。
+在开始前，请先完成[安装和模型配置](install.md)。
 
-## 用 `synthetic` 搜索一个已知方程
+## 使用 SRHarness 发现一个已知方程
 
-下面生成 `x1`、`x2` 和 `y`，其中目标满足
+SRHarness 提供了方便的测试命令，允许根据指定的公式合成数据，再检查 Agent 从数据中还原公式的能力。
 
-\[
+下面生成包含 `x1`、`x2`、`y` 三列的数据，其中目标变量 `y` 满足
+
+$$
 y = 1 + x_1^2 + 2x_1x_2.
-\]
+$$
+
+!!! tip
+    运行前请配置与 `--llm-provider` 对应的 API Key。下面的示例使用 OpenRouter，因此需要配置 `OPENROUTER_API_KEY`；如果使用其他 Provider 的 API Key，请相应修改 `--llm-provider` 和 `--llm-model`。
 
 然后以较小搜索预算启动 Agent：
 
 ```bash
 sr-harness synthetic \
   --equation 'y = 1 + x1 ** 2 + 2 * x1 * x2' \
-  --features x1,x2 \
   --n-samples 200 \
   --x-low -2 \
   --x-high 2 \
   --seed 42 \
   --llm-provider openrouter \
-  --llm-model qwen/qwen3.5-flash-02-23 \
+  --llm-model deepseek/deepseek-v4-flash-0731 \
   --save-path ./logs/quick-start \
-  -R 1 -C 1 -L 5 -K 1
+  -R 1 -C 1 -L 10 -K 1
 ```
 
 四个预算参数分别是：
@@ -35,12 +39,21 @@ sr-harness synthetic \
 | `-L` | 每条 Conversation 的最大 Refinement 深度 |
 | `-K` | 每一步的模型采样数 |
 
-运行记录写入 `--save-path`。常见文件包括 `run.json`、`nodes.jsonl`、`result.json`、`response.jsonl` 和 `tool_calls.jsonl`。
+运行记录写入 `--save-path`，常见文件如下表所示：
 
-!!! warning
-    `synthetic` 会调用所选模型服务，可能产生费用。先用较小的 `R/C/L/K` 验证配置，再增加搜索预算。
+| 文件 | 内容 |
+|---|---|
+| `run.json` | 本次运行的唯一标识、启动参数和 Agent 配置 |
+| `nodes.jsonl` | 搜索期间产生的对话节点和节点间关系 |
+| `result.json` | Agent 探索的公式列表，以及构成帕累托前沿和最佳结果的候选公式 |
+| `response.jsonl` | 原始模型响应、token 和费用统计 |
+| `tool_calls.jsonl` | 工具调用记录 |
 
-## 用 `run` 启动 Web 工作台
+## 使用 WebUI 工作台
+
+SRHarness 提供了交互式 WebUI 工作台，允许用户在浏览器中完成数据准备、任务配置和符号回归搜索。
+
+下面的命令在本机 `11001` 端口启动 WebUI，并将持久化工作区和运行记录分别保存到 `./workspaces` 与 `./logs/webui`：
 
 ```bash
 sr-harness run \
@@ -50,19 +63,17 @@ sr-harness run \
   --save-path ./logs/webui
 ```
 
-打开 `http://127.0.0.1:11001/`，按三个阶段操作：
+在浏览器中打开 `http://127.0.0.1:11001/`，并按网页提示进行如下三个阶段的操作：
 
-1. **数据准备**：上传 CSV/Excel，或点击样例数据；必要时让数据准备 Agent 清洗、补充或检查数据。
-2. **任务配置**：选择变量角色、编辑变量描述和问题描述；确认或自定义 Evaluator。
-3. **符号回归**：确认变量、用户提示词和系统提示词，然后启动搜索。
+1. **数据准备**：上传数据（或使用网页提供的样例数据），并在必要时让网页内的 Agent 清洗、补充或检查数据。
+2. **任务配置**：选择变量角色，编辑变量和问题描述，并选择或定义模型评价方案。
+3. **符号回归**：启动符号搜索，并在必要时回到前两步以补充变量或更改评价方案。
 
-搜索开始后，中央时间线展示 prompt、模型回复、工具调用和结果；右侧展示搜索树、Top-k 与 Pareto Front。运行中可以发送补充指令，也可以先请求暂停，再次点击强制中断当前模型输出或工具执行。
-
-更完整的逐屏说明见 [SRHarness WebUI](web-ui.md)。
+完整操作说明见 [SRHarness WebUI](web-ui.md)。
 
 ## 使用只读数据挂载
 
-如果原始数据不应被 Agent 修改，可把文件或目录只读挂载到每个对话的工作区：
+如果数据较大，建议通过 `--mount` 将本机数据挂载到工作区：
 
 ```bash
 sr-harness run \
@@ -70,11 +81,4 @@ sr-harness run \
   --mount ./datasets ./papers/model.pdf
 ```
 
-挂载项在工作区中保留 basename。不同挂载路径的 basename 必须唯一。
-
-## 下一步
-
-- 修改数据噪声、验证切分或自动路由：[SRHarness CLI](sr-harness.md)
-- 尝试 ODE 和图动力学案例：[Examples](examples.md)
-- 编写和拟合表达式：[SRHarness Engine](engine.md)
-- 从 Python 调用核心类：[API Reference](reference/index.md)
+挂载的数据将以只读链接的形式出现在每个对话的工作区，避免原始数据被 Agent 修改或复制数据占用额外的磁盘空间。如果指定了多个要挂载的目录或文件，不同目录或文件的名称不得相互冲突。

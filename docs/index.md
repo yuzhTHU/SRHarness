@@ -6,7 +6,6 @@ SRHarness 是一个面向智能体符号回归的研究运行时。语言模型�
 
 - [Install](install.md)：安装 SRHarness 和可选依赖
 - [Quick Start](quick-start.md)：跑通第一个任务
-- [Examples](examples.md)：查看静态回归、ODE 与工具调用案例
 - [SRHarness](sr-harness.md)：了解命令、运行参数与输出文件
 - [SRHarness WebUI](web-ui.md)：通过网页完成一次交互式搜索
 - [SRHarness Engine](engine.md)：学习表达式语法、参数与图结构

@@ -13,7 +13,6 @@ from typing import Any, Callable, Iterator, List, Optional
 from ..api import BaseAPI
 from ..core import AgentContext, CandidateRecord, ToolCall, ToolCallResult
 from ..runtime import PendingMessage, SRInteractionManager
-from ..tools import BaseTool
 from .sr_agent import Message, ModelResponse, SRAgent, Usage
 from ..parser import BaseParser
 
@@ -30,7 +29,7 @@ class SRAgentInteractive(SRAgent):
         llm_provider: str,
         llm_model: str,
         interaction_manager: SRInteractionManager,
-        tools: List[BaseTool] | None = None,
+        tools: list[str] | None = None,
         skills: List[str] | None = None,
         verbose: bool = False,
         tool_parser: str | BaseParser = 'openai',
@@ -62,8 +61,7 @@ class SRAgentInteractive(SRAgent):
         Args:
             llm_provider: LLM 提供商名称。
             llm_model: 模型名称。
-            tools: 可用工具名列表。None 表示使用默认工具集（全部工具减去 code_executor
-                和仅用于数据准备或评测器构建的上下文工具）。
+            tools: 可用工具名列表。None 表示使用 ``SRAgent.DEFAULT_TOOLS``。
             skills: 可供 Agent 读取的 skill 名称。None 表示使用全部 skill。
             verbose: 是否启用详细日志。
             tool_parser: 工具解析器类型。
@@ -91,12 +89,6 @@ class SRAgentInteractive(SRAgent):
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与数据准备 Agent 共享的数据和工作区上下文。
         """
-        if use_workspace:
-            excluded_tools = {"code_executor"}
-        else:
-            excluded_tools = {"workspace_code_executor", "workspace_shell"}
-        if tools is None:
-            excluded_tools.update({"validate_context_data", "validate_evaluator"})
         super().__init__(
             llm_provider=llm_provider,
             llm_model=llm_model,
@@ -124,7 +116,6 @@ class SRAgentInteractive(SRAgent):
             strong_llm_provider=strong_llm_provider,
             strong_llm_model=strong_llm_model,
             context=context,
-            excluded_tools=excluded_tools,
         )
 
         # 工作区
@@ -390,12 +381,21 @@ class SRAgentInteractive(SRAgent):
             Interactive system-prompt text.
         """
         mse_goal = self._build_mse_goal(restart_records)
-        workspace_info = (
-            "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
-            "there rather than reconstructing them from workspace files. The workspace contains "
-            "supplemental files and reproducible artifacts. Use workspace_shell for bounded file "
-            "operations and workspace_code_executor when Python analysis is necessary."
-        ) if self.use_workspace else ""
+        workspace_info = ""
+        if self.use_workspace:
+            workspace_info = (
+                "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
+                "there rather than reconstructing them from workspace files. The workspace contains "
+                "supplemental files and reproducible artifacts."
+            )
+            enabled_tools = {tool_cls.metadata.name for tool_cls in self.tool_cls_list}
+            workspace_guidance = []
+            if "workspace_shell" in enabled_tools:
+                workspace_guidance.append("workspace_shell for bounded file operations")
+            if "workspace_code_executor" in enabled_tools:
+                workspace_guidance.append("workspace_code_executor for Python analysis")
+            if workspace_guidance:
+                workspace_info += " Use " + " and ".join(workspace_guidance) + "."
 
         return (
             "You are a Symbolic Regression Agent working with a human researcher. "

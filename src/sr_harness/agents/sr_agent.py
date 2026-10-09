@@ -33,13 +33,34 @@ Usage: TypeAlias = dict[str, Any]
 class SRAgent(Agent):
     """Agent that performs an R-C-L-K symbolic-regression search."""
 
+    DEFAULT_TOOLS = (
+        "statistics_analysis",
+        "relationship_analysis",
+        "evaluate_formula",
+        "submit_formula",
+        "evaluate_code",
+        "polynomial_fit",
+        "power_law_fit",
+        "rational_fit",
+        "constant_fit",
+        "read_skill",
+        "create_skill",
+        "edit_skill",
+        "edit_tool",
+        "call_sindy",
+        "call_pysr",
+        "web_search",
+        "web_fetch",
+        "read_pdf",
+    )
+
     # Construction and public lifecycle
 
     def __init__(
         self,
         llm_provider: str,
         llm_model: str,
-        tools: List[BaseTool] | None = None,
+        tools: list[str] | None = None,
         skills: List[str] | None = None,
         verbose: bool = False,
         tool_parser: str | BaseParser = 'openai',
@@ -63,14 +84,13 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
-        excluded_tools: set[str] | None = None,
     ) -> None:
         """初始化 Agent。
 
         Args:
             llm_provider: LLM 提供商名称（如 "openai", "siliconflow"）。
             llm_model: 模型名称（如 "gpt-4o-mini"）。
-            tools: 可用工具列表。None 表示使用全部工具。
+            tools: 可用工具列表。None 表示使用 ``DEFAULT_TOOLS``。
             skills: 可供 Agent 读取的 skill 名称。None 表示使用全部 skill。
             verbose: 是否启用详细日志（DEBUG 级别）。
             tool_parser: 工具解析器，可以是字符串（'text', 'json'）或 BaseParser 实例。
@@ -96,7 +116,6 @@ class SRAgent(Agent):
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与其它 Agent 共享的数据和工作区上下文。None 表示新建独立上下文。
-            excluded_tools: 从自动发现的工具集中排除的工具名。None 使用基础 Agent 的默认集合。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         log_path = Path(save_path) / "info.log" if save_path is not None else None
@@ -106,22 +125,13 @@ class SRAgent(Agent):
             force=False,
         )
 
-        # Workspace executors require explicit workspace permissions.
-        self.excluded_tools = set(
-            {"workspace_code_executor", "validate_context_data"}
-            if excluded_tools is None else excluded_tools
-        )
-
         tool_cls_list = []
         for tool_cls in BaseTool.load_tool_classes():
             # Custom tools are rediscovered and reloaded from this Agent's
             # SkillManager below. Exclude stale process-global class objects.
             if getattr(tool_cls, "source_path", None) is not None:
                 continue
-            if (name := tool_cls.metadata.name) in self.excluded_tools:
-                _logger.info(f"Excluding tool {name} from the agent's toolset.")
-            else:
-                tool_cls_list.append(tool_cls)
+            tool_cls_list.append(tool_cls)
 
         # 参数
         self.llm_provider = llm_provider
@@ -168,21 +178,17 @@ class SRAgent(Agent):
 
         # 关键组件
         self.skill_manager = SkillManager()
-        requested_tool_names = set(tools) if tools is not None else None
+        requested_tool_names = set(self.DEFAULT_TOOLS if tools is None else tools)
         initially_selected = [
             tool_cls for tool_cls in tool_cls_list
-            if requested_tool_names is None or tool_cls.metadata.name in requested_tool_names
+            if tool_cls.metadata.name in requested_tool_names
         ]
         self.skill_manager.register_tool_docs(initially_selected)
         tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
         self.available_tool_classes = {
             tool_cls.metadata.name: tool_cls for tool_cls in tool_cls_list
         }
-        requested_tools = (
-            set(self.available_tool_classes)
-            if requested_tool_names is None
-            else requested_tool_names
-        )
+        requested_tools = requested_tool_names
         if unknown_tools := requested_tools - self.available_tool_classes.keys():
             raise ValueError(f"Unknown tools: {', '.join(sorted(unknown_tools))}")
         self.tool_cls_list = [
