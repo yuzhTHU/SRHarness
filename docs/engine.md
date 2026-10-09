@@ -282,7 +282,7 @@ evaluate_candidate(f, context)
 from sr_harness.evaluator import utils
 ```
 
-Evaluator 的设计、执行路径与自定义方式见 [SRHarness 核心抽象](core-abstractions.md#evaluator)，完整接口见 [API Reference](reference/index.md)。
+Evaluator 的设计、执行路径与自定义方式见[公式评估与自定义 Evaluator](evaluator.md)，完整接口见 [API Reference](reference/index.md)。
 
 ## 可执行规范
 

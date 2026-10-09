@@ -37,7 +37,7 @@ flowchart LR
 - `AgentContext` 提供工具的运行环境，包括数据、目标变量、评估器、控制参数和工作区，使得模型不必在每次调用时反复指定或生成这些信息。
 - `ToolCallResult` 统一表示每次工具执行产生的结果。
 - `SearchRunState` 利用 `ToolCallResult` 记录搜索节点、父关系、候选公式及其指标，并把帕累托前沿和剩余搜索预算组织为下一轮模型可见的搜索状态。
-- [Evaluator](core-abstractions.md#evaluator) 提供数据切分、参数拟合、指标计算等功能，统一服务于所有公式评估工具。
+- [Evaluator](evaluator.md) 提供数据切分、参数拟合、指标计算等功能，统一服务于所有公式评估工具。
 - [SRHarness 符号引擎](engine.md) 为 Evaluator 提供表达式解析、拟合和求值等底层能力。
 
 ## R-C-L-K 搜索

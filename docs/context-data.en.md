@@ -1,4 +1,4 @@
-# The `context.data` Format
+# Structured Data and `context.data`
 
 SRHarness stores structured data in a `context.data/` directory. Each variable and each sufficiently long axis is stored as an NPY file, while `manifest.json` describes variables, axes, and graph relationships.
 

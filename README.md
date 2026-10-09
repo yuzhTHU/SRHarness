@@ -1,341 +1,108 @@
 # SRHarness: A Harness for Agentic Symbolic Regression
 
-[English](README.md) | [简体中文](README.zh.md) | [Complete SRHarness documentation](docs/index.md) | [SRHarness-Engine documentation](docs/engine.md)
+[English](README.md) | [简体中文](README.zh.md)
 
-SRHarness is a domain-specific runtime for **agentic symbolic regression**. It lets a large language model inspect numerical observations, choose scientific operations, evaluate competing hypotheses, and refine a symbolic expression over a long search trajectory.
+[![GitHub](https://img.shields.io/github/stars/yuzhTHU/SRHarness?style=flat&logo=github&label=GitHub)](https://github.com/yuzhTHU/SRHarness)
+[![PyPI](https://img.shields.io/pypi/v/sr-harness?logo=pypi&logoColor=white)](https://pypi.org/project/sr-harness/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-4e968b?logo=materialformkdocs&logoColor=white)](https://yuzhthu.github.io/SRHarness/)
+[![Live WebUI](https://img.shields.io/badge/WebUI-live-4e968b?logo=googlechrome&logoColor=white)](http://sim1.fiblab.tech:30000/)
+[![arXiv](https://img.shields.io/badge/arXiv-2609.35501-b31b1b?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2609.35501)
+[![Documentation build](https://github.com/yuzhTHU/SRHarness/actions/workflows/docs.yml/badge.svg?branch=dev)](https://github.com/yuzhTHU/SRHarness/actions/workflows/docs.yml)
+[![Python](https://img.shields.io/badge/python-%E2%89%A53.12-3776AB?logo=python&logoColor=white)](https://pypi.org/project/sr-harness/)
+[![License](https://img.shields.io/github/license/yuzhTHU/SRHarness)](LICENSE)
 
-This repository contains the research code for **“SRHarness: A Harness for Agentic Symbolic Regression.”** The Python package is `sr_harness`, and its primary agent class remains `SRAgent`.
+SRHarness is a domain-specific runtime for **agentic symbolic regression**. It lets language-model agents prepare scientific data, invoke composable analysis and fitting tools, retain evaluated hypotheses, and refine interpretable formulas over long search trajectories. Its interactive workbench also supports persistent conversations, editable task configuration, and task-specific formula evaluation through custom Evaluators.
 
-> **Research-code status:** the project is under active development. Experiment-scale runs can make many paid LLM requests and may invoke external solvers. Start with a small `R-C-L-K` configuration and inspect the generated logs before launching a benchmark campaign.
 
-## Why SRHarness?
+## Highlights
 
-SRHarness organizes agentic equation discovery around three mechanisms:
+- **Composable scientific actions:** analysis, fitting, evaluation, code execution, and formula submission use a shared tool interface.
+- **Persistent scientific state:** candidates, metrics, complexity, diagnostics, provenance, and Pareto rankings survive beyond one model response.
+- **Managed search trajectories:** the `R-C-L-K` lifecycle coordinates restarts, branches, refinement depth, and local sampling.
+- **Interactive research workflow:** the WebUI connects data preparation, task configuration, Evaluator construction, symbolic search, human guidance, and persistent workspaces.
+- **Extensible symbolic modeling:** SRHarness Engine supports ordinary expressions as well as indexed graph and hypergraph formulas.
 
-- **Composable scientific actions.** Analysis, fitting, evaluation, and search tools share a common interface. Actions can operate on raw variables, transformed expressions, residuals, and other candidate-derived views.
-- **Persistent scientific state.** Candidate formulas, numerical metrics, complexity, evidence, and provenance survive beyond a single conversation. Compact Pareto and top-candidate views expose useful state back to the model.
-- **Trajectory lifecycle management.** A configurable `R-C-L-K` scheduler coordinates restarts, independent branches, refinement steps, and local response sampling while preserving useful intermediate results.
+## Results
 
-The included action library covers statistical and relationship analysis, formula/code evaluation, constant and structured fitting, PySR and SINDy integration, code execution, skills, and final formula submission. Tools can be enabled, disabled, or extended without changing the main agent loop.
+The [paper](https://arxiv.org/abs/2609.35501) evaluates SRHarness on LLM-SRBench under matched language-model backbones. LSR-Transform measures symbolic recovery on transformed scientific equations, while LSR-Transform-Anon removes scientific descriptions and variable semantics to test whether the search process remains effective without domain-specific textual cues. The table reports symbolic accuracy (SA):
 
-## Results at a Glance
-
-The accompanying paper evaluates SRHarness on LLM-SRBench, including LSR-Synth, LSR-Transform, and an anonymized LSR-Transform variant that removes scientific descriptions and variable semantics.
-
-| Method / backbone | LSR-Transform SA | LSR-Transform-Anon SA |
+| Method / backbone | LSR-Transform | LSR-Transform-Anon |
 |---|---:|---:|
 | SRHarness + DeepSeek-v4-flash-0731 | **93.69%** | **72.97%** |
 | SR-Scientist + DeepSeek-v4-flash-0731 | 62.16% | 39.64% |
 | Codex + DeepSeek-v4-flash-0731 | — | 20.72% |
 
-These are symbolic-accuracy results reported in the manuscript. See the paper for the complete numerical, symbolic, complexity, resource, and ablation results, as well as the exact evaluation protocol.
+With the same DeepSeek-v4-flash-0731 backbone, SRHarness substantially improves symbolic recovery over SR-Scientist on both settings. Its accuracy remains comparatively high after descriptions and variable semantics are removed, and it also outperforms Codex on the anonymized benchmark. These results indicate that the structured runtime—scientific actions, persistent hypothesis state, and trajectory management—contributes materially beyond the choice of language model alone. See the paper for the complete evaluation protocol, numerical-generalization results, complexity and resource analyses, and ablation studies.
 
 ## Installation
 
-### Requirements
-
-- Linux is the primary tested platform.
-- Python **3.12 or newer** is required.
-- Git and a working C/C++ toolchain are recommended.
-- Some optional actions have additional requirements, such as Julia for PySR or PyTorch for neural components.
-
-The following setup mirrors [`scripts/install.sh`](scripts/install.sh) while using HTTPS clone URLs:
+SRHarness requires Python 3.12 or newer.
 
 ```bash
-git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
-cd SRHarness
-
-conda create -p ./venv python=3.12 -y
-conda activate ./venv
-
-# Core package plus development/test dependencies.
-pip install -e ".[dev]"
+pip install sr-harness
 ```
 
-Install optional components as needed:
-
-```bash
-pip install -e ".[tools]"     # PySR, PySINDy, and PDF integrations
-pip install -e ".[nn]"        # Experimental neural components
-pip install -e ".[dev]"       # Tests, documentation, and development tools
-pip install -e ".[all]"       # All optional components
-```
-
-## Provider Configuration
-
-Copy the tracked environment template once, then fill in only the providers you use:
-
-```bash
-test -f .env || cp .env.sample .env
-```
-
-For example, OpenRouter requires:
-
-```dotenv
-OPENROUTER_API_KEY="sk-or-v1-..."
-```
-
-The code also contains adapters for DeepSeek, Gemini, OpenAI/Azure OpenAI, SiliconFlow, LM Studio, and manual interaction. See [`.env.sample`](.env.sample) for the corresponding variables. Never commit `.env`; it is ignored by Git.
+See the [installation guide](https://yuzhthu.github.io/SRHarness/install/) for provider configuration, source installation, development environments, and optional integrations.
 
 ## Quick Start
 
-Run a small synthetic problem:
+### Discover a known equation: `sr-harness synthetic`
+
+Set `OPENROUTER_API_KEY`, then use `synthetic` to generate data from a known equation and test whether SRAgent can recover it:
 
 ```bash
-conda activate ./venv
-
 sr-harness synthetic \
-  --equation "y = sin(x1 - x2)" \
-  --x_low -10 \
-  --x_high 10 \
-  --llm_provider openrouter \
-  --llm_model deepseek/deepseek-v4-flash-0731 \
-  --force_initial_diagnostics \
-  -R 1 -C 1 -L 3 -K 1
+  --equation 'y = 1 + x1 ** 2 + 2 * x1 * x2' \
+  --n-samples 200 \
+  --x-low -2 \
+  --x-high 2 \
+  --seed 42 \
+  --llm-provider openrouter \
+  --llm-model deepseek/deepseek-v4-flash-0731 \
+  --save-path ./logs/quick-start \
+  -R 1 -C 1 -L 10 -K 1
 ```
 
-This command performs paid API calls. Its search budget is controlled by:
+If you use another provider, configure its API key and change `--llm-provider` and `--llm-model` accordingly.
 
-| Symbol | Meaning |
-|---|---|
-| `R` | restart rounds initialized from persistent historical candidates |
-| `C` | independent conversational branches per restart |
-| `L` | refinement steps per branch |
-| `K` | locally sampled responses per refinement step |
+### Interactive workbench: `sr-harness run`
 
-The nominal number of model responses is approximately `R × C × L × K`, although retries and provider behavior can affect actual usage.
-
-### Python API
-
-```python
-import numpy as np
-from sr_harness import SRAgent
-
-x1 = np.linspace(-3.0, 3.0, 100)
-x2 = np.linspace(3.0, -3.0, 100)
-
-agent = SRAgent(
-    llm_provider="openrouter",
-    llm_model="deepseek/deepseek-v4-flash-0731",
-    max_restart_loop=1,
-    global_width=1,
-    max_refinement_depth=3,
-    local_sample_size=1,
-    save_path="logs/python_api_demo",
-)
-
-result = agent.run(
-    X={"x1": x1, "x2": x2},
-    y={"y": np.sin(x1 - x2)},
-    problem_description="Discover y as a function of x1 and x2.",
-)
-best = result["candidates"][result["best_candidate"]]
-print(best["formula"])
-```
-
-## LLM-SRBench Evaluation
-
-Download the benchmark data. Git LFS may be required:
+Use `run` for the complete interactive research workflow. It starts the WebUI for data preparation, task and evaluator configuration, symbolic-regression search, and human guidance:
 
 ```bash
-git lfs install
-git clone https://huggingface.co/datasets/nnheui/llm-srbench \
-  ./data/llm-srbench-data
+sr-harness run \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --workspace-dir ./workspaces \
+  --save-path ./logs/webui
 ```
 
-Run one LSR-Transform problem before scaling up:
+Then open <http://127.0.0.1:8000/>. The workspace registry and conversation workspaces are stored under `./workspaces`, while session snapshots and run records are stored under `./logs/webui`. A hosted instance is also available at <http://sim1.fiblab.tech:30000/>.
 
-```bash
-sr-harness benchmark \
-  --algorithm sr_harness \
-  --datasets lsrtransform \
-  --problem_names II.6.15b_1_0 \
-  --exp_name smoke_lsrtransform \
-  --llm_provider openrouter \
-  --llm_model deepseek/deepseek-v4-flash-0731 \
-  -R 1 -C 1 -L 3 -K 1
-```
+## Documentation
 
-Add `--anonymize` to replace variable names and scientific descriptions with generic input/output labels while leaving the numerical observations unchanged:
-
-```bash
-sr-harness benchmark \
-  --algorithm sr_harness \
-  --datasets lsrtransform \
-  --problem_names II.6.15b_1_0 \
-  --exp_name smoke_lsrtransform_anon \
-  --anonymize \
-  --llm_provider openrouter \
-  --llm_model deepseek/deepseek-v4-flash-0731 \
-  -R 1 -C 1 -L 3 -K 1
-```
-
-The benchmark entry point also contains adapters for conventional and LLM-based baselines; `sr-harness benchmark --help` lists its general options, while each adapter defines its method-specific flags. Paper-scale reproduction requires the exact model, toolset, data split, token limit, seed, and `R-C-L-K` configuration reported with each experiment; the smoke commands above intentionally use a much smaller budget.
-
-## Logs and Web Visualization
-
-`SearchRunState` always keeps the live run in memory. When `save_path` is enabled, it also writes:
-
-- `run.json`: the globally unique run ID and agent metadata;
-- `nodes.jsonl`: search nodes, parent relations, prompts, actions, results, and usage;
-- `result.json`: candidates plus the Pareto-front and best-candidate indices;
-- `response.jsonl`: raw model responses and token/cost accounting;
-- `tool_calls.jsonl`: tool invocations and outputs;
-- text logs and entry-point-specific result files.
-
-With `save_path=None`, search identity, parent relations, candidates, and results remain fully
-available through `agent.run_state`, while no search-state files are created.
-
-Launch the web viewer (included in the default installation):
-
-```bash
-sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
-```
-
-`--workspace-dir` stores the conversation registry and one persistent workspace per conversation.
-Without it, an explicit save path is reused as the workspace directory; if neither is provided,
-the workbench uses a temporary directory and warns that conversation records may be lost. Mount
-existing files or directories into every new conversation as read-only inputs when needed:
-
-```bash
-sr-harness run --workspace-dir ./workspaces --mount ./data.csv ./papers --port 8000
-```
-
-Mounted inputs must have unique basenames. They remain readable by the data-preparation Agent and
-preview APIs, while workspace uploads and tools cannot modify their source contents. Ordinary files
-inside each conversation workspace are writable and may be changed or deleted by AI-operated tools.
-By default all browsers share the conversation list; pass `--isolate-users` to isolate visible
-conversations by a persistent browser cookie. When `--save-path` or `--save-dir` supplies a durable
-save path, the server periodically snapshots each materialized interactive session. Restarting with
-the same path restores its timeline, settings, prepared context, evaluator selection, and search
-records. Model or tool work that was still active at shutdown is restored as interrupted rather than
-as a misleading live task. Snapshots are stored under `<save-path>/sessions/`.
-
-Then open <http://127.0.0.1:8000/>. During a process lifetime the Web API and search viewer read the
-active session's in-memory `SearchRunState`; durable session snapshots rebuild that state after a
-server restart.
-
-![SRHarness data workbench](docs/assets/web-data-workbench.png)
-
-![SRHarness execution timeline](docs/assets/web-timeline.png)
-
-The workbench opens on **Data Preparation**, where files, demo data, and the data-preparation Agent
-share one view. **Data Analysis** selects a CSV or Excel workbook, assigns one target and one or
-more features, edits variable descriptions, and previews X/Y/Hue/Size relationships. The
-data-preparation Agent can inspect the persistent workspace, clean or join tables, search and read
-public Web sources, and atomically
-publish a numeric target and aligned features into the shared `AgentContext`. Its conversation and
-workspace survive later requests. The direct structured-data workflow remains available without
-using this Agent. SRHarness generates the initial system and user prompts from the resulting
-configuration; either prompt remains editable before the run starts. The included `demo.csv`
-contains three input columns (including one categorical column) and one numeric target.
-
-During a run, **Timeline** shows model reasoning, tool calls, results, token/cost usage, and control
-events, while **Current Context** exposes the messages associated with each R-C-L node. The search
-tree and candidate panel stay linked to those nodes and can switch between all ranked candidates
-and the Pareto front. Guidance, model changes, and pause requests take effect at safe operation
-boundaries; a second pause request interrupts the active model or tool operation so the Agent can
-reach that boundary sooner. A tool-free assistant reply naturally yields control to the user. The interface supports Chinese/English text, light/dark
-themes, and resizable or collapsible side panels.
-
-The data-preparation Agent and `SRAgentInteractive` keep separate message histories while sharing
-one `AgentContext`. To add features during search, pause symbolic regression, ask the preparation
-Agent to create and commit the aligned columns, then resume. At the next safe iteration boundary,
-the SR Agent detects the new data revision, rebuilds its train/validation split, tells the existing
-conversation which variables were added, and continues with its prior evidence and candidates.
-While a search is active, data commits may add features but cannot alter the target, row alignment,
-or previously used values; those changes require a new run because old candidate metrics would no
-longer be comparable.
-
-### Research backends, subagents, and live control
-
-The default tool set includes recursive per-subtree EIC diagnostics (`evaluate_eic`), an actual
-MDLformer-guided SR4MDL search (`sr4mdl`), NDformer-guided network-dynamics search (`nd2`), bounded
-symbolic-regression hypothesis/critique delegation (`delegate_subagent`), web search, and PDF
-reading. Configure heavyweight external projects with `SR4MDL_HOME` and `ND2_HOME`, and point
-`SR4MDL_CHECKPOINT` to the trained MDLformer checkpoint. Repositories placed at
-`third-party/SR4MDL` and `third-party/ND2` are discovered automatically. When `evaluate_eic` is
-enabled, each newly generated scalar candidate receives a lightweight structural audit whose
-diagnostics are retained in candidate state. Documentation for EIC, SR4MDL, and ND2 is exposed as
-runtime read-only skills by each tool's `get_doc()` method.
-
-`Agent` contains the common API, parser, and tool-execution mechanics used by
-`DataPreparationAgent` and `SRAgent`; `SRAgentInteractive` specializes the shared `SRAgent` search
-loop with human control and frontend events. `AgentContext` owns the structured data and metadata,
-evaluator, runtime arguments, and workspace shared by cooperating agents. Train/evaluation mappings
-are lazily produced by the evaluator and cached by the context.
-
-`SRAgentInteractive` accepts an `SRInteractionManager` that connects its search loop to an
-interface. Data preparation and evaluator construction each use their own `InteractionManager`, so
-their controls and timelines remain isolated. These managers own queued guidance, pause and
-interrupt requests, safe-boundary coordination, and observable events; they do not own the
-scientific search state or duplicate the R-C-L loop. Model auto-routing can use a cheap base backend for simple/early requests and an optional
-strong backend for complex or stagnated searches. Configure
-`strong_llm_provider`/`strong_llm_model`, or pass `auto_routing=False` to keep every request on the
-base backend.
-
-## Evaluation and Reproducibility Notes
-
-- Benchmark test observations are not exposed during search or candidate selection.
-- The agent can reserve part of the visible training data for random or OOD-style validation using `--validation_fraction` and `--split_by`.
-- Numerical predictions are evaluated through the shared benchmark pipeline. Symbolic equivalence is implemented in [`src/sr_harness/utils/symbolic_acc.py`](src/sr_harness/utils/symbolic_acc.py).
-- Logs preserve prompts, model responses, tool calls, candidate provenance, token usage, and recorded cost so that a run can be audited after completion.
-- API behavior, model aliases, prices, and stochastic outputs can change over time. Record the exact provider model identifier, source revision, arguments, and environment for serious comparisons.
-
-## Extending SRHarness
-
-New scientific actions inherit `BaseTool`, declare stable metadata, and return a serializable result. Candidate-producing actions should use the shared evaluation contract so their formulas, train/validation metrics, complexity, diagnostics, and provenance can enter persistent scientific state consistently.
-
-See:
-
-- [`src/sr_harness/README.md`](src/sr_harness/README.md) for the agent loop and internal architecture;
-- [`src/sr_harness/tools/README.md`](src/sr_harness/tools/README.md) for the action API and custom-tool guide;
-- [`tests/README.md`](tests/README.md) for testing conventions.
-
-## Project Layout
-
-```text
-├── src/sr_harness/          # Python package
-│   ├── agents/              # Batch and interactive SRAgent implementations
-│   ├── api/                 # BaseAPI and LLM provider adapters
-│   ├── core/                # API, tool, candidate, node, and run-state structures
-│   ├── interaction/         # Terminal and Web interaction managers
-│   ├── runtime/             # Model routing and interaction control
-│   ├── cli/                 # sr-harness subcommands
-│   ├── parser/              # Native/text/JSON/XML tool-call parsing
-│   ├── tools/               # Scientific actions and shared evaluation contract
-│   ├── skills/              # Reusable agent-facing scientific instructions
-│   ├── web/                 # Interactive workbench backend and static UI
-│   ├── utils/               # Metrics, symbolic accuracy, logging, and utilities
-│   └── _vendor/             # Integrated benchmark/baseline adapters
-├── tests/                   # Unit and integration tests
-├── scripts/                 # Experiment and analysis utilities
-├── analysis/                # Analysis notebooks
-├── data/                    # Local datasets; ignored by Git
-├── logs/                    # Run artifacts; ignored by Git
-└── playground/              # Temporary experiments; ignored by Git
-```
-
-Repository conventions:
-
-- Add user-facing commands as `sr-harness` subcommands under `src/sr_harness/cli/`.
-- Put experiment and analysis utilities under `scripts/`.
-- Name analysis notebooks as `YYMMDD_description.ipynb` and avoid committing large outputs.
-- Treat `data/`, `logs/`, and `playground/` as local working directories.
-
-## Testing
-
-The default test configuration excludes tests marked `slow` or `paid`:
-
-```bash
-python -m pytest tests/ -v
-```
-
-Run paid or slow integration tests only when the required services and budget are available.
+- [Overview](https://yuzhthu.github.io/SRHarness/)
+- [Quick Start](https://yuzhthu.github.io/SRHarness/quick-start/)
+- [Installation and provider configuration](https://yuzhthu.github.io/SRHarness/install/)
+- [Commands and runtime options](https://yuzhthu.github.io/SRHarness/sr-harness/)
+- [SRHarness Agent Workflow](https://yuzhthu.github.io/SRHarness/agent/)
+- [Tools and tool-call Parsers](https://yuzhthu.github.io/SRHarness/core-abstractions/)
+- [Structured data and `context.data`](https://yuzhthu.github.io/SRHarness/context-data/)
+- [Formula evaluation and custom Evaluators](https://yuzhthu.github.io/SRHarness/evaluator/)
+- [SRHarness WebUI](https://yuzhthu.github.io/SRHarness/web-ui/)
+- [SRHarness Engine](https://yuzhthu.github.io/SRHarness/engine/)
+- [API reference](https://yuzhthu.github.io/SRHarness/reference/)
 
 ## Citation
 
-If you use this code, please cite **“SRHarness: A Harness for Agentic Symbolic Regression.”** A copy-ready BibTeX entry and public paper link will be added when the paper record becomes publicly available.
+```bibtex
+@article{yu2026srharness,
+  title   = {SRHarness: A Harness for Agentic Symbolic Regression},
+  author  = {Yu, Zihan and Zhou, Shixuan and Huang, Hao and Ding, Jingtao and Li, Yong},
+  journal = {arXiv preprint arXiv:2609.35501},
+  year    = {2026}
+}
+```
 
 ## License
 

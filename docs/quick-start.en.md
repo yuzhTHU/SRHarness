@@ -51,17 +51,17 @@ Run artifacts are written below `--save-path`. Common files are listed below:
 
 SRHarness provides an interactive WebUI workbench for preparing data, configuring a task, and running a symbolic-regression search in the browser.
 
-The following command starts the WebUI locally on port `11001` and stores persistent workspaces and run records in `./workspaces` and `./logs/webui`, respectively:
+The following command starts the WebUI locally on port `8000` and stores persistent workspaces and run records in `./workspaces` and `./logs/webui`, respectively:
 
 ```bash
 sr-harness run \
   --host 127.0.0.1 \
-  --port 11001 \
+  --port 8000 \
   --workspace-dir ./workspaces \
   --save-path ./logs/webui
 ```
 
-Open `http://127.0.0.1:11001/` in a browser and follow the page through these three stages:
+Open `http://127.0.0.1:8000/` in a browser and follow the page through these three stages:
 
 1. **Data preparation:** upload data (or use one of the provided sample datasets), and ask the in-page Agent to clean, extend, or inspect it when needed.
 2. **Task setup:** assign variable roles, edit the variable and problem descriptions, and select or define an evaluation scheme.

@@ -1,4 +1,4 @@
-# `context.data` 数据格式
+# 结构化数据与 `context.data`
 
 SRHarness 使用 `context.data/` 目录保存结构化数据。每个变量以及较长的轴分别存储为 NPY 文件，`manifest.json` 则描述变量、轴和图结构之间的关系。
 

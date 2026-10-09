@@ -11,8 +11,9 @@ SRHarness 是一个面向智能体符号回归的研究运行时。语言模型�
 - [Quick Start](quick-start.md)：跑通第一个任务
 - [SRHarness](sr-harness.md)：了解命令、运行参数与输出文件
 - [SRHarness 智能体工作流](agent.md)：理解 Agent 循环、工具调用生命周期与 R-C-L-K 搜索
-- [SRHarness 核心抽象](core-abstractions.md)：了解工具、工具调用 Parser 与 Evaluator 的扩展接口
-- [`context.data` 数据格式](context-data.md)：查询变量、轴以及图和超图数据的存储规则
+- [SRHarness 核心抽象](core-abstractions.md)：了解工具与工具调用 Parser 的扩展接口
+- [结构化数据与 `context.data`](context-data.md)：查询变量、轴以及图和超图数据的存储规则
+- [公式评估与自定义 Evaluator](evaluator.md)：了解公式评估流程、内置评估器与自定义方式
 - [SRHarness 网页工作台](web-ui.md)：通过网页完成一次交互式搜索
 - [SRHarness 符号引擎](engine.md)：学习表达式语法、参数与图结构
 - [API Reference](reference/index.md)：查询 Python 类型与方法签名

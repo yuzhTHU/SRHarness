@@ -12,8 +12,10 @@ nav:
   - Quick Start: quick-start.md
   - SRHarness: sr-harness.md
   - SRHarness 智能体工作流: agent.md
-  - SRHarness 核心抽象: core-abstractions.md
-  - context.data 数据格式: context-data.md
+  - SRHarness 核心抽象:
+      - 工具与工具调用 Parser: core-abstractions.md
+      - 结构化数据与 context.data: context-data.md
+      - 公式评估与自定义 Evaluator: evaluator.md
   - SRHarness 网页工作台: web-ui.md
   - SRHarness 符号引擎: engine.md
   - API Reference: reference/index.md
@@ -48,8 +50,10 @@ plugins:
             - Quick Start: quick-start.md
             - SRHarness: sr-harness.md
             - SRHarness Agent Workflow: agent.md
-            - SRHarness Core Abstractions: core-abstractions.md
-            - context.data Format: context-data.md
+            - SRHarness Core Abstractions:
+                - Tools and Tool-call Parsers: core-abstractions.md
+                - Structured Data and context.data: context-data.md
+                - Formula Evaluation and Custom Evaluators: evaluator.md
             - SRHarness WebUI: web-ui.md
             - SRHarness Engine: engine.md
   - mkdocstrings:

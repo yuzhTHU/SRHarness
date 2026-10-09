@@ -129,7 +129,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'class="data-agent-send evaluator-agent-send"' in page.text
     assert 'id="evaluator-agent-settings-toggle" class="composer-settings-button"' in page.text
     assert 'id="evaluator-agent-settings" class="settings-panel data-agent-settings evaluator-agent-settings"' in page.text
-    assert "guide.href=documentationUrl('core-abstractions/#evaluator')" in page.text
+    assert "guide.href=documentationUrl('evaluator/')" in page.text
     assert "data-evaluator-agent-settings-tab=\"capabilities\"" in page.text
     assert 'id="evaluator-agent-tool-options"' in page.text
     assert 'id="evaluator-agent-skill-options"' in page.text
@@ -449,7 +449,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'href="https://yuzhthu.github.io/SRHarness/web-ui/#agent-safety"' in page.text
     assert 'id="context-data-guide-link"' in page.text
     assert 'href="https://yuzhthu.github.io/SRHarness/context-data/"' in page.text
-    assert "['evaluator-guide','core-abstractions/#evaluator']" in page.text
+    assert "['evaluator-guide','evaluator/']" in page.text
     assert "['evaluator-agent-safety','web-ui/#agent-safety']" in page.text
     assert "currentLocale==='en'?'en/':''" in page.text
     assert page.text.index('<span id="connection">') < page.text.index('<a id="documentation-link"')

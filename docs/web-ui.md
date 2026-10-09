@@ -7,12 +7,12 @@
 ```bash
 sr-harness run \
   --host 127.0.0.1 \
-  --port 11001 \
+  --port 8000 \
   --workspace-dir ./workspaces \
   --save-path ./logs/webui
 ```
 
-浏览器打开 `http://127.0.0.1:11001/`。
+浏览器打开 `http://127.0.0.1:8000/`。
 
 ## 页面结构
 

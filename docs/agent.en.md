@@ -40,7 +40,7 @@ In this diagram:
 - `AgentContext` provides the tool runtime environment, including data, the target variable, the Evaluator, control arguments, and the workspace, so the model does not need to repeatedly specify or generate this information for every call.
 - `ToolCallResult` provides a uniform representation of the result produced by each tool execution.
 - `SearchRunState` uses `ToolCallResult` objects to record search nodes, parent relationships, candidate formulas, and metrics, then exposes the Pareto front and remaining search budget as state for the next model turn.
-- The [Evaluator](core-abstractions.md#evaluator) provides data splitting, parameter fitting, metric computation, and related capabilities as a shared service for all formula-evaluation tools.
+- The [Evaluator](evaluator.md) provides data splitting, parameter fitting, metric computation, and related capabilities as a shared service for all formula-evaluation tools.
 - [SRHarness Engine](engine.md) provides the Evaluator with underlying expression parsing, fitting, and evaluation capabilities.
 
 ## R-C-L-K search

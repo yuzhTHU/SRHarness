@@ -7,12 +7,12 @@ The WebUI organizes a study into three ordered stages: **Data Preparation → Ta
 ```bash
 sr-harness run \
   --host 127.0.0.1 \
-  --port 11001 \
+  --port 8000 \
   --workspace-dir ./workspaces \
   --save-path ./logs/webui
 ```
 
-Open `http://127.0.0.1:11001/`.
+Open `http://127.0.0.1:8000/`.
 
 ## Layout
 
