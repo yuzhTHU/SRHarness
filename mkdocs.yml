@@ -1,5 +1,6 @@
 site_name: SRHarness Documentation
 site_description: Long-form documentation for SRHarness and SRHarness-Engine
+site_url: https://yuzhthu.github.io/SRHarness/
 repo_url: https://github.com/yuzhTHU/SRHarness
 repo_name: yuzhTHU/SRHarness
 docs_dir: docs
@@ -10,8 +11,11 @@ nav:
   - Install: install.md
   - Quick Start: quick-start.md
   - SRHarness: sr-harness.md
-  - SRHarness WebUI: web-ui.md
-  - SRHarness Engine: engine.md
+  - SRHarness 智能体工作流: agent.md
+  - SRHarness 核心抽象: core-abstractions.md
+  - context.data 数据格式: context-data.md
+  - SRHarness 网页工作台: web-ui.md
+  - SRHarness 符号引擎: engine.md
   - API Reference: reference/index.md
 theme:
   name: material
@@ -32,7 +36,7 @@ plugins:
           default: true
           build: true
           site_name: SRHarness 文档
-          site_description: SRHarness 与 SRHarness Engine 的使用文档
+          site_description: SRHarness 与 SRHarness 符号引擎的使用文档
         - locale: en
           name: English
           build: true
@@ -43,9 +47,12 @@ plugins:
             - Install: install.md
             - Quick Start: quick-start.md
             - SRHarness: sr-harness.md
+            - SRHarness Agent Workflow: agent.md
+            - SRHarness Core Abstractions: core-abstractions.md
+            - context.data Format: context-data.md
             - SRHarness WebUI: web-ui.md
             - SRHarness Engine: engine.md
-            - API Reference: /reference/
+            - API Reference: reference/index.md
   - mkdocstrings:
       handlers:
         python:
@@ -82,4 +89,6 @@ extra_css:
   - stylesheets/extra.css
 extra_javascript:
   - javascripts/mathjax.js
+  - javascripts/log-output.js
+  - https://unpkg.com/mermaid@11/dist/mermaid.min.js
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js

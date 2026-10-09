@@ -76,8 +76,9 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--problem_description", default=None, help=(
         "Problem description passed to the agent. Defaults to one derived from --equation."
     ))
-    parser.add_argument("--features", default=None, help=(
-        "Optional comma-separated feature names. Defaults to variables parsed from --equation."
+    parser.add_argument("--features", default=None, nargs="*", help=(
+        "Optional space-separated feature names. Defaults to variables parsed from --equation. "
+        "An explicit list may omit equation variables to make them latent and may include additional nuisance features."
     ))
     parser.add_argument("--n_samples", type=int, default=100, help="Number of samples.")
     parser.add_argument("--seed", type=int, default=-1, help=(
@@ -93,7 +94,7 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
         "Gaussian noise standard deviation added to the target."
     ))
     parser.add_argument("--llm_provider", default="openrouter", help="LLM provider name.")
-    parser.add_argument("--llm_model", default="qwen/qwen3.5-flash-02-23", help="LLM model name.")
+    parser.add_argument("--llm_model", default="deepseek/deepseek-v4-flash-0731", help="LLM model name.")
     parser.add_argument("--strong_llm_provider", default=None, help=(
         "Optional provider for the strong backend used by auto-routing. Defaults to --llm_provider."
     ))
@@ -133,7 +134,7 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help=(
         "Enable verbose agent logging."
     ))
-    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True, help=(
+    parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=False, help=(
         "Enable debug mode (verbose + raise caught exceptions)."
     ))
     parser.add_argument("--max_workers", type=int, default=0, help=(
@@ -179,19 +180,33 @@ def make_dataset(args):
     target = target.strip()
     formula_str = formula_str.strip()
     formula = engine.parse(formula_str)
-    features = set(var.name for var in formula.iter_preorder() if isinstance(var, engine.Variable))
-    features = sorted(list(features))
+    equation_features = sorted({
+        var.name
+        for var in formula.iter_preorder()
+        if isinstance(var, engine.Variable)
+    })
+    features = equation_features if args.features is None else list(args.features)
+    if len(features) != len(set(features)):
+        raise ValueError("--features must not contain duplicate names.")
+    if target in features:
+        raise ValueError(f"Target variable {target!r} must not appear in --features.")
 
     rng = np.random.default_rng(args.seed)
-    data = {}
-    for name in features:
-        assert name not in data
-        data[name] = rng.uniform(args.x_low, args.x_high, size=args.n_samples)
-    assert target not in data
-    data[target] = formula.eval(data)
+    sampled_features = [
+        *features,
+        *(name for name in equation_features if name not in features),
+    ]
+    sampled_data = {
+        name: rng.uniform(args.x_low, args.x_high, size=args.n_samples)
+        for name in sampled_features
+    }
+    target_values = formula.eval(sampled_data)
 
     if args.noise_std_ratio > 0:
-        data[target] += rng.normal(0.0, args.noise_std_ratio * np.std(data[target]), size=data[target].shape)
+        target_values += rng.normal(0.0, args.noise_std_ratio * np.std(target_values), size=target_values.shape)
+
+    data = {name: sampled_data[name] for name in features}
+    data[target] = target_values
 
     return features, target, formula, data
 

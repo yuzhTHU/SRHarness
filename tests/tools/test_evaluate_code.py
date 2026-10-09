@@ -13,6 +13,13 @@ class TestEvaluateCodeTool:
     def make_tool(X, y):
         return EvaluateCodeTool(data=X | {"y": y}, target="y")
 
+    def test_doc_recommends_engine_skills_before_code(self):
+        description = EvaluateCodeTool.metadata.description
+
+        assert "read_skill" in description
+        assert "sr-harness-engine-syntax" in description
+        assert "sr-harness-engine-graph-syntax" in description
+
     def test_explicit_assignments_perfect_fit(self):
         X = {"x1": np.array([1.0, 2.0, 3.0])}
         y = np.array([3.0, 5.0, 7.0])

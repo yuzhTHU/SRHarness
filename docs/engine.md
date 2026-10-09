@@ -1,4 +1,4 @@
-# SRHarness Engine
+# SRHarness 符号引擎
 
 `sr_harness_engine` 是 SRHarness 的符号表达式层。它提供受限解析、规范渲染、表达式树遍历、NumPy 求值、参数拟合、常量折叠，以及图、超图和时延语法。
 
@@ -282,7 +282,7 @@ evaluate_candidate(f, context)
 from sr_harness.evaluator import utils
 ```
 
-Evaluator 的完整接口见 [API Reference](reference/index.md)。
+Evaluator 的设计、执行路径与自定义方式见 [SRHarness 核心抽象](core-abstractions.md#evaluator)，完整接口见 [API Reference](reference/index.md)。
 
 ## 可执行规范
 

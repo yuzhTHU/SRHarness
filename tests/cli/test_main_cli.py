@@ -4,7 +4,7 @@ import pytest
 
 from sr_harness.cli import entrypoint, main, setup_parser
 from sr_harness.cli.run import _resolve_workspace_dir
-from sr_harness.cli.synthetic import build_agent_options
+from sr_harness.cli.synthetic import build_agent_options, make_dataset
 from sr_harness.agents import SRAgent
 
 
@@ -70,11 +70,12 @@ def test_synthetic_defaults(monkeypatch):
     assert args.max_restart_loop == 1
     assert args.split_by == "random"
     assert args.force_initial_diagnostics is True
+    assert args.llm_model == "deepseek/deepseek-v4-flash-0731"
     assert args.tools is None
     assert args.ban_tools == []
     assert args.llm_max_tokens == 4096
     assert args.verbose is False
-    assert args.debug is True
+    assert args.debug is False
 
     options = build_agent_options(args)
     assert options["tools"] == list(SRAgent.DEFAULT_TOOLS)
@@ -99,6 +100,40 @@ def test_synthetic_banned_tools_override_selected_tools(monkeypatch):
     options = build_agent_options(args)
     assert options["tools"] == ["evaluate_formula"]
     assert options["llm_max_tokens"] == 2048
+
+
+def test_synthetic_features_are_space_separated_and_allow_nuisance_variables(monkeypatch):
+    argv = [
+        "sr-harness", "synthetic",
+        "--equation", "y = x1 + x2",
+        "--features", "x1", "x2", "x3",
+        "--n-samples", "5",
+        "--seed", "42",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    args = setup_parser().parse_args(argv[1:])
+    features, target, _, data = make_dataset(args)
+
+    assert features == ["x1", "x2", "x3"]
+    assert target == "y"
+    assert set(data) == {"x1", "x2", "x3", "y"}
+
+
+def test_synthetic_features_may_hide_equation_variables(monkeypatch):
+    argv = [
+        "sr-harness", "synthetic",
+        "--equation", "y = x1 + x2",
+        "--features", "x1",
+        "--seed", "42",
+    ]
+    monkeypatch.setattr("sys.argv", argv)
+    args = setup_parser().parse_args(argv[1:])
+    features, target, _, data = make_dataset(args)
+
+    assert features == ["x1"]
+    assert target == "y"
+    assert set(data) == {"x1", "y"}
+    assert data["y"].shape == (100,)
 
 
 def test_workspace_dir_accepts_existing_files_and_reports_mounts(tmp_path, capsys):

@@ -170,6 +170,35 @@ def test_interactive_agent_requests_pause_after_tool_free_response():
     assert buffer == [{"role": "assistant", "content": "I need more direction."}]
 
 
+def test_interactive_system_prompt_does_not_advertise_unavailable_workspace_tools():
+    agent = object.__new__(SRAgentInteractive)
+    agent.ranking_metric = "mse"
+    agent.larger_is_better = False
+
+    prompt = agent.create_initial_system_prompt([])
+
+    assert "workspace_shell" not in prompt
+    assert "workspace_code_executor" not in prompt
+    assert "Use only the tools available in the current request" in prompt
+
+
+def test_interactive_agent_migrates_legacy_generated_workspace_guidance():
+    legacy = (
+        "System instructions.\n\n"
+        "The structured arrays are already loaded into the scientific tools; analyze them "
+        "there rather than reconstructing them from workspace files. The workspace contains "
+        "supplemental files and reproducible artifacts. Use workspace_shell for bounded file "
+        "operations and workspace_code_executor for Python analysis."
+    )
+
+    migrated = SRAgentInteractive.normalize_system_prompt(legacy)
+
+    assert migrated.startswith("System instructions.")
+    assert "workspace_shell" not in migrated
+    assert "workspace_code_executor" not in migrated
+    assert "Use only the tools available in the current request" in migrated
+
+
 def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = True

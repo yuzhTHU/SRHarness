@@ -129,7 +129,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'class="data-agent-send evaluator-agent-send"' in page.text
     assert 'id="evaluator-agent-settings-toggle" class="composer-settings-button"' in page.text
     assert 'id="evaluator-agent-settings" class="settings-panel data-agent-settings evaluator-agent-settings"' in page.text
-    assert "guide.href='/evaluator-guide'" in page.text
+    assert "guide.href=documentationUrl('core-abstractions/#evaluator')" in page.text
     assert "data-evaluator-agent-settings-tab=\"capabilities\"" in page.text
     assert 'id="evaluator-agent-tool-options"' in page.text
     assert 'id="evaluator-agent-skill-options"' in page.text
@@ -256,7 +256,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "function renderSearchSettingLabels()" in page.text
     assert "renderApiKeyVisibility();renderSearchSettingLabels()" in page.text
     assert 'id="documentation-link"' in page.text
-    assert 'href="http://sim1.fiblab.tech:11005/"' in page.text
+    assert 'href="https://yuzhthu.github.io/SRHarness/"' in page.text
     assert "documentation:'Open documentation'" in page.text
     assert "function compactEventContent(e)" in page.text
     assert "eventContent(card,meta,metaTime,compactEventContent(e))" in page.text
@@ -396,7 +396,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "promptEdited.system=true" in page.text
     assert "if(!promptEdited.user)schedulePromptPreview()" not in page.text
     assert "if(!promptEdited.system)schedulePromptPreview()" not in page.text
-    assert "system_prompt:$('system-prompt').value.trim(),user_prompt:userPrompt" in page.text
+    assert "if(promptEdited.system)payload.system_prompt=$('system-prompt').value.trim()" in page.text
     assert "if(e.kind==='user')" in page.text
     assert "showTabHint(_('runStartedHint'))" not in page.text
     assert "syncResearchProblem($('problem-description').value)" in page.text
@@ -446,25 +446,13 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     ) in page.text
     assert 'id="data-agent-safety"' in page.text
     assert "api('/api/workspace/lock',{path,locked},'PUT')" in page.text
-    safety = client.get('/data-agent-safety')
-    assert safety.status_code == 200
-    assert 'workspace_shell' in safety.text
-    assert 'workspace_code_executor' in safety.text
-    assert '操作系统级只读 bind mount' in safety.text
+    assert 'href="http://sim1.fiblab.tech:11005/web-ui/#agent-safety"' in page.text
     assert 'id="context-data-guide-link"' in page.text
-    assert 'href="/context-data-guide"' in page.text
-    context_data_guide = client.get('/context-data-guide')
-    assert context_data_guide.status_code == 200
-    assert 'SRHarness · context.data 数据规范' in context_data_guide.text
-    assert '硬约束' in context_data_guide.text
-    assert '语义约定' in context_data_guide.text
-    assert '不要泄露待发现的真实公式' in context_data_guide.text
-    evaluator_guide = client.get('/evaluator-guide')
-    assert evaluator_guide.status_code == 200
-    assert 'Evaluator 的接口' in evaluator_guide.text
-    assert 'evaluator.split(context)' in evaluator_guide.text
-    assert 'evaluator.fit(f, y, train_context)' in evaluator_guide.text
-    assert 'evaluator.evaluate' in evaluator_guide.text
+    assert 'href="http://sim1.fiblab.tech:11005/context-data/"' in page.text
+    assert "['evaluator-guide','core-abstractions/#evaluator']" in page.text
+    assert "['evaluator-agent-safety','web-ui/#agent-safety']" in page.text
+    assert "currentLocale==='en'?'en/':''" in page.text
+    assert page.text.index('<span id="connection">') < page.text.index('<a id="documentation-link"')
     assert '<button id="context-tab" type="button" hidden>' in page.text
     assert "$('context-tab').hidden=tab!=='context'" in page.text
     assert '#context-tab{display:flex' in page.text
@@ -490,6 +478,8 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     initial_prompts = client.post('/api/data/prompts', json={})
     assert initial_prompts.status_code == 200
     assert 'Symbolic Regression Agent' in initial_prompts.json()['system_prompt']
+    assert 'workspace_shell' not in initial_prompts.json()['system_prompt']
+    assert 'workspace_code_executor' not in initial_prompts.json()['system_prompt']
     assert client.put('/api/workspace/upload?path=data/sample.csv', content=b'x,y\n1,2').status_code == 200
     assert client.get('/api/workspace/download?path=data/sample.csv').content == b'x,y\n1,2'
     assert client.get('/api/workspace?path=data').json()['entries'][0]['name'] == 'sample.csv'

@@ -45,9 +45,12 @@ class EvaluateCodeTool(BaseTool):
     ) -> Dict[str, Any]:
         """Evaluate a Python-defined candidate model on the current dataset.
 
-        Use this tool when a candidate cannot be expressed conveniently as an SRHarness Engine formula.
-        The code runs in a restricted sandbox, then the tool computes metrics against the target
-        and returns the formatted model under the `formula` key.
+        If possible, first use ``read_skill`` to review ``sr-harness-engine-syntax`` and any
+        relevant companion documentation, such as ``sr-harness-engine-graph-syntax`` for graph
+        or hypergraph models. Prefer a structured SRHarness Engine formula when it can express
+        the candidate, and use this tool when it cannot do so conveniently. The code runs in a
+        restricted sandbox, then the tool computes metrics against the target and returns the
+        formatted model under the ``formula`` key.
 
         This tool can return candidate formulas for submission when `y` is the target variable and `predict_code` does not depend on the target variable.
 

@@ -67,9 +67,11 @@ Open `http://127.0.0.1:11001/` in a browser and follow the page through these th
 2. **Task setup:** assign variable roles, edit the variable and problem descriptions, and select or define an evaluation scheme.
 3. **Symbolic regression:** start the symbolic search and return to the first two stages when variables need to be extended or the evaluation scheme needs to change.
 
+![SRHarness symbolic-regression workbench](/assets/webui-symbolic-regression.png)
+
 See [SRHarness WebUI](web-ui.md) for complete operating instructions.
 
-## Mount read-only inputs
+### Mount read-only inputs
 
 For large datasets, use `--mount` to mount local data into the workspace:
 
@@ -80,4 +82,8 @@ sr-harness run \
 ```
 
 Mounted data appears as read-only links in every conversation workspace. This prevents Agents from modifying the source data and avoids consuming additional disk space by copying it. If multiple files or directories are mounted, their names must not conflict.
+
+## Use the hosted WebUI workbench
+
+If you prefer not to deploy SRHarness locally, you can use our [hosted WebUI workbench](http://sim1.fiblab.tech:30000/) to try the data-preparation, task-setup, and symbolic-regression workflow directly in your browser.
 

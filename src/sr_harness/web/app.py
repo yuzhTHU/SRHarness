@@ -52,18 +52,6 @@ def create_app(
     def viewer():
         return FileResponse(STATIC_DIR / "index.html")
 
-    @app.get("/data-agent-safety")
-    def data_agent_safety():
-        return FileResponse(STATIC_DIR / "data-agent-safety.html")
-
-    @app.get("/context-data-guide")
-    def context_data_guide():
-        return FileResponse(STATIC_DIR / "context-data-guide.html")
-
-    @app.get("/evaluator-guide")
-    def evaluator_guide():
-        return FileResponse(STATIC_DIR / "evaluator-guide.html")
-
     if session is not None:
         from .platform import mount_platform
         mount_platform(app, session)

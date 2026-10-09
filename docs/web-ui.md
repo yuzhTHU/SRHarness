@@ -1,6 +1,6 @@
-# SRHarness WebUI
+# SRHarness 网页工作台
 
-WebUI 把一次符号回归研究组织为三个有顺序的阶段：**数据准备 → 任务配置 → 符号回归**。左侧管理对话和工作区，中央完成当前阶段，右侧显示数据预览或搜索结果。
+网页工作台把一次符号回归研究组织为三个有顺序的阶段：**数据准备 → 任务配置 → 符号回归**。左侧管理对话和工作区，中央完成当前阶段，右侧显示数据预览或搜索结果。
 
 ## 启动
 
@@ -16,7 +16,7 @@ sr-harness run \
 
 ## 页面结构
 
-![SRHarness 数据准备界面](assets/web-data-preparation.png)
+![SRHarness 数据准备界面](assets/webui-data-preparation.png)
 
 | 区域 | 作用 |
 |---|---|
@@ -50,6 +50,8 @@ sr-harness run \
 
 Agent 写入后应调用 `validate_context_data`。只有有效数据才由 `InteractiveSession` 重新载入为共享 `AgentContext`。
 
+`context.data/manifest.json`、NPY 文件、轴与图结构必须满足的完整规则见 [`context.data` 数据格式](context-data.md)。
+
 输入框使用：
 
 - `Enter`：发送；
@@ -57,7 +59,51 @@ Agent 写入后应调用 `validate_context_data`。只有有效数据才由 `Int
 - Agent 工作时第一次点击停止：请求在安全边界暂停；
 - 再次点击：中断当前流式输出或工具调用，以更快到达安全边界。
 
+### Agent 权限与数据安全 { #agent-safety }
+
+数据准备 Agent 和评测器构建 Agent 会根据模型生成的工具调用读取资料、执行受限代码并修改工作区。它们没有不受限制的系统 Shell，但部分工具能够创建、覆盖、移动或删除工作区内容。因此，应当把普通工作区视为可由 Agent 操作的区域。
+
+!!! warning "不要把唯一副本放进可写工作区"
+    网页中的“锁定”可以降低误修改风险，但不是防御恶意代码的安全边界。不可替代的数据必须保留独立备份，并优先通过只读挂载提供给 SRHarness。
+
+默认能力及其影响如下：
+
+| 工具 | 能力与影响 |
+|---|---|
+| `workspace_shell` | 在工作区内执行受限的文件查看、复制、移动、删除、创建和解压操作。它使用 SRHarness 自己实现的命令解析器，不会把文本交给系统 Shell。 |
+| `workspace_code_executor` | 在独立进程中执行受限 Python，用于 NumPy、SciPy、pandas 和 CSV 数据处理；可以修改可写工作区，但不能访问工作区外路径或只读挂载。 |
+| `web_search` / `web_fetch` | 查询公共搜索服务或读取公共 HTTP/HTTPS 页面。`web_fetch` 拒绝私网地址、带凭据 URL 和受限重定向。 |
+| `read_pdf` | 读取工作区 PDF 或公共 URL，不修改源文件。 |
+| `read_skill` | 读取已启用 Skill 的指令和附属文件；Skill 可能影响 Agent 后续选择的工具和操作。 |
+| `validate_context_data` | 校验 [`context.data`](context-data.md) 并返回可操作的错误，不直接修改已加载的 `AgentContext`。 |
+
+可以在各 Agent 的“设置 → 能力”中停用不需要的工具。启用自定义工具或 Skill 后，Agent 的实际能力可能超出上表范围。
+
+`workspace_shell` 只支持预先实现的命令集合，例如 `ls`、`cat`、`grep`、`cp`、`mv`、`rm`、`mkdir`、`gzip`、`unzip` 和 `tar`。它不支持任意程序启动、系统 Shell、命令替换、环境变量展开、重定向或后台任务，并拒绝绝对路径、`..` 路径穿越和逃逸工作区的符号链接。
+
+`workspace_code_executor` 禁止网络和 subprocess 模块，并限制运行时间、内存与输出大小。不过，第三方科学计算库本身十分复杂，这种限制属于纵深防御，不能替代操作系统权限隔离。
+
+SRHarness 提供两种只读机制：
+
+- 通过 `sr-harness run --mount PATH ...` 加入的文件或目录是应用层只读输入，网页不提供解锁操作；
+- 在左侧工作区菜单中手动“锁定”会移除写权限，并由内置工作区接口额外检查权限位；同一系统用户原则上仍可能重新添加权限，因此它主要用于防止意外修改。
+
+需要更强保护时，应让 SRHarness 使用独立、无提权能力的系统用户运行，并由管理员使用内核只读 bind mount、只读容器卷或只读存储快照提供原始数据：
+
+```bash
+sudo mount --bind /data/original /mnt/srh-original
+sudo mount -o remount,bind,ro /mnt/srh-original
+
+sudo -u srharness sr-harness run \
+  --workspace-dir /srv/srharness/workspaces \
+  --mount /mnt/srh-original
+```
+
+在 SRHarness 进程不具备 root、`CAP_SYS_ADMIN` 或源目录写权限时，Agent 无法把内核只读挂载改为可写。离线或不可变备份仍是不可替代数据的最终保障。
+
 ## 2. 任务配置
+
+![SRHarness 任务配置界面](assets/webui-task-setup.png)
 
 ### 配置变量描述
 
@@ -71,7 +117,7 @@ Agent 写入后应调用 `validate_context_data`。只有有效数据才由 `Int
 
 文本区域会根据内容增长，也允许手动调整大小。
 
-### 配置评测方案
+### 配置评测方案 { #evaluator-configuration }
 
 编辑器下拉栏列出内置 Evaluator 以及 `context.evaluator/` 中的自定义 Evaluator。无法加载的脚本仍会显示，但带有错误标记和具体原因。
 
@@ -102,7 +148,7 @@ Evaluator 的核心入口是 `split`、`fit`、`evaluate`、`fit_candidate` 和 
 
 点击发送按钮启动搜索。用户提示词和系统提示词都会作为卡片出现在时间线中。
 
-![SRHarness 符号回归时间线](assets/web-timeline-current.png)
+![SRHarness 符号回归时间线](assets/webui-symbolic-regression.png)
 
 ### 时间线卡片
 

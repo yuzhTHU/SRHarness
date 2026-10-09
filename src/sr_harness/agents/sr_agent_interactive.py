@@ -22,6 +22,17 @@ _logger = logging.getLogger(f'sr_harness.{__name__}')
 class SRAgentInteractive(SRAgent):
     """Interactive symbolic-regression agent controlled by an interaction manager."""
 
+    _LEGACY_WORKSPACE_GUIDANCE = (
+        "The structured arrays are already loaded into the scientific tools; analyze them "
+        "there rather than reconstructing them from workspace files. The workspace contains "
+        "supplemental files and reproducible artifacts."
+    )
+    _TOOL_USAGE_GUIDANCE = (
+        "Use only the tools available in the current request. Do not announce a tool call "
+        "without making it. If a needed capability is unavailable, explain the limitation "
+        "and continue with the available scientific tools."
+    )
+
     # Construction and frontend event bridge
 
     def __init__(
@@ -372,7 +383,7 @@ class SRAgentInteractive(SRAgent):
     # Initial-prompt customization hooks
 
     def create_initial_system_prompt(self, restart_records: list[CandidateRecord]) -> str:
-        """Create the interactive system prompt with workspace guidance.
+        """Create the interactive system prompt with capability-safe tool guidance.
 
         Args:
             restart_records: Ranked candidates used to set the next objective.
@@ -381,22 +392,6 @@ class SRAgentInteractive(SRAgent):
             Interactive system-prompt text.
         """
         mse_goal = self._build_mse_goal(restart_records)
-        workspace_info = ""
-        if self.use_workspace:
-            workspace_info = (
-                "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
-                "there rather than reconstructing them from workspace files. The workspace contains "
-                "supplemental files and reproducible artifacts."
-            )
-            enabled_tools = {tool_cls.metadata.name for tool_cls in self.tool_cls_list}
-            workspace_guidance = []
-            if "workspace_shell" in enabled_tools:
-                workspace_guidance.append("workspace_shell for bounded file operations")
-            if "workspace_code_executor" in enabled_tools:
-                workspace_guidance.append("workspace_code_executor for Python analysis")
-            if workspace_guidance:
-                workspace_info += " Use " + " and ".join(workspace_guidance) + "."
-
         return (
             "You are a Symbolic Regression Agent working with a human researcher. "
             "Your goal is to discover simple, interpretable mathematical formulas that explain "
@@ -404,9 +399,38 @@ class SRAgentInteractive(SRAgent):
             "Guidelines:\n"
             "- Explore data thoroughly before proposing formulas.\n"
             "- Prefer simple, interpretable expressions over complex ones.\n"
-            f"- {mse_goal}"
-            f"{workspace_info}"
+            f"- {mse_goal}\n"
+            f"- {self._TOOL_USAGE_GUIDANCE}"
         )
+
+    @classmethod
+    def normalize_system_prompt(cls, prompt: str) -> str:
+        """Remove obsolete generated guidance that advertises workspace-only tools.
+
+        Args:
+            prompt: Stored or newly submitted system prompt.
+
+        Returns:
+            System prompt without legacy workspace guidance. Capability-neutral guidance is
+            appended when the removed paragraph came from an older generated prompt.
+        """
+        marker = cls._LEGACY_WORKSPACE_GUIDANCE
+        start = prompt.find(marker)
+        if start < 0:
+            return prompt
+        end = start + len(marker)
+        for suffix in (
+            " Use workspace_shell for bounded file operations and workspace_code_executor for Python analysis.",
+            " Use workspace_shell for bounded file operations.",
+            " Use workspace_code_executor for Python analysis.",
+        ):
+            if prompt.startswith(suffix, end):
+                end += len(suffix)
+                break
+        before = prompt[:start].rstrip()
+        after = prompt[end:].lstrip()
+        replacement = f"- {cls._TOOL_USAGE_GUIDANCE}"
+        return "\n".join(part for part in (before, replacement, after) if part)
 
     def customize_initial_prompts(self, messages: list[Message], *, X: dict[str, Any], y: dict[str, Any]) -> list[Message]:
         """Apply UI-provided descriptions and prompt overrides.
@@ -426,7 +450,10 @@ class SRAgentInteractive(SRAgent):
         overrides = getattr(self, "prompt_overrides", {})
         for message in messages:
             if message.get("role") in overrides:
-                message["content"] = overrides[message["role"]]
+                content = overrides[message["role"]]
+                if message["role"] == "system":
+                    content = self.normalize_system_prompt(content)
+                message["content"] = content
         return messages
 
     # Streaming model and tool events

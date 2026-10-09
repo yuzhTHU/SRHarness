@@ -1,35 +1,33 @@
 # SRHarness
 
-## Command structure
-
-```text
-sr-harness <command> [options]
-```
+SRHarness commands use the form `sr-harness <command> [options]`:
 
 | Command | Purpose |
 |---|---|
 | `run` | Launch the interactive Web workbench |
-| `synthetic` | Generate a synthetic problem and run SRAgent |
-| `benchmark` | Evaluate a registered algorithm on LLM-SRBench |
-| `tool` | Inspect schemas or invoke tools directly |
-
-Use `sr-harness <command> --help` for the authoritative options and defaults of the installed version.
+| `synthetic` | Run SRHarness on synthetic data |
+| `benchmark` | Evaluate SRHarness and other registered algorithms on LLM-SRBench |
+| `tool` | Inspect available tools or invoke a specific tool |
 
 ## `sr-harness run`
 
+`sr-harness run` launches the interactive WebUI workbench, where users can prepare data, configure tasks, and run symbolic-regression searches in a browser.
+
 | Option | Default | Description |
 |---|---:|---|
-| `--name` | `run` | Task name used to generate an experiment name |
-| `--exp-name` | timestamped | Explicit experiment name |
-| `--save-dir` | none | Root for logs and run artifacts |
-| `--save-path` | derived | Explicit run directory |
+| `--name` | `run` | Task name used to generate `{EXP_NAME}=YYYYMMDD_{NAME}_HHMMSS_{HOSTNAME}` |
+| `--exp-name` | generated | Complete task name used to form `{SAVE_PATH}={SAVE_DIR}/{EXP_NAME}`; specifying it makes `--name` optional |
+| `--save-dir` | none | Experiment directory used to form `{SAVE_PATH}={SAVE_DIR}/{EXP_NAME}` |
+| `--save-path` | derived | Persistent run-log directory; specifying it makes `--name`, `--exp-name`, and `--save-dir` optional |
 | `--host` | `127.0.0.1` | Listen address |
 | `--port` | `8000` | Listen port |
-| `--workspace-dir` | derived | Parent of the registry and conversation workspaces |
-| `--isolate-users` | off | Restrict visible conversations by persistent browser cookie |
-| `--mount PATH ...` | empty | Read-only files or directories mounted into new workspaces |
+| `--workspace-dir` | `{SAVE_PATH}` | Storage directory for the conversation registry and conversation workspaces |
+| `--isolate-users` | off | Isolate different users' conversations by persistent browser cookie |
+| `--mount` | empty | Files or directories to mount into each workspace; pass multiple paths as `--mount a b c ...` |
 
-`--workspace-dir` need not be empty. If omitted, SRHarness uses the explicit save path when available; otherwise it creates a temporary directory and prints a red data-loss warning. Session snapshots are periodically persisted only when `--save-path` or `--save-dir` is explicitly provided. Reusing that path restores timelines, context, settings, Evaluator selection, and search state. Work interrupted during shutdown is restored as interrupted, never as still running.
+SRHarness stores the conversation registry in `--workspace-dir` and creates an independent workspace directory for every conversation. By default, `--save-path` is also used as `workspace-dir`, although a different workspace directory can be specified explicitly. If neither `workspace-dir` nor `save-path` is specified, SRHarness uses a temporary workspace directory and conversation records cannot be persisted.
+
+When `--save-path` (or `--save-dir`) is specified explicitly, SRHarness periodically saves session snapshots under `save-path`. If the service is interrupted, restart it with the same `workspace-dir` and `save-path` to restore the timeline, data context, settings, Evaluator, search state, and related session data.
 
 Local service:
 
@@ -37,27 +35,29 @@ Local service:
 sr-harness run --host 127.0.0.1 --port 8000
 ```
 
-Network-visible service:
+Network-visible service (the firewall must allow the port):
 
 ```bash
-sr-harness run --host 0.0.0.0 --port 11001
+sr-harness run --host 0.0.0.0 --port 8000
 ```
 
 !!! warning
-    `--isolate-users` isolates conversation listings by cookie; it is not authentication or a complete security boundary. Use a reverse proxy, TLS, and access control on untrusted networks.
+    SRHarness does not provide a complete authentication, authorization, or network-security boundary. Use a reverse proxy, TLS, and access control before exposing it to an untrusted network.
 
 ## `sr-harness synthetic`
+
+`sr-harness synthetic` generates random samples from a user-specified equation and uses them to run a non-interactive symbolic-regression Agent.
 
 ### Dataset options
 
 | Option | Default | Description |
 |---|---:|---|
 | `-f`, `--equation` | `y = sin(x1 - x2)` | Equation used to generate the target |
-| `--features` | inferred | Comma-separated feature names |
+| `--features` | inferred | Space-separated observable feature names. By default, all variables on the right-hand side of the equation are used; specify the list explicitly to add nuisance variables or omit selected variables |
 | `--n-samples` | `100` | Sample count |
-| `--seed` | `-1` | Random seed; `-1` uses system time |
+| `--seed` | `-1` | Random seed. The system time is used by default |
 | `--x-low`, `--x-high` | `0.0`, `1.0` | Feature range |
-| `--noise-std-ratio` | `0.0` | Relative Gaussian target noise |
+| `--noise-std-ratio` | `0.0` | Gaussian-noise ratio applied to the target: `noise scale = {NOISE_STD_RATIO} * std(target)` |
 | `--problem-description` | generated | Research question passed to the Agent |
 
 ### Model and tool options
@@ -65,16 +65,20 @@ sr-harness run --host 0.0.0.0 --port 11001
 | Option | Default | Description |
 |---|---:|---|
 | `--llm-provider` | `openrouter` | Base provider |
-| `--llm-model` | `qwen/qwen3.5-flash-02-23` | Base model |
+| `--llm-model` | `deepseek/deepseek-v4-flash-0731` | Base model |
 | `--strong-llm-provider` | base provider | Provider used by automatic routing |
 | `--strong-llm-model` | none | Optional stronger model |
 | `--llm-max-tokens` | `4096` | Maximum output tokens per response |
 | `--tool-parser` | `openai` | `openai`, `text`, `json`, or `xml` |
-| `--tools` | symbolic-regression defaults | Allowed tools; non-default tools may be enabled explicitly |
-| `--ban-tools` | empty | Tools disabled even when allowed above |
+| `--tools` | symbolic-regression defaults | Available tools; specify the list explicitly to disable selected defaults or enable non-default tools |
+| `--ban-tools` | empty | Remove (ablate) selected tools from `--tools` |
 | `--max-workers` | `0` | Parallel tool workers; zero is serial |
+| `--verbose` | off | Emit detailed runtime logs |
+| `--debug` | off | Enable verbose logging and stop at every unexpected exception instead of continuing |
 
 ### Search and evaluation
+
+See [SRHarness Agent Workflow](agent.md#r-c-l-k-search) for the relationship between the four R-C-L-K search dimensions.
 
 | Option | Default | Description |
 |---|---:|---|
@@ -94,18 +98,42 @@ Boolean options support `--no-...`, for example `--no-auto-routing`.
 
 ## `sr-harness tool`
 
+`sr-harness tool` exposes the tool registry through the command line. Use it to discover the tools available in the current installation, inspect their accepted parameters, or execute one tool without starting a complete Agent search. This is useful for tool debugging, input validation, and scripted workflows.
+
 ```bash
 sr-harness tool list [--json]
 sr-harness tool schema [TOOL]
-sr-harness tool call TOOL [--context context.npz] [--target NAME] \
-  [--params JSON] [--params-file FILE]
+sr-harness tool call TOOL \
+  [--context context.npz] \
+  [--target NAME] \
+  [--params JSON] \
+  [--params-file FILE]
 ```
 
-`--params-file` is loaded first; `--params` overrides duplicate keys.
+- `list` prints every registered tool and its description. Add `--json` to emit only a machine-readable array of tool names.
+- `schema [TOOL]` prints the JSON schema for one tool. Omit the tool name to print every schema and inspect parameter names, types, and required fields.
+- `call TOOL` constructs an `AgentContext` from the NPZ file selected by `--context`, then invokes the tool with JSON parameters. The context defaults to `context.npz`; `--target` overrides the target variable stored in that file.
+
+Parameters can be read from a JSON file with `--params-file` or supplied directly as a JSON object with `--params`. When both are present, the file is loaded first and duplicate keys are overridden by `--params`. The formatted tool result is written to standard output; a failed tool result produces exit code `1`.
+
+For example, inspect and invoke `evaluate_formula`:
+
+```bash
+sr-harness tool schema evaluate_formula
+sr-harness tool call evaluate_formula \
+  --context context.npz \
+  --params '{"f": "x1 ** 2", "y": "y"}'
+```
 
 ## `sr-harness benchmark`
 
-Select an algorithm with `--algorithm` and narrow the run with `--datasets` and `--problem-names`. Available choices can change, so consult `sr-harness benchmark --help`.
+`sr-harness benchmark` evaluates SRHarness or another registered symbolic-regression algorithm on LLM-SRBench. It loads each problem, runs the selected algorithm, and computes R², MSE, NMSE, MAPE, Kendall correlation, and related metrics on in-domain and, when available, out-of-domain test data. It also checks whether the discovered expression is symbolically equivalent to the reference expression.
+
+Select an algorithm with the required `--algorithm` option. By default all supported datasets are evaluated; use `--datasets` to choose one or more datasets and `--problem-names` to restrict the run further. Algorithms may register additional command-line options, so consult the help output for the algorithms, datasets, and algorithm-specific parameters available in the installed version:
+
+```bash
+sr-harness benchmark --help
+```
 
 ```bash
 sr-harness benchmark \
@@ -115,51 +143,5 @@ sr-harness benchmark \
   --save-path ./logs/benchmark-smoke
 ```
 
-`--anonymize` changes Agent-visible names and descriptions, not numeric observations.
-
-## Python API
-
-In addition to the CLI and WebUI, you can construct and run `SRAgent` directly from Python:
-
-```python
-import numpy as np
-from sr_harness import SRAgent
-
-rng = np.random.default_rng(42)
-x1 = rng.uniform(-2, 2, 200)
-x2 = rng.uniform(-2, 2, 200)
-
-agent = SRAgent(
-    llm_provider="openrouter",
-    llm_model="deepseek/deepseek-v4-flash-0731",
-    max_restart_loop=1,
-    global_width=1,
-    max_refinement_depth=5,
-    local_sample_size=1,
-    save_path="logs/python-example",
-)
-result = agent.run(
-    X={"x1": x1, "x2": x2},
-    y={"y": 1 + x1**2 + 2*x1*x2},
-    problem_description="Discover y as a function of x1 and x2.",
-)
-
-if result["best_candidate"] is not None:
-    best = result["candidates"][result["best_candidate"]]
-    print(best["formula"])
-```
-
-See the [API Reference](/reference/) for constructor parameters and return types.
-
-## Run artifacts
-
-| File | Contents |
-|---|---|
-| `run.json` | Run ID and Agent configuration |
-| `nodes.jsonl` | Search nodes, parents, prompts, responses, results, and usage |
-| `result.json` | Candidates, Pareto indices, and best candidate |
-| `response.jsonl` | Raw model responses, tokens, and prices |
-| `tool_calls.jsonl` | Tool-call records |
-
-The active Web session uses in-memory `SearchRunState` as its authority; these files support persistence, auditing, and offline analysis.
+Per-problem results are written under `--save-path`, while dataset summaries are stored in its `summary/` directory. The default `--skip-successful` behavior skips problems with an existing successful result, making interrupted evaluations resumable; `--skip-existing` can skip any problem that already has a record. `--anonymize` replaces Agent-visible variable names and descriptions with generic names without changing the numeric observations.
 

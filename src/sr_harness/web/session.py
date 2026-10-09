@@ -319,6 +319,10 @@ class InteractiveSession:
             self.evaluator_agent_settings = restored_evaluator_settings
             self.initial_prompt = str(snapshot["initial_prompt"])
             self.prompt_overrides = dict(snapshot["prompt_overrides"])
+            if "system" in self.prompt_overrides:
+                self.prompt_overrides["system"] = SRAgentInteractive.normalize_system_prompt(
+                    self.prompt_overrides["system"]
+                )
             self.variable_descriptions = dict(snapshot["variable_descriptions"])
             self.result = snapshot["result"]
             self.data_result = snapshot["data_result"]
@@ -989,7 +993,11 @@ class InteractiveSession:
                 payload.get("prompt", "Find an interpretable formula explaining the data."),
             ))
             self.prompt_overrides = {
-                role: str(payload[key])
+                role: (
+                    SRAgentInteractive.normalize_system_prompt(str(payload[key]))
+                    if role == "system"
+                    else str(payload[key])
+                )
                 for role, key in (("system", "system_prompt"), ("user", "user_prompt"))
                 if key in payload
             }
@@ -1213,7 +1221,6 @@ class InteractiveSession:
         )
         preview_agent.max_refinement_depth = settings["max_refinement_depth"]
         preview_agent.use_workspace = True
-        preview_agent.tools = []
         preview_agent.interaction_manager = InteractionManager()
         preview_agent.variable_descriptions = self.validate_variable_descriptions(payload)
         preview_agent.prompt_overrides = {}

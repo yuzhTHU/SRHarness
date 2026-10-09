@@ -29,9 +29,15 @@ def test_sr_harness_engine_syntax_is_a_builtin_skill(tmp_path):
     content = manager.read_skill(skill.name)
 
     assert skill.readonly is True
-    assert "sum[j](A[i, j]" in content
-    assert "gather(A[i, j]" in content
     assert "grouped_param" in content
+    assert "sr-harness-engine-graph-syntax" in content
+    assert "sum[j](A[i, j]" not in content
+
+    graph_skill = manager.get_skill("sr-harness-engine-graph-syntax")
+    graph_content = manager.read_skill(graph_skill.name)
+    assert graph_skill.readonly is True
+    assert "sum[j](A[i, j]" in graph_content
+    assert "gather(A[i, j]" in graph_content
 
 
 def test_eic_is_reproducible_and_finite():

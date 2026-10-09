@@ -16,7 +16,7 @@ Open `http://127.0.0.1:11001/`.
 
 ## Layout
 
-![SRHarness data preparation](/assets/web-data-preparation.png)
+![SRHarness data preparation](/assets/webui-data-preparation.png)
 
 | Area | Purpose |
 |---|---|
@@ -37,9 +37,55 @@ The Data Preparation Agent can inspect files, clean data, derive variables, and 
 
 The Agent should run `validate_context_data` after writes. `InteractiveSession` only loads valid files into the shared `AgentContext`.
 
+See [The `context.data` Format](context-data.md) for the complete manifest, NPY, axis, and graph-structure rules.
+
 Composer shortcuts are `Enter` to send and `Shift+Enter` or `Command+Enter` for a newline. While an Agent is running, the first stop click requests a pause at a safe boundary; a second click interrupts the current stream or tool call to reach that boundary sooner.
 
+### Agent permissions and data safety { #agent-safety }
+
+Data Preparation Agent and Evaluator Construction Agent use model-generated tool calls to read source material, execute restricted code, and modify their workspaces. They do not receive an unrestricted system shell, but some tools can create, overwrite, move, or delete workspace content. Treat an ordinary writable workspace as an area under Agent control.
+
+!!! warning "Do not place the only copy in a writable workspace"
+    The WebUI lock reduces accidental modification but is not a security boundary against malicious code. Keep an independent backup of irreplaceable data and prefer read-only mounts when supplying it to SRHarness.
+
+Default capabilities have the following effects:
+
+| Tool | Capability and impact |
+|---|---|
+| `workspace_shell` | Performs a restricted set of file inspection, copy, move, deletion, creation, and extraction operations inside the workspace. It uses an SRHarness command parser rather than a system shell. |
+| `workspace_code_executor` | Runs restricted Python in a separate process for NumPy, SciPy, pandas, and CSV transformations. It can modify the writable workspace but cannot access paths outside it or read-only mounts. |
+| `web_search` / `web_fetch` | Queries public search services or public HTTP/HTTPS pages. `web_fetch` rejects private-network targets, credential-bearing URLs, and restricted redirects. |
+| `read_pdf` | Reads workspace PDFs or public URLs without modifying the source. |
+| `read_skill` | Reads instructions and supporting files from enabled Skills; a Skill may influence subsequent tool selection and operations. |
+| `validate_context_data` | Validates [`context.data`](context-data.md) and reports actionable errors without directly mutating the loaded `AgentContext`. |
+
+Disable unneeded tools under **Settings → Capabilities** for each Agent. Custom tools and Skills can expand the effective capabilities beyond this table.
+
+`workspace_shell` supports only preimplemented commands such as `ls`, `cat`, `grep`, `cp`, `mv`, `rm`, `mkdir`, `gzip`, `unzip`, and `tar`. It does not support arbitrary program execution, a system shell, command substitution, environment expansion, redirection, or background jobs. Absolute paths, `..` traversal, and symlinks that escape the workspace are rejected.
+
+`workspace_code_executor` excludes network and subprocess modules and constrains wall time, memory, and output size. Third-party scientific libraries remain complex, however, so these restrictions are defense in depth rather than a replacement for operating-system isolation.
+
+SRHarness offers two read-only mechanisms:
+
+- paths supplied through `sr-harness run --mount PATH ...` are application-level read-only inputs and cannot be unlocked from the WebUI;
+- manually selecting **Lock** in the workspace removes write permission and adds checks to built-in workspace interfaces. The same operating-system user can in principle restore permissions, so this mechanism primarily prevents accidental modification.
+
+For stronger protection, run SRHarness as a dedicated unprivileged system user and have an administrator expose original data through a kernel-enforced read-only bind mount, read-only container volume, or read-only storage snapshot:
+
+```bash
+sudo mount --bind /data/original /mnt/srh-original
+sudo mount -o remount,bind,ro /mnt/srh-original
+
+sudo -u srharness sr-harness run \
+  --workspace-dir /srv/srharness/workspaces \
+  --mount /mnt/srh-original
+```
+
+When the SRHarness process has neither root privileges, `CAP_SYS_ADMIN`, nor source-directory write permission, an Agent cannot turn the kernel read-only mount back into a writable one. An offline or immutable backup remains the final safeguard for irreplaceable data.
+
 ## 2. Task Setup
+
+![SRHarness task setup](/assets/webui-task-setup.png)
 
 ### Variables and problem
 
@@ -49,7 +95,7 @@ The problem description participates in user-prompt generation, for example:
 
 > Find a compact equation for dx_dt using x and t. Prefer a stable, interpretable model.
 
-### Evaluation protocol
+### Evaluation protocol { #evaluator-configuration }
 
 The selector contains built-in Evaluators and custom scripts from `context.evaluator/`. A script that cannot load remains visible with an error marker and message.
 
@@ -66,7 +112,7 @@ Before starting, review variable configuration, the generated editable user prom
 
 Both system and user prompts appear as timeline cards after the search starts.
 
-![SRHarness symbolic-regression timeline](/assets/web-timeline-current.png)
+![SRHarness symbolic-regression timeline](/assets/webui-symbolic-regression.png)
 
 ### Timeline events
 
