@@ -187,7 +187,8 @@ class EvaluateCodeTool(BaseTool):
 
         Args:
             code: Function source supplied by the agent.
-            expected_args: Required function parameter names.
+            expected_params: Required function parameter names.
+            code_name: Human-readable name used in validation errors.
 
         Returns:
             Validated source ready for restricted execution."""
@@ -313,7 +314,7 @@ class EvaluateCodeTool(BaseTool):
             })
 
     @classmethod
-    def call_code_function(cls, code: str, function_name: str, inputs: tuple[Any, ...], filename: str, safe_globals) -> Any:
+    def call_code_function(cls, code: str, function_name: str, inputs: tuple[Any, ...], filename: str, safe_globals: dict[str, Any]) -> Any:
         """Run the ``call code function`` operation.
 
         Args:
@@ -334,7 +335,7 @@ class EvaluateCodeTool(BaseTool):
         return function(*inputs)
 
     @classmethod
-    def format_model(cls, model) -> str:
+    def format_model(cls, model: Any) -> str:
         """Format model.
 
         Args:

@@ -35,7 +35,7 @@ class OpenRouterAPI(BaseAPI):
         "z-ai/glm-5-turbo",
     ]
 
-    def __init__(self, model='qwen/qwen3.6-plus', **kwargs):
+    def __init__(self, model: str = 'qwen/qwen3.6-plus', **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
 
     def _request(

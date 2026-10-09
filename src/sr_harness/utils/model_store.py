@@ -12,7 +12,7 @@ from .log_exception import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
 __all__ = ["get_default", "download_model", "upload_model"]
-DEFAULT_GITHUB_REPO = "yuzhTHU/MySRAgent"
+DEFAULT_GITHUB_REPO = "yuzhTHU/SRHarness"
 DEFAULT_GITHUB_RELEASE_TAG = "sr-agent-models"
 GITHUB_HEADER = {
     "Accept": "application/vnd.github+json",

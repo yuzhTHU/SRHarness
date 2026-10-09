@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from scipy import stats
 from scipy.integrate import solve_ivp
 
 import sr_harness_engine as engine
+
+if TYPE_CHECKING:
+    from ...core import AgentContext
 
 
 def _regression_arrays(y_true: Any, y_pred: Any) -> tuple[np.ndarray, np.ndarray]:
@@ -23,20 +26,56 @@ def _regression_arrays(y_true: Any, y_pred: Any) -> tuple[np.ndarray, np.ndarray
 
 
 def calc_MSE(y_true: Any, y_pred: Any) -> float:
+    """Calculate mean squared error.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Mean squared error over flattened broadcast arrays.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     return float(np.mean((y_pred - y_true) ** 2))
 
 
 def calc_RMSE(y_true: Any, y_pred: Any) -> float:
+    """Calculate root mean squared error.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Root mean squared error.
+    """
     return float(np.sqrt(calc_MSE(y_true, y_pred)))
 
 
 def calc_MAE(y_true: Any, y_pred: Any) -> float:
+    """Calculate mean absolute error.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Mean absolute error.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     return float(np.mean(np.abs(y_pred - y_true)))
 
 
 def calc_MAPE(y_true: Any, y_pred: Any) -> float:
+    """Calculate mean absolute percentage error over nonzero targets.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Mean absolute percentage error, or NaN when every target is zero.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     nonzero = y_true != 0
     if not np.any(nonzero):
@@ -45,6 +84,15 @@ def calc_MAPE(y_true: Any, y_pred: Any) -> float:
 
 
 def calc_R2(y_true: Any, y_pred: Any) -> float:
+    """Calculate the coefficient of determination.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        The R-squared score.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     residual = float(np.sum((y_pred - y_true) ** 2))
     total = float(np.sum((y_true - np.mean(y_true)) ** 2))
@@ -52,6 +100,16 @@ def calc_R2(y_true: Any, y_pred: Any) -> float:
 
 
 def calc_AIC(y_true: Any, y_pred: Any, num_parameters: int) -> float:
+    """Calculate the Gaussian Akaike information criterion.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+        num_parameters: Number of fitted parameters.
+
+    Returns:
+        AIC value, negative infinity for an exact fit, or NaN for invalid loss.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     ss_res = float(np.sum((y_pred - y_true) ** 2))
     if np.isfinite(ss_res) and ss_res > 0:
@@ -62,6 +120,16 @@ def calc_AIC(y_true: Any, y_pred: Any, num_parameters: int) -> float:
 
 
 def calc_BIC(y_true: Any, y_pred: Any, num_parameters: int) -> float:
+    """Calculate the Gaussian Bayesian information criterion.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+        num_parameters: Number of fitted parameters.
+
+    Returns:
+        BIC value, negative infinity for an exact fit, or NaN for invalid loss.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     ss_res = float(np.sum((y_pred - y_true) ** 2))
     if np.isfinite(ss_res) and ss_res > 0:
@@ -72,6 +140,15 @@ def calc_BIC(y_true: Any, y_pred: Any, num_parameters: int) -> float:
 
 
 def calc_PearsonR(y_true: Any, y_pred: Any) -> float:
+    """Calculate Pearson's correlation coefficient over finite pairs.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Pearson correlation, or NaN when fewer than two finite pairs exist.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     finite = np.isfinite(y_true) & np.isfinite(y_pred)
     if np.count_nonzero(finite) < 2:
@@ -82,6 +159,15 @@ def calc_PearsonR(y_true: Any, y_pred: Any) -> float:
 
 
 def calc_SpearmanR(y_true: Any, y_pred: Any) -> float:
+    """Calculate Spearman's rank correlation over finite pairs.
+
+    Args:
+        y_true: Target values.
+        y_pred: Predicted values broadcastable to ``y_true``.
+
+    Returns:
+        Spearman correlation, or NaN when fewer than two finite pairs exist.
+    """
     y_true, y_pred = _regression_arrays(y_true, y_pred)
     finite = np.isfinite(y_true) & np.isfinite(y_pred)
     if np.count_nonzero(finite) < 2:
@@ -92,10 +178,28 @@ def calc_SpearmanR(y_true: Any, y_pred: Any) -> float:
 
 
 def calc_complexity(expression: engine.Expression) -> int:
+    """Count nodes in a symbolic expression.
+
+    Args:
+        expression: Symbolic expression to inspect.
+
+    Returns:
+        Expression node count.
+    """
     return len(expression)
 
 
 def regression_metrics(expression: engine.Expression, y_true: Any, y_pred: Any) -> dict[str, float | int]:
+    """Calculate the standard regression metric bundle.
+
+    Args:
+        expression: Fitted expression used for complexity and parameter counts.
+        y_true: Target values.
+        y_pred: Predicted values.
+
+    Returns:
+        Numeric prediction, information-criterion, correlation, and complexity metrics.
+    """
     parameters = engine.count_parameters(expression)
     return {
         "mse": calc_MSE(y_true, y_pred), "rmse": calc_RMSE(y_true, y_pred),
@@ -109,11 +213,32 @@ def regression_metrics(expression: engine.Expression, y_true: Any, y_pred: Any) 
 
 
 def select_random_indices(*, seed: int, n_samples: int, n_train: int) -> tuple[np.ndarray, np.ndarray]:
+    """Select reproducible random training and validation indices.
+
+    Args:
+        seed: Random seed.
+        n_samples: Total sample count.
+        n_train: Number of training samples.
+
+    Returns:
+        Training and validation index arrays.
+    """
     indices = np.random.RandomState(seed).permutation(n_samples)
     return indices[:n_train], indices[n_train:]
 
 
 def select_OOD_indices(*, seed: int, n_samples: int, n_train: int, value: Any) -> tuple[np.ndarray, np.ndarray]:
+    """Select an ordered out-of-distribution split.
+
+    Args:
+        seed: Seed used to break ties reproducibly.
+        n_samples: Total sample count.
+        n_train: Number of low-ranked training samples.
+        value: One-dimensional ordering variable.
+
+    Returns:
+        Training and validation index arrays.
+    """
     value = np.asarray(value)
     if value.ndim != 1 or len(value) != n_samples:
         raise ValueError("split_ood_variable must have shape (N,)")
@@ -122,7 +247,17 @@ def select_OOD_indices(*, seed: int, n_samples: int, n_train: int, value: Any) -
     return ordered[:n_train], ordered[n_train:]
 
 
-def split_indices(context, *, chronological: bool = False) -> tuple[np.ndarray, np.ndarray] | None:
+def split_indices(context: AgentContext, *, chronological: bool = False) -> tuple[np.ndarray, np.ndarray] | None:
+    """Select split indices according to evaluator arguments.
+
+    Args:
+        context: Unsplit agent context.
+        chronological: Whether to preserve input order rather than use configured
+            random or OOD splitting.
+
+    Returns:
+        Training and validation indices, or ``None`` when splitting is disabled.
+    """
     n_samples = len(context.data[context.target])
     n_validation = int(round(n_samples * context.args.validation_fraction))
     n_train = n_samples - n_validation
@@ -143,7 +278,16 @@ def split_indices(context, *, chronological: bool = False) -> tuple[np.ndarray, 
     raise ValueError(f"invalid split_by value: {context.args.split_by}")
 
 
-def split_aligned_context(context, *, chronological: bool = False) -> dict[str, Any]:
+def split_aligned_context(context: AgentContext, *, chronological: bool = False) -> dict[str, AgentContext]:
+    """Split every aligned context array along its leading dimension.
+
+    Args:
+        context: Unsplit agent context.
+        chronological: Whether to preserve input order.
+
+    Returns:
+        Training and validation context views.
+    """
     indices = split_indices(context, chronological=chronological)
     if indices is None:
         return {"train": context.with_data(context.data), "validation": context.with_data(context.data)}
@@ -154,7 +298,18 @@ def split_aligned_context(context, *, chronological: bool = False) -> dict[str, 
     }
 
 
-def integrate_ODE(f: engine.Expression, context, *, time: str = "t", state: str = "x") -> np.ndarray:
+def integrate_ODE(f: engine.Expression, context: AgentContext, *, time: str = "t", state: str = "x") -> np.ndarray:
+    """Integrate a one-dimensional ODE over observed sample times.
+
+    Args:
+        f: Fitted derivative expression.
+        context: Context containing time and observed state arrays.
+        time: Time-variable name.
+        state: State-variable name.
+
+    Returns:
+        Integrated state values at the observed times.
+    """
     t = np.asarray(context.data[time], dtype=float)
     observed = np.asarray(context.data[state], dtype=float)
     if t.ndim != 1 or observed.ndim != 1 or t.shape != observed.shape:
@@ -172,5 +327,16 @@ def integrate_ODE(f: engine.Expression, context, *, time: str = "t", state: str 
     return solution.y[0]
 
 
-def calc_trajectory_rollout_RMSE(f: engine.Expression, context, *, time: str = "t", state: str = "x") -> float:
+def calc_trajectory_rollout_RMSE(f: engine.Expression, context: AgentContext, *, time: str = "t", state: str = "x") -> float:
+    """Calculate trajectory RMSE after integrating a derivative expression.
+
+    Args:
+        f: Fitted derivative expression.
+        context: Context containing time and observed state arrays.
+        time: Time-variable name.
+        state: State-variable name.
+
+    Returns:
+        RMSE between observed and integrated state trajectories.
+    """
     return calc_RMSE(context.data[state], integrate_ODE(f, context, time=time, state=state))

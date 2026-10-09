@@ -35,7 +35,7 @@ class ReadSkill(BaseTool):
         description=_format_description(default_skill_manager.load_skills()),
     )
 
-    def __init__(self, **context):
+    def __init__(self, **context: Any) -> None:
         super().__init__(**context)
         if hasattr(self.context.args, "skill_manager"):
             self.skill_manager = self.context.args.skill_manager

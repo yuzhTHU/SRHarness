@@ -1,5 +1,9 @@
 """SRHarness Engine: structured symbolic models for scientific discovery."""
 
+from __future__ import annotations
+
+from typing import Any, Callable
+
 from .expression import (
     Aggregate,
     Binary,
@@ -33,8 +37,21 @@ from .parser import parse
 from .render import render
 
 
-def _unary(name):
-    return lambda value: function(name, value)
+def _unary(name: str) -> Callable[[Any], Expression]:
+    def constructor(value: Any) -> Expression:
+        """Create a unary symbolic function expression.
+
+        Args:
+            value: Symbolic expression or value to wrap.
+
+        Returns:
+            A symbolic unary function call.
+        """
+        return function(name, value)
+
+    constructor.__name__ = name
+    constructor.__qualname__ = name
+    return constructor
 
 
 sin = _unary("sin")
@@ -60,7 +77,7 @@ cot = _unary("cot")
 inv = _unary("inv")
 
 
-def delay(value, delta):
+def delay(value: Any, delta: Any) -> Expression:
     """Create a delayed-value expression.
 
     Args:

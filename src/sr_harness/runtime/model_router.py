@@ -34,7 +34,7 @@ class ModelRouter:
         base_model: str,
         strong_provider: str | None = None,
         strong_model: str | None = None,
-    ):
+    ) -> None:
         for name, value in (("base_provider", base_provider), ("base_model", base_model)):
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")

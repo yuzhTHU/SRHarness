@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import Dict, Generator, List
+from typing import Any, Dict, Generator, List
 from urllib.parse import urlsplit, urlunsplit
 
 import requests
@@ -28,7 +28,7 @@ class LMStudioAPI(BaseAPI):
 
     supported_models = ["qwen_qwen3-4b-instruct-2507"]
 
-    def __init__(self, model: str = "qwen_qwen3-4b-instruct-2507", **kwargs):
+    def __init__(self, model: str = "qwen_qwen3-4b-instruct-2507", **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
 
     @staticmethod

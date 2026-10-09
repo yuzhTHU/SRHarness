@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Mapping
+
+if TYPE_CHECKING:
+    from .optimize import FitResult
 
 
 class Expression:
@@ -99,14 +103,22 @@ class Expression:
 
         return children(self)
 
-    def iter_preorder(self):
-        """Yield this node followed by its descendants."""
+    def iter_preorder(self) -> Iterator[Expression]:
+        """Yield this node followed by its descendants.
+
+        Yields:
+            Expression nodes in preorder.
+        """
         from .tree import iter_preorder
 
         yield from iter_preorder(self)
 
-    def iter_postorder(self):
-        """Yield descendants followed by this node."""
+    def iter_postorder(self) -> Iterator[Expression]:
+        """Yield descendants followed by this node.
+
+        Yields:
+            Expression nodes in postorder.
+        """
         from .tree import iter_postorder
 
         yield from iter_postorder(self)
@@ -190,7 +202,7 @@ class Expression:
         method: str = "BFGS",
         options: Mapping[str, Any] | None = None,
         num_nodes: int | None = None,
-    ):
+    ) -> FitResult:
         """Fit named and grouped parameters against a target array.
 
         Args:

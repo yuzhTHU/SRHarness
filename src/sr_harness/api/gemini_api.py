@@ -2,7 +2,7 @@
 import os
 import logging
 from collections import defaultdict
-from typing import Generator, List, Dict
+from typing import Any, Generator, List, Dict
 from datetime import datetime, timezone, timedelta
 from google import genai
 from google.genai import types
@@ -22,7 +22,7 @@ class GeminiAPI(BaseAPI):
         "gemini-2.0-flash-lite",
     ]
 
-    def __init__(self, model='gemini-2.5-pro', **kwargs):
+    def __init__(self, model: str = 'gemini-2.5-pro', **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
 
     def _request(self, messages: List[Dict[str, str]], n=1):

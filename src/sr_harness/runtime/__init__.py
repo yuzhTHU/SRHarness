@@ -15,6 +15,8 @@ __all__ = [
     "InteractionEventKind",
     "InteractionManager",
     "InteractionState",
+    "ModelRoute",
+    "ModelRouter",
     "PendingMessage",
     "SRInteractionAction",
     "SRInteractionManager",

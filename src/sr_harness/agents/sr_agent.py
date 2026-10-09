@@ -12,7 +12,7 @@ from copy import deepcopy
 from itertools import islice
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, TypeAlias
 from ..api import BaseAPI
 from ..tools import BaseTool
 from ..parser import BaseParser
@@ -24,6 +24,10 @@ from ..core import AgentContext, CandidateRecord, ParentLink, SearchRunState, To
 from .agent import Agent
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
+
+Message: TypeAlias = dict[str, Any]
+ModelResponse: TypeAlias = tuple[str, list[ToolCall], Message]
+Usage: TypeAlias = dict[str, Any]
 
 
 class SRAgent(Agent):
@@ -60,7 +64,7 @@ class SRAgent(Agent):
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
         excluded_tools: set[str] | None = None,
-    ):
+    ) -> None:
         """初始化 Agent。
 
         Args:
@@ -331,11 +335,14 @@ class SRAgent(Agent):
                 raise
 
     @contextmanager
-    def prepare_tool_context(self, tool_context: AgentContext):
+    def prepare_tool_context(self, tool_context: AgentContext) -> Iterator[AgentContext]:
         """Prepare resources and context shared by initialized tools.
 
         Args:
             tool_context: Shared context used to initialize tools.
+
+        Yields:
+            The context to bind to initialized tools.
         """
         yield tool_context
 
@@ -487,7 +494,7 @@ class SRAgent(Agent):
 
     # Prompt and conversation-buffer lifecycle
 
-    def create_initial_buffer(self, problem_description, X, y, restart_records):
+    def create_initial_buffer(self, problem_description: str, X: dict[str, np.ndarray], y: dict[str, np.ndarray], restart_records: list[CandidateRecord]) -> list[Message]:
         """Combine initial prompts with the first progress message for a branch.
 
         Args:
@@ -495,6 +502,9 @@ class SRAgent(Agent):
             X: Input feature arrays keyed by variable name.
             y: Target data or target expression.
             restart_records: Ranked candidates used to seed a restart.
+
+        Returns:
+            Initial branch buffer including the first progress message.
         """
         self._task_route_score, self._task_route_reasons = self.model_router.assess(
             problem_description,
@@ -509,8 +519,18 @@ class SRAgent(Agent):
         self.on_buffer_messages_added(initial_buffer)
         return initial_buffer
 
-    def create_initial_prompt_messages(self, problem_description, X, y, restart_records):
-        """Create the finalized system and user messages without buffer metadata."""
+    def create_initial_prompt_messages(self, problem_description: str, X: dict[str, np.ndarray], y: dict[str, np.ndarray], restart_records: list[CandidateRecord]) -> list[Message]:
+        """Create finalized system and user messages without buffer metadata.
+
+        Args:
+            problem_description: Natural-language discovery task.
+            X: Feature arrays keyed by variable name.
+            y: Target arrays keyed by variable name.
+            restart_records: Ranked candidates used to seed a restart.
+
+        Returns:
+            Finalized system and user messages.
+        """
         messages = [{
             "role": "system",
             "content": self.create_initial_system_prompt(restart_records),
@@ -538,8 +558,15 @@ class SRAgent(Agent):
             "Try to find a simpler formula that also achieves MSE = 0."
         )
 
-    def create_initial_system_prompt(self, restart_records) -> str:
-        """Create the initial system prompt independently of the branch buffer."""
+    def create_initial_system_prompt(self, restart_records: list[CandidateRecord]) -> str:
+        """Create the initial system prompt independently of the branch buffer.
+
+        Args:
+            restart_records: Ranked candidates used to set the next objective.
+
+        Returns:
+            System-prompt text.
+        """
         mse_goal = self._build_mse_goal(restart_records)
         return (
             "You are a Symbolic Regression Agent. Your goal is to discover mathematical formulas "
@@ -555,8 +582,18 @@ class SRAgent(Agent):
             f"{mse_goal} Please start by analyzing the data to understand the relationship between features and target."
         )
 
-    def create_initial_user_prompt(self, problem_description, X, y, restart_records) -> str:
-        """Create the initial user prompt independently of the branch buffer."""
+    def create_initial_user_prompt(self, problem_description: str, X: dict[str, np.ndarray], y: dict[str, np.ndarray], restart_records: list[CandidateRecord]) -> str:
+        """Create the initial user prompt independently of the branch buffer.
+
+        Args:
+            problem_description: Natural-language discovery task.
+            X: Feature arrays keyed by variable name.
+            y: Target arrays keyed by variable name.
+            restart_records: Ranked candidates included as restart evidence.
+
+        Returns:
+            User-prompt text.
+        """
         content = (
             f"{problem_description}\n\n"
             f"- Feature names: {list(X.keys())}\n"
@@ -585,12 +622,26 @@ class SRAgent(Agent):
             "approach or structure to improve the result."
         )
 
-    def customize_initial_prompts(self, messages, *, X, y):
-        """Customize finalized initial prompt messages before buffer insertion."""
+    def customize_initial_prompts(self, messages: list[Message], *, X: dict[str, np.ndarray], y: dict[str, np.ndarray]) -> list[Message]:
+        """Customize finalized initial prompts before buffer insertion.
+
+        Args:
+            messages: Initial system and user messages.
+            X: Feature arrays keyed by variable name.
+            y: Target arrays keyed by variable name.
+
+        Returns:
+            Messages to insert into the branch buffer.
+        """
         return messages
 
-    def on_buffer_messages_added(self, messages, **coordinate: int) -> None:
-        """Observe messages after they enter a conversation buffer."""
+    def on_buffer_messages_added(self, messages: list[Message], **coordinate: int) -> None:
+        """Observe messages after they enter a conversation buffer.
+
+        Args:
+            messages: Newly appended messages.
+            **coordinate: Optional R/C/L search coordinate.
+        """
 
     def _append_buffer_messages(self, buffer, messages, **coordinate: int) -> None:
         """Append messages and notify subclasses through one mutation path."""
@@ -598,7 +649,7 @@ class SRAgent(Agent):
         buffer.extend(messages)
         self.on_buffer_messages_added(messages, **coordinate)
 
-    def prepare_model_messages(self, buffer: List[Dict[str, Any]], R, L, C) -> List[Dict[str, Any]]:
+    def prepare_model_messages(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> List[Dict[str, Any]]:
         """Prepare the messages sent to the model for one iteration.
 
         Args:
@@ -642,7 +693,7 @@ class SRAgent(Agent):
         _logger.debug(f"Messages:\n" + '\n---\n'.join(logs))
         return prompt
 
-    def prepare_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
+    def prepare_iteration(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> str | None:
         """Apply mode-specific control changes before constructing this iteration's prompt.
 
         Args:
@@ -691,7 +742,7 @@ class SRAgent(Agent):
             "variable_descriptions": descriptions,
         }
 
-    def finish_iteration(self, buffer: List[Dict[str, Any]], R, L, C) -> str | None:
+    def finish_iteration(self, buffer: List[Dict[str, Any]], R: int, L: int, C: int) -> str | None:
         """Return a terminal status when the current search should stop.
 
         Args:
@@ -710,7 +761,7 @@ class SRAgent(Agent):
             return "early_stopped"
         return None
 
-    def run_initial_diagnostics(self, R, L, C) -> Dict[str, str]:
+    def run_initial_diagnostics(self, R: int, L: int, C: int) -> Dict[str, str]:
         """Run the mandatory branch-opening diagnostics and format them for the LLM.
 
         Args:
@@ -753,7 +804,7 @@ class SRAgent(Agent):
 
     # Model and tool execution
 
-    def request_llm(self, prompt: List[Dict[str, Any]], R, L, C, stream_callback=None):
+    def request_llm(self, prompt: List[Dict[str, Any]], R: int, L: int, C: int, stream_callback: Callable[[dict[str, Any]], None] | None = None) -> tuple[list[ModelResponse], Usage | None]:
         """Run the ``request llm`` operation.
 
         Args:
@@ -762,6 +813,9 @@ class SRAgent(Agent):
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
             stream_callback: Optional callback invoked for streamed model updates.
+
+        Returns:
+            Parsed model responses and recorded usage data.
         """
         response_list = []
         route = self.model_router.route(
@@ -805,7 +859,7 @@ class SRAgent(Agent):
         usage = self.record_llm_result(llm_result, R=R, L=L, C=C)
         return response_list, usage
 
-    def execute_tool_calls(self, response_list, R, L, C):
+    def execute_tool_calls(self, response_list: list[ModelResponse], R: int, L: int, C: int) -> list[list[ToolCallResult]]:
         """Execute tool calls from model responses and preserve sample grouping.
 
         Args:
@@ -813,6 +867,9 @@ class SRAgent(Agent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Tool results grouped by local model sample.
         """
         # 合并 - 调用 - 分割
         all_tool_calls = []
@@ -836,7 +893,7 @@ class SRAgent(Agent):
     def record_tool_calls(
         self, tool_calls: List[ToolCall],
         results: List[ToolCallResult],
-        R, L, C, forced: bool = False
+        R: int, L: int, C: int, forced: bool = False
     ) -> None:
         """Persist tool calls from either the LLM or framework-enforced diagnostics.
 
@@ -869,8 +926,8 @@ class SRAgent(Agent):
         buffer: List[Dict[str, Any]],
         response_list: List[Tuple[str, List[ToolCall], Dict[str, Any]]],
         results_list: List[List[ToolCallResult]],
-        node_parents: Dict[str, str], R, L, C
-    ):
+        node_parents: Dict[str, str], R: int, L: int, C: int
+    ) -> tuple[list[Message], dict[str, str]]:
         """Update buffer.
 
         Args:
@@ -881,6 +938,9 @@ class SRAgent(Agent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Updated conversation buffer and parent-link mapping.
         """
         # 如果没有成功的回复，跳过本轮更新
         if len(response_list) == 0:
@@ -935,12 +995,15 @@ class SRAgent(Agent):
 
     # Progress prompts and candidate state
 
-    def build_progress_message(self, L):
+    def build_progress_message(self, L: int) -> dict[str, str]:
         # 将当前搜索进度加入 buffer
         """Build process message.
 
         Args:
             L: One-based refinement-step index.
+
+        Returns:
+            User-role message describing iteration state and the Pareto front.
         """
         remaining_rounds = self.max_refinement_depth - L - 1
         progress_line = (
@@ -1036,7 +1099,7 @@ class SRAgent(Agent):
                 f"{record.formula!r}"
             )
 
-    def collect_candidates(self, response_list, results_list, R, L, C):
+    def collect_candidates(self, response_list: list[ModelResponse], results_list: list[list[ToolCallResult]], R: int, L: int, C: int) -> list[CandidateRecord]:
         """Validate candidate tool results and add them to the run state.
 
         Args:
@@ -1045,6 +1108,9 @@ class SRAgent(Agent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Candidates ranked under the configured metric.
         """
         loader = []
         for K in range(1, len(response_list) + 1):
@@ -1082,7 +1148,7 @@ class SRAgent(Agent):
                 self.push_candidate(record)
         return self.run_state.ranked_candidates()
 
-    def log_info(self, response_list, R, L, C):
+    def log_info(self, response_list: list[ModelResponse], R: int, L: int, C: int) -> None:
         """Run the ``log info`` operation.
 
         Args:
@@ -1118,7 +1184,7 @@ class SRAgent(Agent):
 
     # Persistence and result projection
 
-    def record_llm_result(self, llm_result, R, L, C) -> Dict[str, Any] | None:
+    def record_llm_result(self, llm_result: Any, R: int, L: int, C: int) -> Dict[str, Any] | None:
         """Record llm result.
 
         Args:
@@ -1148,8 +1214,10 @@ class SRAgent(Agent):
         return usage
 
     def record_search_iteration(
-        self, response_list, results_list, parent_nodes, prompt, usage, R, L, C,
-    ):
+        self, response_list: list[ModelResponse], results_list: list[list[ToolCallResult]],
+        parent_nodes: dict[str, str], prompt: list[Message], usage: Usage | None,
+        R: int, L: int, C: int,
+    ) -> None:
         """Record one visualization node for each local sample.
 
         Args:
@@ -1171,13 +1239,16 @@ class SRAgent(Agent):
 
         self.run_state.register_iteration(response_list, results_list, tuple(parents), prompt, usage, R, L, C)
 
-    def format_progress(self, R, L, C):
+    def format_progress(self, R: int | None, L: int | None, C: int | None) -> str:
         """Format progress.
 
         Args:
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Human-readable R/C/L/K progress text.
         """
         return (
             f"(R={R}/{self.max_restart_loop}) × "
@@ -1186,11 +1257,14 @@ class SRAgent(Agent):
             f"(K={self.local_sample_size})"
         )
 
-    def get_ranking_metric(self, record):
+    def get_ranking_metric(self, record: CandidateRecord | dict[str, Any]) -> tuple[str | None, float | int | None]:
         """Return the configured ranking metric and its display label.
 
         Args:
             record: Search or candidate record.
+
+        Returns:
+            Display label and metric value, or two ``None`` values when absent.
         """
         metric_label = self.ranking_metric.replace('_', ' ').upper()
         if isinstance(record, CandidateRecord):
@@ -1209,11 +1283,14 @@ class SRAgent(Agent):
             return f"training {metric_label}", metric_value
         return None, None
 
-    def candidate_sort_key(self, record):
+    def candidate_sort_key(self, record: CandidateRecord | dict[str, Any]) -> tuple[float, float] | None:
         """Return the ranking key for a candidate-like record.
 
         Args:
             record: Search or candidate record.
+
+        Returns:
+            Metric and complexity sorting key, or ``None`` for invalid metrics.
         """
         _, metric_value = self.get_ranking_metric(record)
         if metric_value is None:
@@ -1277,7 +1354,7 @@ class SRAgent(Agent):
         candidates = self.run_state.ranked_candidates()
         return [candidates[index] for index in self.run_state.pareto_indices(candidates)]
 
-    def build_search_result(self, status: str, R: int | None, L: int | None, C: int | None):
+    def build_search_result(self, status: str, R: int | None, L: int | None, C: int | None) -> dict[str, Any]:
         """Build a serializable search result for the current run state.
 
         Args:
@@ -1285,6 +1362,9 @@ class SRAgent(Agent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Serializable run result including progress and ranked candidates.
         """
         progress = self.format_progress(R, L, C)
         return self.run_state.result(status=status, progress=progress).to_dict()

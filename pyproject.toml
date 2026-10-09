@@ -30,6 +30,8 @@ dependencies = [
     "datasets>=4.8.0",
     "textual>=1.0.0",
     "prompt_toolkit>=3.0.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.scripts]
@@ -50,17 +52,14 @@ dev = [
     "pytest-cov>=4.0.0",
     "ipynbname>=2025.8.0.0",
     "yumeow_plot>=0.1.2",
-]
-web = [
-    "fastapi>=0.115.0",
-    "uvicorn>=0.30.0",
-]
-docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.27",
+    "mkdocs-static-i18n>=1.3",
+    "ruff>=0.8",
 ]
 all = [
-    "sr-harness[nn,tools,dev,web,docs]",
+    "sr-harness[nn,tools,dev]",
 ]
 
 [tool.setuptools.packages.find]
@@ -74,6 +73,7 @@ sr_harness = [
     "**/*.md",
     "**/*.yaml",
     "web/static/*.html",
+    "web/static/*.svg",
 ]
 sr_harness_engine = ["README.zh.md"]
 

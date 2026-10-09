@@ -84,7 +84,7 @@ def main(args: argparse.Namespace) -> int:
     try:
         import uvicorn
     except ImportError as exc:
-        raise SystemExit("Please install web dependencies with: pip install -e .[web]") from exc
+        raise SystemExit("Please reinstall SRHarness with its default dependencies.") from exc
 
     from sr_harness.web.app import create_app
     from sr_harness.web.conversations import ConversationRegistry

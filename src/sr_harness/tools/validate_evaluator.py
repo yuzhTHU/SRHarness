@@ -55,5 +55,13 @@ class ValidateEvaluatorTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: dict[str, Any]) -> str:
+        """Format evaluator identity and formula-evaluation details.
+
+        Args:
+            result: Structured result returned by :meth:`execute`.
+
+        Returns:
+            A model-readable evaluator validation report.
+        """
         reference = result["evaluator_file"] or result["evaluator"]
         return f"Evaluator: {reference}\n" + EvaluateTool.format_result_dict(result)

@@ -3,7 +3,7 @@ import os
 import logging
 from openai import OpenAI
 from collections import defaultdict
-from typing import Generator, List, Dict
+from typing import Any, Generator, List, Dict
 from .base_api import BaseAPI
 from ..utils import log_exception
 
@@ -20,7 +20,7 @@ class DeepSeekAPI(BaseAPI):
         "deepseek-v4-pro",
     ]
 
-    def __init__(self, model='deepseek-chat', **kwargs):
+    def __init__(self, model: str = 'deepseek-chat', **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
 
     def _request(self, messages: List[Dict[str, str]], n=1, max_tokens=4096, temperature=1) -> Generator[str, None, Dict]:

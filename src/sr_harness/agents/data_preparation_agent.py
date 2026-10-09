@@ -41,7 +41,7 @@ class DataPreparationAgent(Agent):
         llm_max_tokens: int = 4096,
         skills: list[str] | None = None,
         interaction_manager: InteractionManager,
-    ):
+    ) -> None:
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser

@@ -1,12 +1,18 @@
 site_name: SRHarness Documentation
 site_description: Long-form documentation for SRHarness and SRHarness-Engine
-repo_url: https://github.com/yuzhTHU/MySRAgent
-repo_name: yuzhTHU/MySRAgent
+repo_url: https://github.com/yuzhTHU/SRHarness
+repo_name: yuzhTHU/SRHarness
 docs_dir: docs
 strict: true
 nav:
-  - SRHarness: index.md
-  - SRHarness-Engine: engine.md
+  - Overview: index.md
+  - Install: install.md
+  - Quick Start: quick-start.md
+  - Examples: examples.md
+  - SRHarness: sr-harness.md
+  - SRHarness WebUI: web-ui.md
+  - SRHarness Engine: engine.md
+  - API Reference: reference/index.md
 theme:
   name: material
   language: zh
@@ -17,6 +23,46 @@ theme:
     - search.suggest
 plugins:
   - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: false
+      languages:
+        - locale: zh
+          name: 简体中文
+          default: true
+          build: true
+          site_name: SRHarness 文档
+          site_description: SRHarness 与 SRHarness Engine 的使用文档
+        - locale: en
+          name: English
+          build: true
+          site_name: SRHarness Documentation
+          site_description: Documentation for SRHarness and SRHarness Engine
+          nav:
+            - Overview: index.md
+            - Install: install.md
+            - Quick Start: quick-start.md
+            - Examples: examples.md
+            - SRHarness: sr-harness.md
+            - SRHarness WebUI: web-ui.md
+            - SRHarness Engine: engine.md
+            - API Reference: /reference/
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            filters:
+              - "!^_"
+            inherited_members: false
+            members_order: source
+            merge_init_into_class: true
+            separate_signature: true
+            show_source: false
+            show_root_heading: true
+            show_signature_annotations: true
+            signature_crossrefs: true
 markdown_extensions:
   - admonition
   - attr_list

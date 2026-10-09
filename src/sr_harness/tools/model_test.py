@@ -24,10 +24,13 @@ class ModelTestTool(BaseTool):
         },
     )
 
-    def execute(self, answer: str):
+    def execute(self, answer: str) -> dict[str, str]:
         """Return the value supplied by the model-test request.
 
         Args:
             answer: Exact value requested by the test prompt.
+
+        Returns:
+            The reported answer.
         """
         return {"answer": answer}

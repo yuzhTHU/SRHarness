@@ -8,13 +8,13 @@ import logging
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Iterator, List, Optional
 
 from ..api import BaseAPI
-from ..core import AgentContext
+from ..core import AgentContext, CandidateRecord, ToolCall, ToolCallResult
 from ..runtime import PendingMessage, SRInteractionManager
 from ..tools import BaseTool
-from .sr_agent import SRAgent
+from .sr_agent import Message, ModelResponse, SRAgent, Usage
 from ..parser import BaseParser
 
 _logger = logging.getLogger(f'sr_harness.{__name__}')
@@ -56,7 +56,7 @@ class SRAgentInteractive(SRAgent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
-    ):
+    ) -> None:
         """初始化 SRAgentInteractive。
 
         Args:
@@ -144,8 +144,13 @@ class SRAgentInteractive(SRAgent):
         self.runtime_settings_committer: Callable[[dict[str, Any]], None] | None = None
         self._bind_tool_cancellation()
 
-    def on_buffer_messages_added(self, messages, **coordinate: int) -> None:
-        """Publish each system/user message exactly when it enters the buffer."""
+    def on_buffer_messages_added(self, messages: list[Message], **coordinate: int) -> None:
+        """Publish each system or user message when it enters the buffer.
+
+        Args:
+            messages: Newly appended messages.
+            **coordinate: Optional R/C/L search coordinate.
+        """
         for message in messages:
             if message.get("role") not in {"system", "user"}:
                 continue
@@ -175,11 +180,14 @@ class SRAgentInteractive(SRAgent):
             self._bind_tool_cancellation()
 
     @contextmanager
-    def prepare_tool_context(self, tool_context: AgentContext):
+    def prepare_tool_context(self, tool_context: AgentContext) -> Iterator[AgentContext]:
         """Add interaction resources to the tool context for the duration of a run.
 
         Args:
             tool_context: Shared context used to initialize tools.
+
+        Yields:
+            Context enriched with a temporary workspace manager when enabled.
         """
         if not self.use_workspace:
             yield tool_context
@@ -200,7 +208,7 @@ class SRAgentInteractive(SRAgent):
 
     # Interactive search-boundary hooks
 
-    def prepare_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
+    def prepare_iteration(self, buffer: list[Message], R: int, L: int, C: int) -> str | None:
         """Apply queued human guidance before the prompt is constructed.
 
         Args:
@@ -349,7 +357,7 @@ class SRAgentInteractive(SRAgent):
         except Exception as exc:
             self.interaction_manager.publish_event("settings_failed", {"error": str(exc)})
 
-    def finish_iteration(self, buffer, R: int, L: int, C: int) -> str | None:
+    def finish_iteration(self, buffer: list[Message], R: int, L: int, C: int) -> str | None:
         """Keep interactive runs open and yield tool-free responses to the human.
 
         Args:
@@ -372,8 +380,15 @@ class SRAgentInteractive(SRAgent):
 
     # Initial-prompt customization hooks
 
-    def create_initial_system_prompt(self, restart_records) -> str:
-        """Create the interactive system prompt with workspace guidance."""
+    def create_initial_system_prompt(self, restart_records: list[CandidateRecord]) -> str:
+        """Create the interactive system prompt with workspace guidance.
+
+        Args:
+            restart_records: Ranked candidates used to set the next objective.
+
+        Returns:
+            Interactive system-prompt text.
+        """
         mse_goal = self._build_mse_goal(restart_records)
         workspace_info = (
             "\n\nThe structured arrays are already loaded into the scientific tools; analyze them "
@@ -393,8 +408,17 @@ class SRAgentInteractive(SRAgent):
             f"{workspace_info}"
         )
 
-    def customize_initial_prompts(self, messages, *, X, y):
-        """Apply UI-provided descriptions and prompt overrides."""
+    def customize_initial_prompts(self, messages: list[Message], *, X: dict[str, Any], y: dict[str, Any]) -> list[Message]:
+        """Apply UI-provided descriptions and prompt overrides.
+
+        Args:
+            messages: Initial system and user messages.
+            X: Feature arrays keyed by variable name.
+            y: Target arrays keyed by variable name.
+
+        Returns:
+            Customized initial messages.
+        """
         descriptions = getattr(self, "variable_descriptions", {})
         rows = [f"- {name}: {descriptions[name]}" for name in [*X, *y] if descriptions.get(name)]
         if rows:
@@ -407,7 +431,7 @@ class SRAgentInteractive(SRAgent):
 
     # Streaming model and tool events
 
-    def request_llm(self, prompt, R: int, L: int, C: int):
+    def request_llm(self, prompt: list[Message], R: int, L: int, C: int) -> tuple[list[ModelResponse], Usage]:
         """Request the model while publishing frontend-neutral progress events.
 
         Args:
@@ -415,6 +439,9 @@ class SRAgentInteractive(SRAgent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
+
+        Returns:
+            Parsed responses and usage, including partial responses after interruption.
         """
         coord = {"R": R, "C": C, "L": L}
         self.interaction_manager.publish_event("context", {"messages": prompt, "coord": coord})
@@ -546,11 +573,14 @@ class SRAgentInteractive(SRAgent):
             {},
         )
 
-    def execute_action(self, actions):
+    def execute_action(self, actions: list[ToolCall]) -> list[ToolCallResult]:
         """Execute tools serially with safe control boundaries and UI events.
 
         Args:
             actions: Tool calls to execute.
+
+        Returns:
+            Tool results in call order.
         """
         results = []
         for action in actions:
@@ -572,18 +602,21 @@ class SRAgentInteractive(SRAgent):
             results.append(result)
         return results
 
-    def collect_candidates(self, *args, **kwargs):
+    def collect_candidates(self, *args: Any, **kwargs: Any) -> list[CandidateRecord]:
         """Update scientific state and publish its current ranked view.
 
         Args:
-            *args: Parsed command-line arguments.
-            **kwargs: The kwargs value.
+            *args: Arguments forwarded to the base candidate collector.
+            **kwargs: Keyword arguments forwarded to the base candidate collector.
+
+        Returns:
+            Candidates ranked under the configured metric.
         """
         records = super().collect_candidates(*args, **kwargs)
         self.interaction_manager.publish_event("topk_updated", {"records": [record.display_dict() for record in records]})
         return records
 
-    def record_tool_calls(self, tool_calls, results, R, L, C, forced=False):
+    def record_tool_calls(self, tool_calls: list[ToolCall], results: list[ToolCallResult], R: int, L: int, C: int, forced: bool = False) -> None:
         """Persist tool calls and expose framework-enforced calls to the UI.
 
         Args:
@@ -592,7 +625,7 @@ class SRAgentInteractive(SRAgent):
             R: One-based restart index.
             L: One-based refinement-step index.
             C: One-based conversation-branch index.
-            forced: The forced value.
+            forced: Whether the framework, rather than the model, initiated the call.
         """
         super().record_tool_calls(tool_calls, results, R=R, L=L, C=C, forced=forced)
         if forced:
@@ -604,12 +637,16 @@ class SRAgentInteractive(SRAgent):
                     "forced": True,
                 })
 
-    def execute_action_parallel(self, actions, max_workers: int):
-        """Execute action parallel.
+    def execute_action_parallel(self, actions: list[ToolCall], max_workers: int) -> list[ToolCallResult]:
+        """Reject parallel execution in interactive mode.
 
         Args:
             actions: Tool calls to execute.
             max_workers: Maximum number of parallel workers.
+
+        Raises:
+            NotImplementedError: Always, because interactive workspace tools are not
+                guaranteed to be read-only.
         """
         raise NotImplementedError(
             "Parallel execution is not supported in interactive mode, "

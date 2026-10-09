@@ -43,6 +43,11 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'class="badge"' not in page.text
     assert 'id="search-record-link"' not in page.text
     assert 'id="prepare-tab"' in page.text
+    assert '<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">' in page.text
+    favicon = client.get('/static/favicon.svg')
+    assert favicon.status_code == 200
+    assert favicon.headers['content-type'].startswith('image/svg+xml')
+    assert b'<svg' in favicon.content
     assert 'id="data-tab"' in page.text
     assert 'id="data-preparation"' in page.text
     assert 'id="data-setup"' in page.text
@@ -79,6 +84,15 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert '.composer>.row #status{padding:0;border-radius:0;background:transparent;color:var(--muted);font-size:11px' in page.text
     assert 'id="plot-variable-palette"' in page.text
     assert 'id="relationship-preview-mode"' in page.text
+    assert "halfAngle=(tip.role==='target'?4:12)*Math.PI/360" in page.text
+    assert "function curveHasClearance(curveIndex,scale,scales)" in page.text
+    assert "clearance=7,samples=28" in page.text
+    assert "curveOrder=[sourceSource,...tips.map((_,index)=>index).filter(index=>index!==sourceSource)]" in page.text
+    assert "for(const curveIndex of curveOrder)" in page.text
+    assert "class:'relation-hyperedge'" in page.text
+    assert "label:'T'" in page.text and "label:'S1'" in page.text and "label:'S2'" in page.text
+    assert "viewport.classList.add('hyperedge-active');group.classList.add('active')" in page.text
+    assert '.relation-viewport.hyperedge-active .relation-hyperedge:not(.active){opacity:.1}' in page.text
     assert '<option value="table">表格</option>' in page.text
     assert 'id="data-summary"' not in page.text
     assert "for(const column of dataPreview.columns)" in page.text
@@ -150,6 +164,9 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "['pausing','interrupting'].includes(agentState)" in page.text
     assert "button.classList.toggle('stop',active)" in page.text
     assert "if(evaluatorDirty)await saveEvaluatorConfiguration()" in page.text
+    assert "const expandedDirectories=new Set(),shownSessionErrors=new Set()" in page.text
+    assert "if(!shownSessionErrors.has(errorKey)){shownSessionErrors.add(errorKey);notice(sessionError)}" in page.text
+    assert "shownSessionErrors.clear()" in page.text
     assert '<h3>配置变量描述</h3>' in data_view
     assert '点击颜色条切换变量角色，点击变量描述以编辑，也可拖动手柄调整变量顺序' in data_view
     assert '<h3 id="task-problem-title">配置问题描述</h3>' in data_view
@@ -238,6 +255,17 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "samplesPerRound:'K · Samples per Round'" in page.text
     assert "function renderSearchSettingLabels()" in page.text
     assert "renderApiKeyVisibility();renderSearchSettingLabels()" in page.text
+    assert 'id="documentation-link"' in page.text
+    assert 'href="http://sim1.fiblab.tech:11005/"' in page.text
+    assert "documentation:'Open documentation'" in page.text
+    assert "function compactEventContent(e)" in page.text
+    assert "eventContent(card,meta,metaTime,compactEventContent(e))" in page.text
+    assert "s.interaction_state==='paused'" in page.text
+    for removed_id in (
+        'validation-fraction', 'split-by', 'split-seed', 'ranking-metric',
+        'larger-better',
+    ):
+        assert f'id="{removed_id}"' not in page.text
     assert '#composer>#prompt{padding:14px 15px 7px}' in page.text
     assert '.composer #send.stop-pending{border-color:var(--danger);background:var(--danger);color:#fff}' in page.text
     assert '#composer>.row>#send.primary.send-icon.stop-pending{display:grid;visibility:visible;border-color:var(--danger);background:var(--danger);color:#fff;opacity:1}' in page.text
@@ -772,6 +800,10 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     assert relation_preview.json() == {
         **relation_group,
         'description': 'Directed edge list.',
+        'values': [[0, 1], [1, 0]],
+        'axis_values': {
+            'edge': [0, 1], 'endpoint': ['target', 'source'],
+        },
         'node_axis': 'node',
         'nodes': [{'id': 0, 'label': 0}, {'id': 1, 'label': 1}],
         'coordinates': [[0, 1], [1, 0]],
@@ -808,6 +840,37 @@ def test_context_data_roles_accept_multidimensional_network_variables(platform):
     }
     assert y['dtheta_dt'].shape == (3, 2)
     assert X['A'].dtype == np.dtype('int64')
+
+
+def test_context_data_preview_summarizes_higher_order_variables(platform):
+    client, session = platform
+    directory = session.workspace / 'context.data'
+    directory.mkdir()
+    (directory / 'manifest.json').write_text(json.dumps({
+        'variables': {
+            'tensor': {
+                'file': 'tensor.npy', 'description': 'Four-dimensional data.',
+                'axes': ['a', 'b', 'c', 'd'],
+            },
+        },
+        'axes': {
+            name: {'values': [0, 1], 'description': f'Axis {name}.'}
+            for name in ['a', 'b', 'c', 'd']
+        },
+    }))
+    np.save(directory / 'tensor.npy', np.arange(16).reshape(2, 2, 2, 2))
+    session.context.commit_context_data(load_context_data(directory))
+
+    overview = client.get('/api/data/context').json()
+    group = next(
+        item for item in overview['preview_groups']
+        if item.get('variable') == 'tensor'
+    )
+    response = client.get('/api/data/context/preview', params={'group': group['id']})
+
+    assert response.status_code == 200, response.text
+    assert response.json()['sample_values'] == list(range(8))
+    assert response.json()['value_range'] == [0.0, 15.0]
 
 
 def test_variable_roles_can_be_updated_between_search_rounds(platform, monkeypatch):
@@ -1012,7 +1075,10 @@ def test_runtime_capabilities_can_be_configured(platform):
     assert catalogs['search']['skills'] == catalogs['data']['skills'] == catalogs['evaluator']['skills']
     assert catalogs['search']['default_tools'] != catalogs['data']['default_tools']
     assert catalogs['data']['default_tools'] != catalogs['evaluator']['default_tools']
-
+    assert {
+        'read_source', 'delegate_subagent', 'sr4mdl', 'nd2', 'evaluate_eic',
+        'workspace_shell', 'workspace_code_executor',
+    }.isdisjoint(catalogs['search']['default_tools'])
     response = client.post('/api/session/settings', json={
         'llm_provider': 'openrouter',
         'llm_model': 'test-model',
@@ -1027,6 +1093,18 @@ def test_runtime_capabilities_can_be_configured(platform):
     assert client.post('/api/session/settings', json={
         'tools': ['not-a-tool'],
     }).status_code == 400
+
+
+def test_search_agent_uses_restricted_default_tools(tmp_path):
+    session = InteractiveSession(tmp_path / 'logs')
+    try:
+        assert session.settings['tools'] == session.capabilities('search')['default_tools']
+        assert {
+            'read_source', 'delegate_subagent', 'sr4mdl', 'nd2', 'evaluate_eic',
+            'workspace_shell', 'workspace_code_executor',
+        }.isdisjoint(session.settings['tools'])
+    finally:
+        session.close()
 
 
 def test_evaluator_context_settings_update_context_args(platform):

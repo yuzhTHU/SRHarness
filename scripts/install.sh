@@ -1,5 +1,5 @@
 # 将 SRAgent 代码下载到本地
-# git clone git@github.com:yuzhTHU/MySRAgent.git ./SRAgent && cd SRAgent
+# git clone git@github.com:yuzhTHU/SRHarness.git ./SRHarness && cd SRHarness
 
 # 创建环境
 conda create -p ./venv python=3.12 -y && conda activate ./venv

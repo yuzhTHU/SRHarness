@@ -40,7 +40,7 @@ SRHarness 围绕三项机制组织智能体方程发现过程：
 以下流程与 [`scripts/install.sh`](scripts/install.sh) 一致，但使用 HTTPS 地址：
 
 ```bash
-git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
+git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
 cd SRHarness
 
 conda create -p ./venv python=3.12 -y
@@ -53,10 +53,10 @@ pip install -e ".[dev]"
 按需安装可选组件：
 
 ```bash
-pip install -e ".[web]"       # Web 搜索树查看器
 pip install -e ".[tools]"     # PySR、PySINDy 和 PDF 文本提取
 pip install -e ".[nn]"        # 实验性神经网络组件
-pip install -e ".[all]"       # 安装以上全部组件
+pip install -e ".[dev]"       # 测试、文档和开发工具
+pip install -e ".[all]"       # 安装全部可选组件
 ```
 
 ## 配置模型服务
@@ -184,10 +184,9 @@ Benchmark 入口还包含传统方法和其它 LLM 方法的适配器；`sr-harn
 当 `save_path=None` 时，运行标识、父子关系、候选公式和最终结果仍可通过
 `agent.run_state` 完整访问，同时不会创建搜索状态文件。
 
-安装并启动 Web 查看器：
+启动默认安装中已包含的 Web 查看器：
 
 ```bash
-pip install -e ".[web]"
 sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 ```
 

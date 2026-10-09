@@ -15,17 +15,45 @@ class GraphEvaluator(DefaultEvaluator):
 
     @classmethod
     def fit(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> engine.Expression:
+        """Fit an equality using graph-aware broadcast evaluation.
+
+        Args:
+            f: Expression whose parameters will be fitted.
+            y: Expression providing graph-aligned target values.
+            context: Training context containing relation metadata.
+
+        Returns:
+            A copy of ``f`` with fitted parameter values.
+        """
         target = engine.evaluate(y, context.data, num_nodes=context.num_nodes)
         return engine.fit(f, context.data, target, num_nodes=context.num_nodes).expression
 
     @classmethod
     def evaluate(cls, f: engine.Expression, y: engine.Expression, context: AgentContext) -> MetricDict:
+        """Evaluate an equality using graph-aware broadcast evaluation.
+
+        Args:
+            f: Fitted expression to evaluate.
+            y: Expression providing graph-aligned target values.
+            context: Context containing relation metadata.
+
+        Returns:
+            Numeric regression and complexity metrics.
+        """
         target = engine.evaluate(y, context.data, num_nodes=context.num_nodes)
         prediction = engine.evaluate(f, context.data, num_nodes=context.num_nodes)
         return utils.regression_metrics(f, target, prediction)
 
     @classmethod
     def split(cls, context: AgentContext) -> ContextSplits:
+        """Split sample-aligned graph data without slicing relation arrays.
+
+        Args:
+            context: Complete graph or hypergraph context.
+
+        Returns:
+            Training and validation context views.
+        """
         data = context.data
         target = np.asarray(data[context.target])
         if target.ndim < 2:

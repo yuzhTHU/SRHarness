@@ -15,9 +15,22 @@ _DEFAULT_EVALUATOR = object()
 
 
 class AgentContext:
-    """One authoritative context containing data, metadata, and runtime arguments."""
+    """One authoritative context containing data, metadata, and runtime arguments.
 
-    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, relation_names: set[str] | None = None, num_nodes: int | None = None, evaluator: DefaultEvaluator | object = _DEFAULT_EVALUATOR, workspace: str | Path | Any | None = None):
+    Args:
+        args: Runtime configuration shared by agents, evaluators, and tools.
+        data: Arrays keyed by variable or axis name.
+        target: Name of the current target variable.
+        variable_descriptions: Human-readable descriptions keyed by data name.
+        variable_axes: Axis names for every non-axis variable.
+        variable_structures: Relation variable used by each structured variable.
+        relation_names: Names of graph or hypergraph relation arrays.
+        num_nodes: Number of nodes for graph or hypergraph data.
+        evaluator: Evaluator instance used to fit, score, and split formulas.
+        workspace: Workspace path or an object exposing a ``path`` attribute.
+    """
+
+    def __init__(self, *, args: argparse.Namespace | None = None, data: dict[str, Any] | None = None, target: str | None = None, variable_descriptions: dict[str, str] | None = None, variable_axes: dict[str, tuple[str, ...]] | None = None, variable_structures: dict[str, str] | None = None, relation_names: set[str] | None = None, num_nodes: int | None = None, evaluator: DefaultEvaluator | object = _DEFAULT_EVALUATOR, workspace: str | Path | Any | None = None) -> None:
         if args is not None and not isinstance(args, argparse.Namespace):
             raise TypeError("args must be an argparse.Namespace")
         self.args = args if args is not None else argparse.Namespace()
@@ -117,6 +130,7 @@ class AgentContext:
                 raise ValueError(f"structure variable {structure!r} endpoints must be in [0, {self.num_nodes})")
 
     def invalidate_splits(self) -> None:
+        """Discard cached training and validation context views."""
         with self._lock:
             self._split_cache = None
 
@@ -140,7 +154,14 @@ class AgentContext:
             return self._split_cache
 
     def with_data(self, data: dict[str, np.ndarray]) -> AgentContext:
-        """Create a context view over ``data`` while preserving runtime configuration."""
+        """Create a context view over data while preserving runtime configuration.
+
+        Args:
+            data: Data mapping for the new context view.
+
+        Returns:
+            A context sharing arguments and evaluator configuration with this context.
+        """
         return AgentContext(
             args=self.args, data=data, target=self.target,
             variable_descriptions={name: self.variable_descriptions[name] for name in data},
@@ -152,22 +173,35 @@ class AgentContext:
 
     @property
     def train_split(self) -> AgentContext:
+        """Return the cached training context, computing both splits if needed."""
         return self._splits()["train"]
 
     @property
     def validation_split(self) -> AgentContext:
+        """Return the cached validation context, computing both splits if needed."""
         return self._splits()["validation"]
 
     def axis_names(self) -> tuple[str, ...]:
+        """Return axis-variable names in first-occurrence order."""
         return tuple(dict.fromkeys(axis for axes in self.variable_axes.values() for axis in axes))
 
     def variable_names(self) -> tuple[str, ...]:
+        """Return names of non-axis variables in manifest order."""
         return tuple(self.variable_axes)
 
     def feature_names(self) -> tuple[str, ...]:
+        """Return selected non-axis variables other than the target."""
         return tuple(name for name in self.variable_axes if name != self.target)
 
     def commit_context_data(self, loaded: dict[str, Any]) -> dict[str, Any]:
+        """Replace live context data with a validated loader result.
+
+        Args:
+            loaded: Mapping returned by :func:`load_context_data`.
+
+        Returns:
+            New data revision and loaded variable names.
+        """
         values = {str(name): np.asarray(value) for name, value in loaded["data"].items()}
         self.data = values
         self.variable_descriptions = dict(loaded["variable_descriptions"])
@@ -185,6 +219,17 @@ class AgentContext:
         return {"revision": self.args.data_revision, "variables": list(values)}
 
     def commit_data(self, data: dict[str, Any], *, target: str, features: list[str] | None = None, variable_descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        """Commit an ordinary aligned data selection to the live context.
+
+        Args:
+            data: Available arrays keyed by column name.
+            target: Target column to retain.
+            features: Feature columns to retain. Defaults to no features.
+            variable_descriptions: Optional descriptions for retained columns.
+
+        Returns:
+            A summary containing revision, selection, columns, and row count.
+        """
         selected = list(dict.fromkeys([*(features or []), target]))
         if target not in data:
             raise ValueError(f"target column does not exist: {target}")
@@ -204,12 +249,36 @@ class AgentContext:
         return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "columns": list(arrays), "rows": len(arrays[target])}
 
     def add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        """Add aligned feature arrays while preserving the current target.
+
+        Args:
+            features: New feature arrays keyed by name.
+            descriptions: Optional descriptions for the new features.
+
+        Returns:
+            The commit summary produced for the updated data.
+
+        Raises:
+            ValueError: If the context has no configured target.
+        """
+        if self.target is None:
+            raise ValueError("target must be configured before adding features")
         descriptions = self.variable_descriptions | {
             name: (descriptions or {}).get(name, "") for name in features
         }
         return self.commit_data(self.data | features, target=self.target, features=[*self.feature_names(), *features], variable_descriptions=descriptions)
 
     def update_selection(self, *, target: str, features: list[str], variable_descriptions: dict[str, str] | None = None) -> dict[str, Any]:
+        """Select the variables used by symbolic regression.
+
+        Args:
+            target: Target variable name.
+            features: Feature variable names.
+            variable_descriptions: Description updates to apply before selection.
+
+        Returns:
+            New revision and selected target and features.
+        """
         keep_variables = set(features) | {target}
         keep_axes = {axis for name, axes in self.variable_axes.items() if name in keep_variables for axis in axes}
         keep = keep_variables | keep_axes
@@ -229,6 +298,7 @@ class AgentContext:
         return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "selection_changed": True}
 
     def schema(self) -> dict[str, Any]:
+        """Return a serializable description of the active context data."""
         axes = set(self.axis_names())
         return {
             "revision": self.args.data_revision, "num_nodes": self.num_nodes,

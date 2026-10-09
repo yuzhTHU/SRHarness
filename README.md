@@ -42,7 +42,7 @@ These are symbolic-accuracy results reported in the manuscript. See the paper fo
 The following setup mirrors [`scripts/install.sh`](scripts/install.sh) while using HTTPS clone URLs:
 
 ```bash
-git clone https://github.com/yuzhTHU/MySRAgent.git SRHarness
+git clone https://github.com/yuzhTHU/SRHarness.git SRHarness
 cd SRHarness
 
 conda create -p ./venv python=3.12 -y
@@ -55,10 +55,10 @@ pip install -e ".[dev]"
 Install optional components as needed:
 
 ```bash
-pip install -e ".[web]"       # Web search-tree viewer
 pip install -e ".[tools]"     # PySR, PySINDy, and PDF integrations
 pip install -e ".[nn]"        # Experimental neural components
-pip install -e ".[all]"       # Everything above
+pip install -e ".[dev]"       # Tests, documentation, and development tools
+pip install -e ".[all]"       # All optional components
 ```
 
 ## Provider Configuration
@@ -186,10 +186,9 @@ The benchmark entry point also contains adapters for conventional and LLM-based 
 With `save_path=None`, search identity, parent relations, candidates, and results remain fully
 available through `agent.run_state`, while no search-state files are created.
 
-Install and launch the web viewer:
+Launch the web viewer (included in the default installation):
 
 ```bash
-pip install -e ".[web]"
 sr-harness run --save-dir logs/run --host 127.0.0.1 --port 8000
 ```
 

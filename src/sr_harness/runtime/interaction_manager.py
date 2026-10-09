@@ -59,7 +59,11 @@ class _CancellationSignal:
 
 
 class InteractionManager:
-    """Own the controls and observable event stream of exactly one agent."""
+    """Own the controls and observable event stream of exactly one agent.
+
+    Args:
+        event_capacity: Maximum number of retained timeline events.
+    """
 
     _DELTA_KIND = "assistant_delta"
     _TERMINAL_KINDS = {"assistant_completed", "assistant_failed"}
@@ -90,22 +94,38 @@ class InteractionManager:
 
     @property
     def state(self) -> InteractionState:
-        """Return the authoritative execution state."""
+        """Return the authoritative execution state.
+
+        Returns:
+            Current interaction state.
+        """
         with self._condition:
             return self._state
 
     @property
     def is_interrupting(self) -> bool:
-        """Return whether the active operation should abort promptly."""
+        """Return whether the active operation should abort promptly.
+
+        Returns:
+            Whether a force-pause request is interrupting active work.
+        """
         return self.state == "interrupting"
 
     @property
     def cancellation_signal(self) -> _CancellationSignal:
-        """Expose a read-only Event-like cancellation adapter to tools."""
+        """Expose a read-only Event-like cancellation adapter to tools.
+
+        Returns:
+            Object exposing ``is_set()`` for cancellation-aware tools.
+        """
         return self._cancellation_signal
 
     def status(self) -> dict[str, Any]:
-        """Return a serializable control snapshot."""
+        """Return a serializable control snapshot.
+
+        Returns:
+            Current state, pending-input counts, event cursor, and server time.
+        """
         with self._condition:
             return {
                 "interaction_state": self._state,
@@ -118,7 +138,18 @@ class InteractionManager:
             }
 
     def command(self, action: InteractionAction, message: str | None = None) -> dict[str, Any]:
-        """Apply a user control command to this agent."""
+        """Apply a user control command to this agent.
+
+        Args:
+            action: Message, pause, or force-pause command.
+            message: User guidance required by the ``message`` action.
+
+        Returns:
+            Control snapshot after applying the command.
+
+        Raises:
+            ValueError: If the action is invalid or a message is empty.
+        """
         if action not in {"message", "pause", "force_pause"}:
             raise ValueError("action must be message, pause, or force_pause")
         cancel: Callable[[], None] | None = None
@@ -150,7 +181,14 @@ class InteractionManager:
                 self._condition.notify_all()
 
     def start_agent_execution(self) -> list[PendingMessage]:
-        """Enter running state and consume messages that start this execution."""
+        """Enter running state and consume messages that start this execution.
+
+        Returns:
+            Messages queued before execution started.
+
+        Raises:
+            RuntimeError: If the manager is not idle.
+        """
         with self._condition:
             if self._state != "idle":
                 raise RuntimeError(f"cannot start agent execution while {self._state}")
@@ -159,7 +197,11 @@ class InteractionManager:
             return messages
 
     def finish_agent_execution(self) -> None:
-        """Mark a naturally completed agent execution as idle."""
+        """Mark a naturally completed agent execution as idle.
+
+        Raises:
+            RuntimeError: If execution is paused at a boundary.
+        """
         with self._condition:
             if self._state == "paused":
                 raise RuntimeError("cannot finish an execution while paused")
@@ -168,7 +210,14 @@ class InteractionManager:
 
     @contextmanager
     def wait(self) -> Iterator[list[PendingMessage]]:
-        """Yield boundary messages and resume only after the agent inserts them."""
+        """Wait at a safe boundary and yield queued messages.
+
+        Yields:
+            Messages to insert before the next model request.
+
+        Raises:
+            RuntimeError: If no agent execution is active.
+        """
         with self._condition:
             if self._state == "running":
                 messages = self._consume_messages_locked()
@@ -193,7 +242,17 @@ class InteractionManager:
 
     @contextmanager
     def cancellable(self, cancel: Callable[[], None]) -> Iterator[None]:
-        """Register the cancellation callback for the current blocking operation."""
+        """Register cancellation for the current blocking operation.
+
+        Args:
+            cancel: Callback that promptly interrupts the active operation.
+
+        Yields:
+            Control while the callback is registered.
+
+        Raises:
+            RuntimeError: If another cancellable operation is already active.
+        """
         with self._condition:
             if self._cancel_current is not None:
                 raise RuntimeError("another cancellable operation is already active")
@@ -209,14 +268,32 @@ class InteractionManager:
                     self._cancel_current = None
 
     def publish_event(self, kind: InteractionEventKind, payload: Mapping[str, Any]) -> dict[str, Any]:
-        """Append one observable event to this agent's timeline."""
+        """Append one observable event to this agent's timeline.
+
+        Args:
+            kind: Supported event kind.
+            payload: JSON-serializable event data.
+
+        Returns:
+            Stored event with sequence, identifier, and timestamp.
+
+        Raises:
+            ValueError: If ``kind`` is unsupported.
+        """
         if kind not in self._EVENT_KINDS:
             raise ValueError(f"unsupported interaction event kind: {kind}")
         with self._condition:
             return self._publish_event_locked(kind, payload)
 
     def get_recent_events(self, after_sequence: int = 0) -> dict[str, Any]:
-        """Return retained events newer than a consumer-owned sequence cursor."""
+        """Return retained events newer than a consumer-owned sequence cursor.
+
+        Args:
+            after_sequence: Last sequence already consumed by the caller.
+
+        Returns:
+            Event batch and cursor-reset or truncation metadata.
+        """
         with self._condition:
             latest_sequence = self._next_sequence - 1
             cursor_reset = after_sequence > latest_sequence
@@ -230,7 +307,11 @@ class InteractionManager:
             }
 
     def export_state(self) -> dict[str, Any]:
-        """Return the durable portion of this manager's state."""
+        """Return the durable portion of this manager's state.
+
+        Returns:
+            Versioned interaction snapshot without runtime locks or callbacks.
+        """
         with self._condition:
             return {
                 "version": 1,
@@ -248,9 +329,13 @@ class InteractionManager:
     def restore_state(self, snapshot: Mapping[str, Any]) -> bool:
         """Restore durable state and interrupt work that died with the process.
 
-        Returns whether an in-flight operation had to be converted into an
-        interruption. Runtime callbacks and locks are deliberately never
-        restored.
+        Runtime callbacks and locks are deliberately never restored.
+
+        Args:
+            snapshot: State returned by :meth:`export_state`.
+
+        Returns:
+            Whether in-flight work was converted into an interruption event.
         """
         with self._condition:
             if set(snapshot) != self._STATE_FIELDS:
@@ -400,7 +485,15 @@ class SRInteractionManager(InteractionManager):
         self._search_transitions: deque[Literal["next_c", "next_r"]] = deque()
 
     def command(self, action: SRInteractionAction, message: str | None = None) -> dict[str, Any]:
-        """Apply a common command or queue an SR branch transition."""
+        """Apply a common command or queue an SR branch transition.
+
+        Args:
+            action: Common interaction action or ``next_c``/``next_r``.
+            message: User guidance for a ``message`` action.
+
+        Returns:
+            Control snapshot after applying the command.
+        """
         if action not in {"next_c", "next_r"}:
             return super().command(cast(InteractionAction, action), message)
         with self._condition:
@@ -411,7 +504,11 @@ class SRInteractionManager(InteractionManager):
             return self.status()
 
     def consume_search_transition(self) -> Literal["next_c", "next_r"] | None:
-        """Consume the newest queued branch transition."""
+        """Consume the newest queued branch transition.
+
+        Returns:
+            Queued transition, or ``None`` when no transition is pending.
+        """
         with self._condition:
             return self._search_transitions.popleft() if self._search_transitions else None
 
@@ -419,7 +516,11 @@ class SRInteractionManager(InteractionManager):
         return bool(self._messages or self._search_transitions)
 
     def status(self) -> dict[str, Any]:
-        """Include the pending SR branch transition in the control snapshot."""
+        """Include the pending SR branch transition in the control snapshot.
+
+        Returns:
+            Common control snapshot with ``pending_transition``.
+        """
         with self._condition:
             status = super().status()
             status["pending_transition"] = (
@@ -428,14 +529,25 @@ class SRInteractionManager(InteractionManager):
             return status
 
     def export_state(self) -> dict[str, Any]:
-        """Include pending search transitions in the durable snapshot."""
+        """Include pending search transitions in the durable snapshot.
+
+        Returns:
+            Versioned interaction snapshot with symbolic-search transitions.
+        """
         with self._condition:
             state = super().export_state()
             state["search_transitions"] = list(self._search_transitions)
             return state
 
     def restore_state(self, snapshot: Mapping[str, Any]) -> bool:
-        """Restore common state plus queued symbolic-search transitions."""
+        """Restore common state plus queued symbolic-search transitions.
+
+        Args:
+            snapshot: State returned by :meth:`export_state`.
+
+        Returns:
+            Whether in-flight work was converted into an interruption event.
+        """
         interrupted = super().restore_state(snapshot)
         with self._condition:
             transitions = snapshot["search_transitions"]

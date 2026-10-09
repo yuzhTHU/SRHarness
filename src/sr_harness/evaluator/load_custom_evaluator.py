@@ -37,6 +37,17 @@ _FORBIDDEN_NAMES = {
 
 
 def evaluator_source(evaluator_id: str) -> str:
+    """Read the source of a built-in evaluator.
+
+    Args:
+        evaluator_id: Built-in evaluator identifier.
+
+    Returns:
+        UTF-8 Python source for the evaluator.
+
+    Raises:
+        ValueError: If ``evaluator_id`` is unknown.
+    """
     try:
         filename = BUILTIN_EVALUATORS[evaluator_id]["filename"]
     except KeyError as exc:
@@ -45,6 +56,7 @@ def evaluator_source(evaluator_id: str) -> str:
 
 
 def evaluator_catalog() -> list[dict[str, str]]:
+    """Return serializable metadata and source for built-in evaluators."""
     return [{
         "id": evaluator_id, "label": item["label"], "label_en": item["label_en"],
         "source": evaluator_source(evaluator_id), "abstract": False,
@@ -52,6 +64,17 @@ def evaluator_catalog() -> list[dict[str, str]]:
 
 
 def create_builtin_evaluator(evaluator_id: str) -> DefaultEvaluator:
+    """Instantiate a built-in evaluator.
+
+    Args:
+        evaluator_id: Built-in evaluator identifier.
+
+    Returns:
+        A new evaluator instance.
+
+    Raises:
+        ValueError: If ``evaluator_id`` is unknown.
+    """
     try:
         return BUILTIN_EVALUATORS[evaluator_id]["class"]()
     except KeyError as exc:
@@ -59,13 +82,34 @@ def create_builtin_evaluator(evaluator_id: str) -> DefaultEvaluator:
 
 
 def evaluator_filename(class_name: str) -> str:
+    """Convert an evaluator class name to a snake-case Python filename.
+
+    Args:
+        class_name: Evaluator class name.
+
+    Returns:
+        Filename ending in ``.py``.
+    """
     stem = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", class_name)
     stem = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", stem).lower()
     return f"{stem}.py"
 
 
 def load_custom_evaluator(source: str | None = None, file: Path | None = None) -> DefaultEvaluator:
-    """Load exactly one ``DefaultEvaluator`` subclass as an evaluator package module."""
+    """Load exactly one evaluator subclass as a virtual package module.
+
+    Args:
+        source: Python source defining one ``DefaultEvaluator`` subclass.
+        file: Optional source file. Its contents are used when ``source`` is
+            omitted and its path is retained for provenance.
+
+    Returns:
+        An instantiated custom evaluator with ``CUSTOM_EVALUATOR`` provenance.
+
+    Raises:
+        ValueError: If the source is unsafe, invalid, or does not define exactly
+            one loadable evaluator subclass.
+    """
     origin = Path(file).expanduser().resolve() if file is not None else None
     if source is None:
         if origin is None:

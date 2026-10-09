@@ -36,12 +36,15 @@ class Agent(ABC, FactoryMixin):
     api: BaseAPI | None
 
     @abstractmethod
-    def run(self, *args, **kwargs):
+    def run(self, *args: Any, **kwargs: Any) -> Any:
         """Run the agent's task loop.
 
         Args:
             *args: Positional inputs accepted by the concrete agent.
             **kwargs: Keyword inputs accepted by the concrete agent.
+
+        Returns:
+            The result defined by the concrete agent implementation.
         """
 
     def initialize_tools(self, context: AgentContext) -> None:

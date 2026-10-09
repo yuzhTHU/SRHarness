@@ -20,7 +20,7 @@ from .agent import Agent
 class EvaluatorConstructionAgent(Agent):
     """Construct and validate evaluator scripts without mutating live context state."""
 
-    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], interaction_manager: InteractionManager, tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16):
+    def __init__(self, *, llm_provider: str, llm_model: str, context: AgentContext, tools: list[BaseTool], interaction_manager: InteractionManager, tool_parser: str = "openai", llm_max_tokens: int = 4096, max_steps: int = 16) -> None:
         self.llm_provider = llm_provider
         self.llm_model = llm_model
         self.tool_parser = tool_parser
@@ -117,6 +117,18 @@ class EvaluatorConstructionAgent(Agent):
         self._force_recorded = True
 
     def run(self, instruction: str) -> dict[str, Any]:
+        """Construct or repair a custom evaluator for one user instruction.
+
+        Args:
+            instruction: Natural-language evaluator requirements.
+
+        Returns:
+            The final assistant response and tool-event records produced during
+            construction.
+
+        Raises:
+            ValueError: If ``instruction`` is empty.
+        """
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("Evaluator construction instruction must not be empty")

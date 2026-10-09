@@ -58,6 +58,11 @@ EVALUATOR_CONTEXT_SETTING_NAMES = (
 )
 
 HIDDEN_CAPABILITY_TOOLS = frozenset({"code_executor"})
+SEARCH_DEFAULT_EXCLUDED_TOOLS = frozenset({
+    "delegate_subagent", "evaluate_eic", "nd2", "read_source", "sr4mdl",
+    "validate_context_data", "validate_evaluator", "workspace_code_executor",
+    "workspace_shell",
+})
 EVALUATOR_DEFAULT_TOOLS = (
     "read_source", "workspace_shell", "workspace_code_executor",
     "validate_evaluator", "read_skill",
@@ -142,6 +147,8 @@ class InteractiveSession:
             "force_initial_diagnostics": False,
         }
         self.settings.update(agent_options or {})
+        if self.settings["tools"] is None:
+            self.settings["tools"] = self.capabilities()["default_tools"]
         for name in EVALUATOR_CONTEXT_SETTING_NAMES:
             setattr(self.context.args, name, self.settings[name])
         self.data_agent_settings = {
@@ -782,7 +789,7 @@ class InteractiveSession:
         else:
             default_tools = [
                 name for name in tool_names
-                if name not in {"validate_context_data", "validate_evaluator"}
+                if name not in SEARCH_DEFAULT_EXCLUDED_TOOLS
             ]
             default_skills = [skill["name"] for skill in skills]
         return {

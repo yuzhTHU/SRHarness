@@ -48,7 +48,7 @@ class BaseTool(ABC, FactoryMixin):
     MAX_RESULT_STR_LENGTH = 64 * 1024
     FORMULA_DISPLAY_NUMBER_FORMAT = ".8g"
 
-    def __init_subclass__(cls, **kwargs):
+    def __init_subclass__(cls, **kwargs: Any) -> None:
         """在子类定义时自动设置元数据"""
         super().__init_subclass__(**kwargs)
         if cls.metadata is None:
@@ -58,7 +58,7 @@ class BaseTool(ABC, FactoryMixin):
         if cls.metadata.parameters is None:
             cls.metadata.parameters = cls.infer_tool_parameters()
 
-    def __init__(self, context: AgentContext | None = None, **values):
+    def __init__(self, context: AgentContext | None = None, **values: Any) -> None:
         """ context 中传入一些工具执行时需要的上下文信息，如数据、模型等，这些信息不适合放在 execute 的参数列表中让 LLM 生成 """
         if isinstance(context, AgentContext):
             self.context = context

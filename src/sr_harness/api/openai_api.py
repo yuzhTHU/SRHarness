@@ -6,7 +6,7 @@ from openai import AzureOpenAI
 from openai.types.responses import Response
 from openai.types.chat import ChatCompletion
 from collections import defaultdict
-from typing import Generator, List, Dict
+from typing import Any, Generator, List, Dict
 from .base_api import BaseAPI
 from ..utils import log_exception
 
@@ -21,7 +21,7 @@ class OpenAIAPI(BaseAPI):
         "gpt-5-mini",
     ]
 
-    def __init__(self, model='gpt-5-mini', **kwargs):
+    def __init__(self, model: str = 'gpt-5-mini', **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
         self.dummy_message = 'Please proofread the message above and say "I have received it."'
 
@@ -57,7 +57,7 @@ class OpenAIAPI(BaseAPI):
             )
             return results
 
-    def build_native_tool_description(self, use_chat_completions=False) -> List[Dict]:
+    def build_native_tool_description(self, use_chat_completions: bool = False) -> List[Dict]:
         """Build native tool description.
 
         Args:
@@ -82,10 +82,10 @@ class OpenAIAPI(BaseAPI):
     def create_responses(
         self,
         messages: List[Dict[str, str]],
-        n=1,
-        max_tokens=4096,
-        temperature=1.0,
-        top_p=1.0,
+        n: int = 1,
+        max_tokens: int = 4096,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
     ) -> Generator[str, None, Dict]:
         """Create responses.
 
@@ -211,10 +211,10 @@ class OpenAIAPI(BaseAPI):
     def create_chat_completions(
         self,
         messages: List[Dict[str, str]],
-        n=1,
-        max_tokens=4096,
-        temperature=1.0,
-        top_p=1.0,
+        n: int = 1,
+        max_tokens: int = 4096,
+        temperature: float = 1.0,
+        top_p: float = 1.0,
     ) -> Generator[str, None, Dict]:
         """Create chat completions.
 

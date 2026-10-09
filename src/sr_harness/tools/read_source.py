@@ -133,6 +133,17 @@ class ReadSourceTool(BaseTool):
     )
 
     def execute(self, path: str | None = None, symbol: str | None = None, include_implementation: bool = True, include_references: bool = False) -> dict[str, Any]:
+        """Read a source path or locate a Python symbol.
+
+        Args:
+            path: File or directory relative to the installed ``src`` tree.
+            symbol: Qualified or unqualified Python symbol to locate.
+            include_implementation: Whether symbol queries return definitions.
+            include_references: Whether symbol queries return references.
+
+        Returns:
+            A directory listing, file source, or symbol-query result.
+        """
         target = _resolve(path)
         if not target.exists():
             raise ValueError(f"Source path does not exist: {path}")
@@ -176,6 +187,14 @@ class ReadSourceTool(BaseTool):
 
     @classmethod
     def format_result_dict(cls, result: dict[str, Any]) -> str:
+        """Format a source inspection result for a language model.
+
+        Args:
+            result: Structured result returned by :meth:`execute`.
+
+        Returns:
+            Human-readable source text or query matches.
+        """
         if result["type"] == "directory":
             return "Source tree: " + result["path"] + "\n" + "\n".join(result["entries"])
         if result["type"] == "file":

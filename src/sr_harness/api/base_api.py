@@ -32,7 +32,7 @@ class BaseAPI(ABC, FactoryMixin):
         model: str | None = None,
         tool_list: ToolList | None = None,
         tool_parser_name: ToolParserName = "text",
-    ):
+    ) -> None:
         self.model = model
         self.tool_list = tool_list
         self.tool_parser_name = tool_parser_name
@@ -40,9 +40,9 @@ class BaseAPI(ABC, FactoryMixin):
 
     def __call__(
         self,
-        messages: List | str,
+        messages: list[dict[str, Any]] | str,
         stream_callback: StreamCallback | None = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> APICallResult:
         """Request the provider and wrap its result generator."""
         if isinstance(messages, str):

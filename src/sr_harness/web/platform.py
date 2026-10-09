@@ -313,6 +313,11 @@ def mount_platform(app, session: InteractiveSession):
                 return {
                     **selected,
                     "description": session.context.variable_descriptions.get(name, ""),
+                    "values": json_value(value[:relation_limit]),
+                    "axis_values": {
+                        axis: json_value(session.context.data[axis][:limit])
+                        for axis in axes if axis in session.context.data
+                    },
                     "node_axis": node_axis,
                     "nodes": [
                         {"id": node, "label": json_value(labels[node])}
@@ -345,7 +350,7 @@ def mount_platform(app, session: InteractiveSession):
                         value.shape[0] > row_count, value.shape[1] > column_count,
                     ],
                 })
-            elif value.ndim == 3:
+            elif value.ndim >= 3:
                 flattened = value.reshape(-1)
                 result["sample_values"] = json_value(flattened[:min(8, flattened.size)])
                 if value.dtype.kind in "iufcb" and flattened.size:

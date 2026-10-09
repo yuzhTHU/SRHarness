@@ -41,7 +41,7 @@ class FitResult:
     def evaluate(
         self, values: Mapping[str, Any], *, time: Any = None,
         delay_resolver: Any = None, num_nodes: int | None = None,
-    ):
+    ) -> Any:
         """Evaluate the supplied model or expression.
 
         Args:

@@ -4,7 +4,7 @@ import logging
 import requests
 from dotenv import load_dotenv
 from collections import defaultdict
-from typing import Generator, List, Dict
+from typing import Any, Generator, List, Dict
 from .base_api import BaseAPI
 from ..utils import log_exception
 
@@ -19,7 +19,7 @@ class SiliconFlowAPI(BaseAPI):
         "Deepseek-V3",
     ]
 
-    def __init__(self, model='Qwen3-8B', **kwargs):
+    def __init__(self, model: str = 'Qwen3-8B', **kwargs: Any) -> None:
         super().__init__(model=model, **kwargs)
 
     def _request(
@@ -68,7 +68,7 @@ class SiliconFlowAPI(BaseAPI):
             raise ValueError(f"Model {model} not supported in SiliconFlowAPI.")
         return results
 
-    def qwen3_8b(self, url, headers, payload) -> Generator[str, None, Dict]:
+    def qwen3_8b(self, url: str, headers: dict[str, str], payload: dict[str, Any]) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         """Run the ``qwen3 8b`` operation.
 
@@ -133,7 +133,7 @@ class SiliconFlowAPI(BaseAPI):
             "responses": [responses],
         }
 
-    def deepseek_v3(self, url, headers, payload) -> Generator[str, None, Dict]:
+    def deepseek_v3(self, url: str, headers: dict[str, str], payload: dict[str, Any]) -> Generator[str, None, Dict]:
         ## Ensure this is a generator
         """Run the ``deepseek v3`` operation.
 

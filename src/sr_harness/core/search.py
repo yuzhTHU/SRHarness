@@ -225,7 +225,7 @@ class SearchRunState:
         larger_is_better: bool,
         agent_metadata: dict[str, Any] | None = None,
         run_id: str | None = None,
-    ):
+    ) -> None:
         if run_id is not None and (not isinstance(run_id, str) or not run_id):
             raise ValueError("run_id must be None or a non-empty string")
         self.run_id = uuid.uuid4().hex if run_id is None else run_id
