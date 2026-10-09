@@ -275,7 +275,7 @@ def mount_platform(app, session: InteractiveSession):
                     features=features,
                     variable_descriptions=descriptions,
                 )
-            except ValueError as exc:
+            except (OSError, ValueError) as exc:
                 raise HTTPException(400, str(exc)) from exc
             session.variable_descriptions = dict(
                 session.context.variable_descriptions
@@ -324,7 +324,7 @@ def mount_platform(app, session: InteractiveSession):
                     raise ValueError(
                         f"unknown context variables: {sorted(unknown)}"
                     )
-            except ValueError as exc:
+            except (OSError, ValueError) as exc:
                 raise HTTPException(400, str(exc)) from exc
             changed = False
             for name in session.context.data:
