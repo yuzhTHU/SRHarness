@@ -2,7 +2,7 @@
 
 SRHarness is a research runtime for agentic symbolic regression. Language models inspect data, propose formulas, fit parameters, and validate candidates through a controlled tool set. Search steps, tool results, model usage, and candidate formulas are retained as auditable run records.
 
-[Open the live WebUI](http://sim1.yumeow.top:30000/){ .md-button .md-button--primary }
+[Open the live WebUI](http://sim1.fiblab.tech:30000/){ .md-button .md-button--primary }
 [View source](https://github.com/yuzhTHU/SRHarness){ .md-button }
 
 ## Where to start
@@ -22,5 +22,5 @@ SRHarness is a research runtime for agentic symbolic regression. Language models
 - [English README](https://github.com/yuzhTHU/SRHarness/blob/master/README.md)
 - [Chinese README](https://github.com/yuzhTHU/SRHarness/blob/master/README.zh.md)
 - [Source repository](https://github.com/yuzhTHU/SRHarness)
-- [Live WebUI](http://sim1.yumeow.top:30000/)
+- [Live WebUI](http://sim1.fiblab.tech:30000/)
 

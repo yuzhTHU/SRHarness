@@ -2,7 +2,7 @@
 
 SRHarness 是一个面向智能体符号回归的研究运行时。语言模型可以在受控工具集上检查数据、提出公式、拟合参数和验证候选；搜索过程、工具结果、模型用量与候选公式会被组织为可审计的运行记录。
 
-[打开在线 WebUI](http://sim1.yumeow.top:30000/){ .md-button .md-button--primary }
+[打开在线 WebUI](http://sim1.fiblab.tech:30000/){ .md-button .md-button--primary }
 [查看源码](https://github.com/yuzhTHU/SRHarness){ .md-button }
 
 ## 从哪里开始
@@ -22,4 +22,4 @@ SRHarness 是一个面向智能体符号回归的研究运行时。语言模型�
 - [English README](https://github.com/yuzhTHU/SRHarness/blob/master/README.md)
 - [中文 README](https://github.com/yuzhTHU/SRHarness/blob/master/README.zh.md)
 - [源码仓库](https://github.com/yuzhTHU/SRHarness)
-- [在线 WebUI](http://sim1.yumeow.top:30000/)
+- [在线 WebUI](http://sim1.fiblab.tech:30000/)
