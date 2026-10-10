@@ -6,6 +6,15 @@
 - Linux、macOS，或能够提供等价 Python 环境的系统；
 - 至少一个受支持模型服务的 API Key。
 
+!!! note "代码沙箱需要 Landlock ABI 3 或更新版本"
+    `code_executor`、`evaluate_code`、`workspace_code_executor` 和自定义 Evaluator 使用 Linux Landlock 与 seccomp 进行内核级隔离。Landlock 是 Linux 内核自带的安全模块，不是需要通过 `pip` 或系统包管理器单独安装的软件；SRHarness 要求 Landlock ABI 3 或更新版本（通常对应 Linux 6.2 或更新内核），以确保沙箱能够限制文件截断。若当前发行版的内核不支持或未启用 Landlock，请升级或启用发行版提供的较新内核。其他系统仍可使用不涉及任意代码执行的功能，但上述入口会抛出 `SandboxUnavailableError`，而不会退回到仅靠 Python 源码检查的弱隔离。
+
+    可用下面的命令检查当前内核提供的 Landlock ABI：
+
+    ```bash
+    python -c "from sr_harness.runtime.landlock import landlock_abi; print(landlock_abi())"
+    ```
+
 ## 从 PyPI 安装
 
 ```bash

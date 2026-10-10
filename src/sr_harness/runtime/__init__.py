@@ -9,6 +9,9 @@ from .interaction_manager import (
     SRInteractionAction,
     SRInteractionManager,
 )
+from .model_router import ModelRoute, ModelRouter
+from .sandbox import SandboxResult, SandboxRunner, get_sandbox_runner
+from .workspace import Workspace
 
 __all__ = [
     "InteractionAction",
@@ -20,5 +23,8 @@ __all__ = [
     "PendingMessage",
     "SRInteractionAction",
     "SRInteractionManager",
+    "SandboxResult",
+    "SandboxRunner",
+    "get_sandbox_runner",
+    "Workspace",
 ]
-from .model_router import ModelRoute, ModelRouter

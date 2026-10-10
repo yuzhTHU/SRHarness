@@ -63,7 +63,9 @@ Disable unneeded tools under **Settings → Capabilities** for each Agent. Custo
 
 `workspace_shell` supports only preimplemented commands such as `ls`, `cat`, `grep`, `cp`, `mv`, `rm`, `mkdir`, `gzip`, `unzip`, and `tar`. It does not support arbitrary program execution, a system shell, command substitution, environment expansion, redirection, or background jobs. Absolute paths, `..` traversal, and symlinks that escape the workspace are rejected.
 
-`workspace_code_executor` excludes network and subprocess modules and constrains wall time, memory, and output size. Third-party scientific libraries remain complex, however, so these restrictions are defense in depth rather than a replacement for operating-system isolation.
+`workspace_code_executor` no longer relies on an AST allowlist to decide whether Python source is safe. Every call starts a short-lived operating-system sandbox that uses Landlock for filesystem confinement and seccomp to deny networking, child-process creation, and host-management system calls. The worker receives a sanitized environment and limits wall time, address space, file size, open files, and captured output. If the kernel cannot provide the required isolation, execution is refused.
+
+`code_executor` and `evaluate_code` receive only the current data and ephemeral scratch space. `workspace_code_executor` additionally receives read-write access to the current conversation workspace and read-only access to explicitly mounted inputs. The Python runtime and installed scientific packages remain visible read-only so NumPy, SciPy, pandas, and similar dependencies can be imported. Custom Evaluators execute through the same data-only sandbox.
 
 SRHarness offers two read-only mechanisms:
 

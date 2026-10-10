@@ -395,8 +395,6 @@ class ConversationRegistry:
                 if thread:
                     thread.join(timeout=2)
         self.persist()
-        for session in sessions:
-            session.close()
 
 
 def mount_conversations(app, registry: ConversationRegistry) -> None:

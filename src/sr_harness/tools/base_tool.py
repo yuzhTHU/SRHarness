@@ -570,8 +570,6 @@ class BaseTool(ABC, FactoryMixin):
             raise ValueError("context.target must be configured before evaluating formulas")
 
         evaluator = self.context.evaluator
-        train_context = self.context.train_split
-        validation_context = self.context.validation_split
 
         target = self.context.target
         var_names = {var.name for var in f.iter_preorder() if isinstance(var, engine.Variable)}
@@ -582,8 +580,21 @@ class BaseTool(ABC, FactoryMixin):
             ineligibility_reasons.append(f"the right-hand side of the equation depends on {target}")
         is_candidate = not ineligibility_reasons
 
-        fitted_f = f
-        if fit:
+        isolated_evaluation = getattr(evaluator, "_evaluate_formula_isolated", None)
+        isolated_metrics = None
+        if isolated_evaluation is not None:
+            fitted_f, isolated_metrics, isolated_splits = isolated_evaluation(
+                f, y, self.context, fit=fit, candidate=is_candidate,
+            )
+            train_context = isolated_splits["train"]
+            validation_context = isolated_splits["validation"]
+            self.context._split_cache = isolated_splits
+        else:
+            train_context = self.context.train_split
+            validation_context = self.context.validation_split
+
+        fitted_f = fitted_f if isolated_metrics is not None else f
+        if fit and isolated_metrics is None:
             fitted_f = (
                 evaluator.fit_candidate(f, train_context)
                 if is_candidate
@@ -595,7 +606,7 @@ class BaseTool(ABC, FactoryMixin):
             raise ValueError(f"unbound parameters: {', '.join(missing)}")
 
         def evaluate_split(split_context: AgentContext, *, max_samples: int | None = None):
-            result = (
+            result = isolated_metrics.get("train" if split_context is train_context else "validation") if isolated_metrics is not None else (
                 evaluator.evaluate_candidate(fitted_f, split_context)
                 if is_candidate
                 else evaluator.evaluate(fitted_f, y, split_context)

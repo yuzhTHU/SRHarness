@@ -26,18 +26,19 @@ def test_public_evaluator_classes_are_only_concrete_extension_points():
 
 def test_default_evaluator_contract_has_only_five_public_methods():
     assert {
-        name for name, value in DefaultEvaluator.__dict__.items()
+        name
+        for name, value in DefaultEvaluator.__dict__.items()
         if isinstance(value, classmethod) and not name.startswith("_")
     } == {"split", "fit", "evaluate", "fit_candidate", "evaluate_candidate"}
 
 
 def test_load_custom_evaluator_supports_relative_imports_and_tracks_source(tmp_path):
-    source = '''from . import utils
+    source = """from . import utils
 from .default_evaluator import DefaultEvaluator
 
 class ProjectEvaluator(DefaultEvaluator):
     pass
-'''
+"""
     evaluator = load_custom_evaluator(source=source)
     assert type(evaluator).__name__ == "ProjectEvaluator"
     assert type(evaluator).CUSTOM_EVALUATOR == {"source": source, "file": None}
@@ -50,10 +51,34 @@ class ProjectEvaluator(DefaultEvaluator):
 
 def test_load_custom_evaluator_requires_exactly_one_subclass():
     with pytest.raises(ValueError, match="exactly one"):
-        load_custom_evaluator(source='''from .default_evaluator import DefaultEvaluator
+        load_custom_evaluator(
+            source="""from .default_evaluator import DefaultEvaluator
 class First(DefaultEvaluator): pass
 class Second(DefaultEvaluator): pass
-''')
+"""
+        )
+
+
+def test_custom_evaluator_cannot_read_parent_environment(monkeypatch):
+    monkeypatch.setenv("SR_HARNESS_EVALUATOR_SECRET", "parent-secret")
+    evaluator = load_custom_evaluator(
+        source="""import os
+from .default_evaluator import DefaultEvaluator
+
+class EnvironmentEvaluator(DefaultEvaluator):
+    @classmethod
+    def evaluate_candidate(cls, f, context):
+        visible = os.environ.get("SR_HARNESS_EVALUATOR_SECRET") is not None
+        return {"mse": 0.0, "secret_visible": int(visible)}
+"""
+    )
+    context = AgentContext(
+        data={"x": np.arange(3.0), "y": np.arange(3.0)},
+        target="y",
+        evaluator=evaluator,
+    )
+    result = EvaluateTool(context=context).execute(f="x", show_diagnostics=False)
+    assert result["data_split_results"]["train"]["metrics"]["secret_visible"] == 0
 
 
 def test_agent_context_keeps_runtime_arguments_separate_from_data():
@@ -92,7 +117,8 @@ def test_an_evaluator_can_define_its_own_fitting_and_scoring_protocol():
     metrics = evaluator.evaluate_candidate(fitted, context)
 
     assert engine.parameter_values(fitted) == {
-        "slope": pytest.approx(3.0), "bias": pytest.approx(-1.0),
+        "slope": pytest.approx(3.0),
+        "bias": pytest.approx(-1.0),
     }
     assert metrics["mse"] < 1e-10
 
@@ -131,7 +157,9 @@ def test_candidate_equations_use_candidate_only_hooks_and_evaluator_owns_complex
 
     assert RolloutEvaluator.candidate_calls == 2
     assert candidate["data_split_results"]["train"]["metrics"]["rollout_rmse"] == 0.125
-    assert candidate["data_split_results"]["train"]["metrics"]["complexity"] == len(engine.parse("2*x"))
+    assert candidate["data_split_results"]["train"]["metrics"]["complexity"] == len(
+        engine.parse("2*x")
+    )
     assert "rollout_rmse" not in non_candidate["data_split_results"]["train"]["metrics"]
 
 
@@ -162,9 +190,7 @@ def test_default_evaluator_provides_scalar_ode_rollout_infrastructure():
     )
 
     splits = utils.split_aligned_context(context, chronological=True)
-    rollout_rmse = utils.calc_trajectory_rollout_RMSE(
-        engine.parse("-0.4*x"), splits["validation"]
-    )
+    rollout_rmse = utils.calc_trajectory_rollout_RMSE(engine.parse("-0.4*x"), splits["validation"])
 
     assert np.all(np.diff(splits["train"].data["t"]) > 0)
     assert np.all(np.diff(splits["validation"].data["t"]) > 0)
@@ -255,9 +281,9 @@ def test_formula_tool_uses_a_custom_evaluator_for_indexed_network_laws():
         "theta": np.array([[0.2, 0.6, -0.4], [0.3, 0.8, -0.1]]),
         "omega": np.array([0.1, -0.2, 0.3]),
     }
-    interaction = engine.parse(
-        "sum[j](A[i, j], sin(theta[j] - theta[i]))"
-    ).evaluate(data, num_nodes=num_nodes)
+    interaction = engine.parse("sum[j](A[i, j], sin(theta[j] - theta[i]))").evaluate(
+        data, num_nodes=num_nodes
+    )
     data["dtheta_dt"] = data["omega"] + 0.65 * interaction
     data["edge_signal"] = np.zeros((2, 2))
     context = AgentContext(
@@ -269,10 +295,7 @@ def test_formula_tool_uses_a_custom_evaluator_for_indexed_network_laws():
     )
 
     result = EvaluateTool(context=context)(
-        f=(
-            "omega[i] + param('coupling', value=0.3) * "
-            "sum[j](A[i, j], sin(theta[j] - theta[i]))"
-        ),
+        f=("omega[i] + param('coupling', value=0.3) * sum[j](A[i, j], sin(theta[j] - theta[i]))"),
         fit=True,
         show_diagnostics=False,
     )
@@ -282,8 +305,7 @@ def test_formula_tool_uses_a_custom_evaluator_for_indexed_network_laws():
     assert result.result["fitted_parameters"]["coupling"] == pytest.approx(0.65)
     fitted_formula = engine.parse(result.result["formula"])
     fitted_parameter = next(
-        node for node in fitted_formula.iter_preorder()
-        if isinstance(node, engine.Parameter)
+        node for node in fitted_formula.iter_preorder() if isinstance(node, engine.Parameter)
     )
     assert fitted_parameter.value == pytest.approx(0.65)
     assert result.result["data_split_results"]["train"]["metrics"]["mse"] < 1e-12
@@ -296,9 +318,9 @@ def test_formula_tool_passes_context_num_nodes_to_the_builtin_evaluator():
         "theta": np.array([[0.2, 0.6, -0.4], [0.3, 0.8, -0.1]]),
         "omega": np.array([0.1, -0.2, 0.3]),
     }
-    interaction = engine.parse(
-        "sum[j](A[i, j], sin(theta[j] - theta[i]))"
-    ).evaluate(data, num_nodes=num_nodes)
+    interaction = engine.parse("sum[j](A[i, j], sin(theta[j] - theta[i]))").evaluate(
+        data, num_nodes=num_nodes
+    )
     data["dtheta_dt"] = data["omega"] + 0.65 * interaction
     data["edge_signal"] = np.zeros((2, 2))
     context = AgentContext(
@@ -309,10 +331,7 @@ def test_formula_tool_passes_context_num_nodes_to_the_builtin_evaluator():
     )
 
     result = EvaluateTool(context=context)(
-        f=(
-            "omega[i] + param('coupling', value=0.3) * "
-            "sum[j](A[i, j], sin(theta[j] - theta[i]))"
-        ),
+        f=("omega[i] + param('coupling', value=0.3) * sum[j](A[i, j], sin(theta[j] - theta[i]))"),
         fit=True,
         show_diagnostics=False,
     )

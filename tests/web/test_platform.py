@@ -1029,19 +1029,19 @@ def test_workspace_directory_move_rename_and_delete(platform):
     ).status_code == 200
 
 
-def test_session_temporary_and_explicit_workspace_lifetimes(tmp_path):
+def test_session_never_removes_its_workspace(tmp_path):
     temporary_session = InteractiveSession(tmp_path / 'logs')
     temporary_workspace = temporary_session.workspace
     assert temporary_workspace.exists()
-    temporary_session.close()
-    assert not temporary_workspace.exists()
+    del temporary_session
+    assert temporary_workspace.exists()
 
     explicit_workspace = tmp_path / 'workspace'
     explicit_session = InteractiveSession(
         tmp_path / 'logs',
         workspace_path=explicit_workspace,
     )
-    explicit_session.close()
+    del explicit_session
     assert explicit_workspace.exists()
 
 
@@ -1087,14 +1087,11 @@ def test_runtime_capabilities_can_be_configured(platform):
 
 def test_search_agent_uses_restricted_default_tools(tmp_path):
     session = InteractiveSession(tmp_path / 'logs')
-    try:
-        assert session.settings['tools'] == session.capabilities('search')['default_tools']
-        assert {
-            'read_source', 'delegate_subagent', 'sr4mdl', 'nd2', 'evaluate_eic',
-            'workspace_shell', 'workspace_code_executor',
-        }.isdisjoint(session.settings['tools'])
-    finally:
-        session.close()
+    assert session.settings['tools'] == session.capabilities('search')['default_tools']
+    assert {
+        'read_source', 'delegate_subagent', 'sr4mdl', 'nd2', 'evaluate_eic',
+        'workspace_shell', 'workspace_code_executor',
+    }.isdisjoint(session.settings['tools'])
 
 
 def test_evaluator_context_settings_update_context_args(platform):
@@ -1448,12 +1445,12 @@ class CustomEvaluator(DefaultEvaluator):
     assert reselected.status_code == 200, reselected.text
     assert reselected.json()['selected'] == 'custom:project_evaluator.py'
     assert type(session.context.evaluator).__name__ == 'ProjectEvaluator'
-    forbidden = client.put('/api/evaluator', json={
+    isolated_import = client.put('/api/evaluator', json={
         'selected': 'custom',
         'source': 'import os\nclass CustomEvaluator(DefaultEvaluator):\n    pass\n',
     })
-    assert forbidden.status_code == 400
-    assert 'scientific SRHarness modules' in forbidden.text
+    assert isolated_import.status_code == 200, isolated_import.text
+    assert isolated_import.json()['custom_name'] == 'CustomEvaluator'
 
     invalid_annotation = client.put('/api/evaluator', json={
         'selected': 'custom',

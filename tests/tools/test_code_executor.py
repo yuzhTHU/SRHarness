@@ -66,32 +66,33 @@ print(eval("x1 + np.sin(x2)", {"__builtins__": {}}, {"x1": x1, "x2": x2, "np": n
         result = self.tool.execute('expr = "1+1"\nprint(eval(expr))')
         assert "2" in result["stdout"]
 
-    def test_dynamic_unsafe_eval_is_forbidden_at_runtime(self):
-        with pytest.raises(Exception, match="eval 数学表达式不安全|Unsafe expression"):
-            self.tool.execute("""expr = "__import__('os')"\nprint(eval(expr))""")
+    def test_dynamic_eval_is_confined_by_the_os_sandbox(self):
+        result = self.tool.execute(
+            """expr = "__import__('os').environ.get('HOME')"\nprint(eval(expr))"""
+        )
+        assert result["stdout"].strip() == "/tmp/home"
 
-    def test_indirect_eval_is_forbidden(self):
-        with pytest.raises(Exception, match="eval.*directly call"):
-            self.tool.execute('e = eval\nprint(e("1+1"))')
+    def test_indirect_eval_is_allowed(self):
+        result = self.tool.execute('e = eval\nprint(e("1+1"))')
+        assert result["stdout"].strip() == "2"
 
-    def test_nested_eval_is_forbidden(self):
-        with pytest.raises(Exception, match="Forbidden nested call: eval"):
-            self.tool.execute("""eval("eval('1+1')")""")
+    def test_nested_eval_is_allowed(self):
+        result = self.tool.execute("""print(eval("eval('1+1')"))""")
+        assert result["stdout"].strip() == "2"
 
-    def test_nested_exec_is_forbidden(self):
-        with pytest.raises(Exception, match="Forbidden nested call: exec"):
-            self.tool.execute("""eval("exec('x=1')")""")
+    def test_nested_exec_is_allowed(self):
+        result = self.tool.execute("""eval("exec('x=1')")\nprint('ok')""")
+        assert result["stdout"].strip() == "ok"
 
-    def test_eval_dunder_escape_is_forbidden(self):
-        with pytest.raises(Exception, match="double underscore|double-underscore"):
-            self.tool.execute("""eval("().__class__")""")
+    def test_dunder_access_is_confined_instead_of_rejected(self):
+        result = self.tool.execute("""print(eval("().__class__").__name__)""")
+        assert result["stdout"].strip() == "tuple"
 
-    def test_eval_non_math_expression_is_forbidden(self):
-        with pytest.raises(Exception, match="Forbidden expression node: Compare"):
-            self.tool.execute("""eval("x1 > 0", {"__builtins__": {}}, {"x1": 1})""")
-
-        with pytest.raises(Exception, match="Forbidden constant type: str"):
-            self.tool.execute("""eval("'not math'")""")
+    def test_eval_supports_general_python_expressions(self):
+        result = self.tool.execute(
+            """print(eval("x1 > 0", {"__builtins__": {}}, {"x1": 1}))\nprint(eval("'text'"))"""
+        )
+        assert result["stdout"].splitlines() == ["True", "text"]
 
     def test_type_and_hasattr_builtins_are_allowed(self):
         result = self.tool.execute(
@@ -104,17 +105,17 @@ print(hasattr(value, "__len__"))
         assert "list" in result["stdout"]
         assert "True" in result["stdout"]
 
-    def test_unauthorized_os_module(self):
-        with pytest.raises(Exception, match="Unauthorized module: os"):
-            self.tool.execute("import os")
+    def test_os_module_sees_only_sanitized_environment(self):
+        result = self.tool.execute("import os\nprint(os.environ.get('HOME'))")
+        assert result["stdout"].strip() == "/tmp/home"
 
-    def test_unauthorized_subprocess_module(self):
-        with pytest.raises(Exception, match="Unauthorized module: subprocess"):
-            self.tool.execute("import subprocess")
+    def test_subprocess_module_is_available_inside_the_namespace(self):
+        result = self.tool.execute("import subprocess\nprint(subprocess.__name__)")
+        assert result["stdout"].strip() == "subprocess"
 
-    def test_unauthorized_module(self):
-        with pytest.raises(Exception, match="Unauthorized module: pandas"):
-            self.tool.execute("import pandas as pd")
+    def test_pandas_is_available(self):
+        result = self.tool.execute("import pandas as pd\nprint(pd.Series([1, 2]).sum())")
+        assert result["stdout"].strip() == "3"
 
     def test_scipy_module_is_allowed(self):
         result = self.tool.execute(
@@ -138,7 +139,7 @@ except Exception:
         assert "ZeroDivisionError" in result["stdout"]
 
     def test_syntax_error(self):
-        with pytest.raises(Exception, match="Code syntax error"):
+        with pytest.raises(Exception, match="SyntaxError"):
             self.tool.execute('print("missing quote')
 
     def test_runtime_error(self):
@@ -149,9 +150,9 @@ except Exception:
         with pytest.raises(Exception, match="timeout=1"):
             self.tool.execute("while True:\n    pass", timeout_seconds=1)
 
-    def test_forbidden_dunder_escape(self):
-        with pytest.raises(Exception, match="double-underscore attribute"):
-            self.tool.execute("print((1).__class__)")
+    def test_dunder_attributes_are_safe_inside_the_namespace(self):
+        result = self.tool.execute("print((1).__class__.__name__)")
+        assert result["stdout"].strip() == "int"
 
     def test_output_truncation(self):
         result = self.tool.execute('print("x" * 70000)')
@@ -229,9 +230,9 @@ print(f"Length: {len(data)}")
         assert "Max: 5" in result["stdout"]
 
     def test_call_wraps_execution_errors(self):
-        result = self.tool(program="import os")
+        result = self.tool(program="1 / 0")
         assert result.ok is False
-        assert "Unauthorized module: os" in result.result["error"]
+        assert "ZeroDivisionError" in result.result["error"]
 
     def test_tool_metadata(self):
         assert self.tool.metadata.name == "code_executor"

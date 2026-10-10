@@ -6,6 +6,15 @@
 - Linux, macOS, or an equivalent Python environment;
 - an API key for at least one supported model provider.
 
+!!! note "The code sandbox requires Landlock ABI 3 or newer"
+    `code_executor`, `evaluate_code`, `workspace_code_executor`, and custom Evaluators use Linux Landlock and seccomp for kernel-enforced isolation. Landlock is a Linux Security Module built into the kernel, not a package installed with `pip` or a system package manager. SRHarness requires Landlock ABI 3 or newer (normally Linux 6.2 or newer) so the sandbox can restrict file truncation. If the current distribution kernel does not provide or enable Landlock, install or enable a newer kernel supplied by the distribution. Other platforms can still use features that do not execute arbitrary code, but these entry points raise `SandboxUnavailableError` rather than falling back to Python source inspection.
+
+    Check the Landlock ABI exposed by the running kernel with:
+
+    ```bash
+    python -c "from sr_harness.runtime.landlock import landlock_abi; print(landlock_abi())"
+    ```
+
 ## Install from PyPI
 
 ```bash

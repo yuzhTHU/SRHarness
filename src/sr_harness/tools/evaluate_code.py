@@ -1,31 +1,23 @@
 # Copyright (c) 2026-present, Yumeow. Licensed under the MIT License.
-"""代码模型评估工具。
-用受限 Python 代码构建模型并生成预测，用于补充 SRHarness Engine 的公式表达能力。
-"""
+"""Evaluate Python-defined models inside a data-only OS sandbox."""
+
 from __future__ import annotations
 
-import os
-import ast
-import time
-import queue
-import signal
-import builtins
-import traceback
-import contextlib
+from typing import Any, Dict
+
 import numpy as np
 import sr_harness_engine as engine
-import multiprocessing as mp
-from typing import Any, Dict
-from ..utils import log_exception
+
+from ..runtime.sandbox import _run_sandbox_protocol
 from .base_tool import BaseTool, ToolMetadata
-from .code_executor import CodeExecutorTool, LimitedWriter, SandBoxCodeExecutor
+from .code_executor import CodeExecutorTool
 
 
 @BaseTool.register("evaluate_code")
 class EvaluateCodeTool(BaseTool):
     """Implementation of the evaluate code tool."""
-    metadata = ToolMetadata(name="evaluate_code")
 
+    metadata = ToolMetadata(name="evaluate_code")
     DEFAULT_TIMEOUT_SECONDS = CodeExecutorTool.DEFAULT_TIMEOUT_SECONDS
     DEFAULT_MEMORY_LIMIT_MB = CodeExecutorTool.DEFAULT_MEMORY_LIMIT_MB
     DEFAULT_OUTPUT_LIMIT_BYTES = CodeExecutorTool.DEFAULT_OUTPUT_LIMIT_BYTES
@@ -52,15 +44,21 @@ class EvaluateCodeTool(BaseTool):
         restricted sandbox, then the tool computes metrics against the target and returns the
         formatted model under the ``formula`` key.
 
-        This tool can return candidate formulas for submission when `y` is the target variable and `predict_code` does not depend on the target variable.
+        This tool can return candidate formulas for submission when `y` is the target
+        variable and `predict_code` does not depend on the target variable.
 
         Args:
-            model_code: Code containing exactly one function with signature `def func(data)` plus optional top-level imports. 
-                `data` is a dictionary mapping variable names to numeric arrays, including the target variable.
-                This function should return a Python dict as the fitted `model`, which will be passed to `predict_code` and `format_code`.
-                The returned model should contain a `description` field that identifies the model with a concise mathematical formula (e.g., y = aₖx² + bₖx + cₖ, yᵢ = MLP1(xᵢ) + Σ Aᵢⱼ MLP2(xᵢ, xⱼ)).
-            predict_code: Code containing exactly one function with signature `def func(data, model)` plus optional top-level imports.
-                The function should return the predicted value for the target `y`, 
+            model_code: Code containing exactly one function with signature
+                `def func(data)` plus optional top-level imports. `data` is a dictionary
+                mapping variable names to numeric arrays, including the target variable.
+                This function should return a Python dict as the fitted `model`, which
+                will be passed to `predict_code` and `format_code`. The returned model
+                should contain a `description` field that identifies the model with a
+                concise mathematical formula (e.g., y = aₖx² + bₖx + cₖ,
+                yᵢ = MLP1(xᵢ) + Σ Aᵢⱼ MLP2(xᵢ, xⱼ)).
+            predict_code: Code containing exactly one function with signature
+                `def func(data, model)` plus optional top-level imports.
+                The function should return the predicted value for the target `y`,
                 which must be array-like and compatible with the target shape.
             y: Target variable name. Use target variable by default.
                 Expressions are also supported, e.g., "log(y)", "y - x1"
@@ -69,96 +67,63 @@ class EvaluateCodeTool(BaseTool):
             output_limit_bytes: Limit on the amount of output (in bytes) that can be produced.
             show_diagnostics: Whether metrics should include compact residual diagnostics.
         """
-        data = self.context.train_split.data
-        evaluation_data = self.context.validation_split.data
-        y = y or self.context.target
-        y = y.strip().strip('"').strip("'")
+        train_data = self.context.train_split.data
+        validation_data = self.context.validation_split.data
+        y = (y or self.context.target).strip().strip('"').strip("'")
         eq_y = self.parse_formula(y)
-
-        timeout_seconds = CodeExecutorTool.bounded_int(timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS)
-        memory_limit_mb = CodeExecutorTool.bounded_int(memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB)
-        output_limit_bytes = CodeExecutorTool.bounded_int(output_limit_bytes, self.DEFAULT_OUTPUT_LIMIT_BYTES, 1024, self.MAX_OUTPUT_LIMIT_BYTES)
-
-        prepared_model_code, model_func_name = self.prepare_function_code(model_code, ("data",), "model_code")
-        prepared_predict_code, predict_func_name = self.prepare_function_code(predict_code, ("data", "model"), "predict_code")
-
-        mp_context = mp.get_context("spawn") if os.name == "nt" else mp.get_context("fork")
-        result_queue = mp_context.Queue(maxsize=1)
-        process = mp_context.Process(target=self.sandbox_worker, args=(
-            prepared_model_code, model_func_name,
-            prepared_predict_code, predict_func_name,
-            data, evaluation_data, self.context.target,
-            timeout_seconds, memory_limit_mb, output_limit_bytes,
-            result_queue,
-        ))
-
-        max_retry = 3
-        for attempt in range(1, max_retry + 1):
-            try:
-                process.start()
-                break
-            except RuntimeError as e:
-                retryable = "can't start new thread" in str(e) or "Resource temporarily unavailable" in str(e)
-                if not retryable:
-                    raise Exception(f"Cannot start sandbox subprocess: {log_exception(e, with_traceback=False)}") from e
-                if attempt < max_retry:
-                    time.sleep(1.0 * attempt)
-        else:
-            raise Exception(f"Cannot start sandbox subprocess after {max_retry} attempts: {log_exception(e, with_traceback=False)}")
-
-        result = None
-        start_time = time.monotonic()
-        deadline = start_time + timeout_seconds
-        while time.monotonic() < deadline:
-            try:
-                result = result_queue.get(timeout=0.05)
-                break
-            except queue.Empty:
-                if not process.is_alive():
-                    break
-
-        if result is not None:
-            if result['sandbox_error'] is not None:
-                raise Exception(f"Sandbox execution error: {result['sandbox_error']}")
-            process.join(1)
-            CodeExecutorTool.terminate_process(process)
-        elif process.is_alive():
-            CodeExecutorTool.terminate_process(process)
-            raise Exception(f"Sandbox subprocess did not return result before timeout={timeout_seconds} seconds and has been terminated.")
-        elif (exit_code := process.exitcode) is not None and exit_code < 0:
-            raise Exception(f"Sandbox subprocess was terminated by signal {signal.Signals(-exit_code).name}.")
-        else:
-            raise Exception(f"Sandbox subprocess did not return result and has exited with code {process.exitcode}.")
-
+        timeout_seconds = CodeExecutorTool.bounded_int(
+            timeout_seconds, self.DEFAULT_TIMEOUT_SECONDS, 1, self.MAX_TIMEOUT_SECONDS
+        )
+        memory_limit_mb = CodeExecutorTool.bounded_int(
+            memory_limit_mb, self.DEFAULT_MEMORY_LIMIT_MB, 64, self.MAX_MEMORY_LIMIT_MB
+        )
+        output_limit_bytes = CodeExecutorTool.bounded_int(
+            output_limit_bytes, self.DEFAULT_OUTPUT_LIMIT_BYTES, 1024, self.MAX_OUTPUT_LIMIT_BYTES
+        )
+        groups = {"train": train_data}
+        if validation_data:
+            groups["validation"] = validation_data
+        result = _run_sandbox_protocol(
+            operation="evaluate-code",
+            request={
+                "model_code": CodeExecutorTool.extract_code(model_code),
+                "predict_code": CodeExecutorTool.extract_code(predict_code),
+                "target": self.context.target,
+            },
+            arrays=groups,
+            timeout_seconds=timeout_seconds,
+            memory_limit_mb=memory_limit_mb,
+            output_limit_bytes=output_limit_bytes,
+            interruption_event=getattr(self, "cancel_event", None),
+        )
+        predictions = result.arrays.get("predictions", {})
         opaque_f = engine.parse("__code_model_prediction__")
-        split_data = {"train": data}
-        if evaluation_data:
-            split_data["validation"] = evaluation_data
-        data_split_results = {}
-        for split_name, split_data in split_data.items():
-            y_pred = np.asarray(result["predictions"][split_name])
-            y_true = np.asarray(eq_y.eval(split_data))
+        data_split_results: dict[str, dict[str, Any]] = {}
+        for split_name, split_values in groups.items():
+            if split_name not in predictions:
+                raise ValueError(f"Sandbox did not return {split_name} predictions")
+            y_pred = np.asarray(predictions[split_name])
+            y_true = np.asarray(eq_y.eval(split_values))
             y_pred, y_true = np.broadcast_arrays(y_pred, y_true)
             metrics = self.calculate_metrics(opaque_f, y_true, y_pred)
             metrics["complexity"] = len(model_code) + len(predict_code)
             metrics.pop("aic", None)
             metrics.pop("bic", None)
-            split_result = {"metrics": metrics}
+            split_result: dict[str, Any] = {"metrics": metrics}
             if show_diagnostics:
                 split_result["diagnostics"] = self.residual_diagnostics(
                     y_true=y_true,
                     y_pred=y_pred,
-                    data=split_data,
+                    data=split_values,
                     target_expression=eq_y.to_str(),
                 )
             data_split_results[split_name] = split_result
-
-        evaluation = {
-            "formula": result["model_str"],
-            "is_candidate": result["is_candidate"] and eq_y.to_str() == self.context.target,
+        return {
+            "formula": str(result.payload["model_str"]),
+            "is_candidate": bool(result.payload["is_candidate"])
+            and eq_y.to_str() == self.context.target,
             "data_split_results": data_split_results,
         }
-        return evaluation
 
     @classmethod
     def format_result_dict(cls, result: Dict[str, Any]) -> str:
@@ -179,178 +144,7 @@ class EvaluateCodeTool(BaseTool):
             )
         text = text.replace(marker, "Code Complexity=")
         return (
-            text + "\n" +
+            text + "\n"
             "(Note: The Code Complexity is measured as source-code character count, so it is not "
             "directly comparable to Formula Complexity defined as the symbolic formula node count.)"
         )
-
-    @classmethod
-    def prepare_function_code(cls, code: str, expected_params: tuple[str, ...], code_name: str) -> tuple[str, str]:
-        """Parse one function definition and validate its signature and safety.
-
-        Args:
-            code: Function source supplied by the agent.
-            expected_params: Required function parameter names.
-            code_name: Human-readable name used in validation errors.
-
-        Returns:
-            Validated source ready for restricted execution."""
-        if not (code := CodeExecutorTool.extract_code(code)):
-            raise ValueError(f"{code_name} must not be empty.")
-        if not (validation_result := SandBoxCodeExecutor.validate_code(code))["is_safe"]:
-            raise Exception(f"Code security check failed since: {validation_result['error_msg']}")
-        tree = ast.parse(code)
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-        if len(functions) != 1:
-            raise ValueError(f"{code_name} must contain exactly one function definition.")
-        for node in tree.body:
-            if not isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef)):
-                raise ValueError(f"{code_name} may only contain top-level imports and one function definition.")
-        function = functions[0]
-        if function.decorator_list:
-            raise ValueError(f"{code_name} function decorators are not allowed.")
-        args = function.args
-        if args.posonlyargs or args.vararg or args.kwonlyargs or args.kwarg:
-            raise ValueError(f"{code_name} function must use only ordinary positional arguments.")
-        if args.defaults:
-            raise ValueError(f"{code_name} function arguments must not have defaults.")
-        param_names = tuple(arg.arg for arg in args.args)
-        if param_names != expected_params:
-            expected = ", ".join(expected_params)
-            actual = ", ".join(param_names)
-            raise ValueError(f"{code_name} function signature must be ({expected}), got ({actual}).")
-        return code, function.name
-
-    @classmethod
-    def sandbox_worker(
-        cls,
-        model_code: str,
-        model_func_name: str,
-        predict_code: str,
-        predict_func_name: str,
-        data: Dict[str, Any],
-        evaluation_data: Dict[str, Any],
-        target: str,
-        timeout_seconds: int,
-        memory_limit_mb: int,
-        output_limit_bytes: int,
-        result_queue: mp.Queue,
-    ) -> None:
-        """Run the ``sandbox worker`` operation.
-
-        Args:
-            model_code: The model code value.
-            model_func_name: The model func name value.
-            predict_code: The predict code value.
-            predict_func_name: The predict func name value.
-            data: Data arrays keyed by variable name.
-            evaluation_data: The evaluation data value.
-            target: Target name or target values.
-            timeout_seconds: The timeout seconds value.
-            memory_limit_mb: The memory limit mb value.
-            output_limit_bytes: The output limit bytes value.
-            result_queue: The result queue value.
-        """
-        SandBoxCodeExecutor.prepare_sandbox_runtime(
-            stdin_text="",
-            timeout_seconds=timeout_seconds,
-            memory_limit_mb=memory_limit_mb,
-        )
-        stdout = LimitedWriter(output_limit_bytes)
-        stderr = LimitedWriter(output_limit_bytes)
-        try:
-            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                # Prepare safe_globals
-                safe_builtins = {
-                    name: getattr(builtins, name)
-                    for name in SandBoxCodeExecutor.SAFE_BUILTIN_NAMES
-                }
-                safe_builtins["__import__"] = SandBoxCodeExecutor.limited_import
-                safe_builtins.update(SandBoxCodeExecutor._SANDBOX_BUILTINS)
-                safe_globals = {
-                    "__builtins__": safe_builtins,
-                    "__name__": "__sandbox__",
-                    "__package__": None,
-                    "data": data,
-                    "np": np,
-                    "numpy": np,
-                }
-
-                model = cls.call_code_function(model_code, model_func_name, (data,), "<evaluate-code-model>", safe_globals)
-                prediction_data = {"train": data}
-                if validation_data := evaluation_data:
-                    prediction_data["validation"] = validation_data
-                predictions = {}
-                for split_name, split_values in prediction_data.items():
-                    predictions[split_name] = np.asarray(cls.call_code_function(
-                        predict_code, predict_func_name, (split_values, model),
-                        f"<evaluate-code-predict-{split_name}>", safe_globals,
-                    ))
-                model_str = cls.format_model(model)
-
-                try:
-                    candidate_data = dict(data)
-                    candidate_data.pop(target, None)
-                    tmp = cls.call_code_function(predict_code, predict_func_name, (candidate_data, model), "<evaluate-code-candidate>", safe_globals)
-                    tmp = np.asarray(tmp) # 检查输出是否可以转换为数组
-                    is_candidate = True
-                except Exception:
-                    is_candidate = False
-
-            result_queue.put({
-                "predictions": predictions,
-                "model_str": model_str,
-                "is_candidate": is_candidate,
-                "stdout": stdout.getvalue(),
-                "stderr": stderr.getvalue(),
-                "sandbox_error": None,
-            })
-        except BaseException as e:
-            stderr.write(traceback.format_exc(limit=8))
-            result_queue.put({
-                "predictions": {},
-                "model_str": "",
-                "is_candidate": False,
-                "stdout": stdout.getvalue(),
-                "stderr": stderr.getvalue(),
-                "sandbox_error": f"{type(e).__name__}: {e}",
-            })
-
-    @classmethod
-    def call_code_function(cls, code: str, function_name: str, inputs: tuple[Any, ...], filename: str, safe_globals: dict[str, Any]) -> Any:
-        """Run the ``call code function`` operation.
-
-        Args:
-            code: The code value.
-            function_name: The function name value.
-            inputs: The inputs value.
-            filename: The filename value.
-            safe_globals: The safe globals value.
-
-        Returns:
-            Any: The operation result.
-        """
-        before = safe_globals.get(function_name)
-        exec(compile(code, filename, "exec"), safe_globals, safe_globals)
-        function = safe_globals.get(function_name)
-        if function is before or not callable(function):
-            raise ValueError(f"{filename} must define callable function `{function_name}`.")
-        return function(*inputs)
-
-    @classmethod
-    def format_model(cls, model: Any) -> str:
-        """Format model.
-
-        Args:
-            model: The model value.
-
-        Returns:
-            str: The operation result.
-        """
-        try:
-            return model['description']
-        except Exception:
-            try:
-                return f"{str(model)} (`description` is not provided in model dict, fallback to `str(model)`)"
-            except Exception:
-                return f"{repr(model)} (`description` is not provided in model dict, fallback to `repr(model)`)"

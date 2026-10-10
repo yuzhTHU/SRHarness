@@ -81,7 +81,9 @@ Agent 写入后应调用 `validate_context_data`。只有有效数据才由 `Int
 
 `workspace_shell` 只支持预先实现的命令集合，例如 `ls`、`cat`、`grep`、`cp`、`mv`、`rm`、`mkdir`、`gzip`、`unzip` 和 `tar`。它不支持任意程序启动、系统 Shell、命令替换、环境变量展开、重定向或后台任务，并拒绝绝对路径、`..` 路径穿越和逃逸工作区的符号链接。
 
-`workspace_code_executor` 禁止网络和 subprocess 模块，并限制运行时间、内存与输出大小。不过，第三方科学计算库本身十分复杂，这种限制属于纵深防御，不能替代操作系统权限隔离。
+`workspace_code_executor` 不再依赖 AST 白名单判断 Python 源码是否安全。每次调用都会启动一个短生命周期的操作系统沙箱，使用 Landlock 限制文件访问，并用 seccomp 禁止网络、创建子进程和主机管理相关系统调用。沙箱只继承经过清理的环境变量，并限制运行时间、地址空间、文件大小、打开文件数和输出大小；如果内核无法提供所需隔离，工具会拒绝执行。
+
+`code_executor` 和 `evaluate_code` 只接收当前数据，并仅拥有临时写入空间；`workspace_code_executor` 额外获得当前对话工作区的读写权限和显式挂载输入的只读权限。Python 运行时与已安装科学计算库以只读方式可见，以便正常导入 NumPy、SciPy、pandas 等依赖。自定义 Evaluator 使用同一套 data-only 沙箱执行。
 
 SRHarness 提供两种只读机制：
 

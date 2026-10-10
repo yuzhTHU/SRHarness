@@ -16,17 +16,19 @@ from pathlib import Path
 
 import pytest
 
-from sr_harness.tools.workspace_shell import Workspace, WorkspaceShellTool
+from sr_harness.runtime.workspace import Workspace
+from sr_harness.tools.workspace_shell import WorkspaceShellTool
 
 
 class TestWorkspace:
     """测试 Workspace 工作区管理器。"""
 
     def setup_method(self):
-        self.ws = Workspace()
+        self.workspace_directory = tempfile.TemporaryDirectory()
+        self.ws = Workspace(self.workspace_directory.name)
 
     def teardown_method(self):
-        self.ws.cleanup()
+        self.workspace_directory.cleanup()
 
     def test_workspace_creates_temp_dir(self):
         """工作区正确创建临时目录。"""
@@ -75,24 +77,27 @@ class TestWorkspace:
         tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False, mode="w")
         tmp.write("a,b\n1,2\n")
         tmp.close()
+        workspace_directory = tempfile.TemporaryDirectory()
         try:
-            ws = Workspace(workspace_files=[tmp.name])
+            ws = Workspace(workspace_directory.name)
+            ws.mount(tmp.name)
             linked = ws.path / Path(tmp.name).name
             assert linked.exists()
             assert "a,b" in linked.read_text()
-            ws.cleanup()
         finally:
+            workspace_directory.cleanup()
             Path(tmp.name).unlink(missing_ok=True)
 
     def test_link_directory(self):
         """目录正确链接到工作区。"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             (Path(tmp_dir) / "file.txt").write_text("hello")
-            ws = Workspace(workspace_files=[tmp_dir])
-            linked_dir = ws.path / Path(tmp_dir).name
-            assert linked_dir.exists()
-            assert (linked_dir / "file.txt").read_text() == "hello"
-            ws.cleanup()
+            with tempfile.TemporaryDirectory() as workspace_dir:
+                ws = Workspace(workspace_dir)
+                ws.mount(tmp_dir)
+                linked_dir = ws.path / Path(tmp_dir).name
+                assert linked_dir.exists()
+                assert (linked_dir / "file.txt").read_text() == "hello"
 
     def test_linked_inputs_are_read_only_and_name_collisions_fail(self, tmp_path):
         """Mounted files can be read but cannot be modified through the workspace."""
@@ -103,34 +108,38 @@ class TestWorkspace:
         first.write_text("x\n1\n")
         second.write_text("x\n2\n")
 
-        ws = Workspace(workspace_files=[str(first)])
-        try:
-            assert ws.resolve("data.csv").read_text() == "x\n1\n"
-            assert ws.resolve("data.csv", write=True) is None
-            with pytest.raises(FileExistsError, match="already in use"):
-                ws.link_item(second)
-        finally:
-            ws.cleanup()
+        ws = Workspace(tmp_path / "workspace")
+        ws.mount(first)
+        assert ws.resolve("data.csv").read_text() == "x\n1\n"
+        assert ws.resolve("data.csv", access="write") is None
+        with pytest.raises(FileExistsError, match="already in use"):
+            ws.mount(second)
 
     def test_linked_directory_files_are_discoverable(self, tmp_path):
         """Directory mounts expose nested files through logical workspace paths."""
         source = tmp_path / "observations"
         source.mkdir()
         (source / "data.csv").write_text("x,y\n1,2\n")
-        ws = Workspace(workspace_files=[str(source)])
-        try:
-            assert ws.resolve("observations/data.csv").read_text() == "x,y\n1,2\n"
-            assert dict(ws.iter_files())[Path("observations/data.csv")].is_file()
-        finally:
-            ws.cleanup()
+        ws = Workspace(tmp_path / "workspace")
+        ws.mount(source)
+        assert ws.resolve("observations/data.csv").read_text() == "x,y\n1,2\n"
+        assert dict(ws.iter_files())[Path("observations/data.csv")].is_file()
 
-    def test_cleanup_removes_workspace(self):
-        """cleanup 正确删除工作区目录。"""
-        ws = Workspace()
-        path = ws.path
-        assert path.exists()
-        ws.cleanup()
-        assert not path.exists()
+    def test_writable_mount_explicitly_allows_host_changes(self, tmp_path):
+        source = tmp_path / "shared"
+        source.mkdir()
+        ws = Workspace(tmp_path / "workspace")
+        ws.mount(source, readonly=False)
+        mounted_file = ws.resolve("shared/result.txt", access="create")
+        assert mounted_file == source / "result.txt"
+        mounted_file.write_text("result")
+        assert (source / "result.txt").read_text() == "result"
+
+    def test_workspace_has_no_destructive_lifecycle_api(self):
+        assert not hasattr(self.ws, "cleanup")
+        assert not hasattr(self.ws, "close")
+        assert not hasattr(self.ws, "__enter__")
+        assert not hasattr(self.ws, "__exit__")
 
     def test_unlocked_file_in_locked_directory_can_be_modified_in_place(self):
         directory = self.ws.path / "context.data"
@@ -140,24 +149,29 @@ class TestWorkspace:
         self.ws.set_locked("context.data", True)
         self.ws.set_locked("context.data/manifest.json", False)
 
-        assert self.ws.resolve("context.data/manifest.json", write=True) == manifest
+        assert self.ws.resolve("context.data/manifest.json", access="write") == manifest
         assert self.ws.resolve(
-            "context.data/manifest.json", write=True, modify_entry=True,
-        ) is None
+            "context.data/manifest.json", access="remove",
+        ) == manifest
+        assert self.ws.is_locked("context.data") is True
+        assert self.ws.is_locked("context.data/manifest.json") is False
 
-    def test_context_manager(self):
-        """上下文管理器在退出时清理工作区。"""
-        with Workspace() as ws:
-            path = ws.path
-            assert path.exists()
-        assert not path.exists()
+    def test_create_checks_parent_but_not_locked_siblings(self):
+        directory = self.ws.path / "results"
+        directory.mkdir()
+        locked = directory / "locked.txt"
+        locked.write_text("keep")
+        self.ws.set_locked("results/locked.txt", True)
 
+        assert self.ws.resolve("results/new.txt", access="create") == directory / "new.txt"
+        assert self.ws.resolve("results", access="remove") is None
 
 class TestWorkspaceShellTool:
     """测试 WorkspaceShellTool 命令执行。"""
 
     def setup_method(self):
-        self.ws = Workspace()
+        self.workspace_directory = tempfile.TemporaryDirectory()
+        self.ws = Workspace(self.workspace_directory.name)
         # 创建测试文件
         (self.ws.path / "data.csv").write_text("name,value\nalice,10\nbob,20\ncharlie,30\n")
         (self.ws.path / "numbers.txt").write_text("5\n3\n8\n1\n4\n")
@@ -166,7 +180,7 @@ class TestWorkspaceShellTool:
         self.tool = WorkspaceShellTool(workspace=self.ws)
 
     def teardown_method(self):
-        self.ws.cleanup()
+        self.workspace_directory.cleanup()
 
     # ─── 元数据 ───
 
@@ -193,11 +207,19 @@ class TestWorkspaceShellTool:
         result = self.tool.execute("chmod 777 data.csv")
         assert result.get("success") is False
 
-    def test_readonly_file_can_be_removed_from_writable_directory(self):
+    def test_locked_file_cannot_be_removed_from_writable_directory(self):
         self.ws.set_locked("data.csv", True)
         result = self.tool.execute("rm data.csv")
-        assert result.get("success") is True
-        assert not (self.ws.path / "data.csv").exists()
+        assert result.get("success") is False
+        assert (self.ws.path / "data.csv").exists()
+
+    def test_directory_containing_locked_descendant_cannot_be_removed(self):
+        self.ws.set_locked("subdir/nested.txt", True)
+
+        result = self.tool.execute("rm -r subdir")
+
+        assert result.get("success") is False
+        assert (self.ws.path / "subdir" / "nested.txt").exists()
 
     def test_cp_overwrites_unlocked_file_inside_locked_directory(self):
         directory = self.ws.path / "context.data"
@@ -502,6 +524,16 @@ class TestWorkspaceShellTool:
         assert result.get("success") is True
         assert not (self.ws.path / "temp.txt").exists()
         assert (self.ws.path / "renamed.txt").read_text() == "temp content"
+
+    def test_mv_force_replaces_unlocked_file(self):
+        (self.ws.path / "source.txt").write_text("source")
+        (self.ws.path / "destination.txt").write_text("destination")
+
+        result = self.tool.execute("mv -f source.txt destination.txt")
+
+        assert result.get("success") is True
+        assert not (self.ws.path / "source.txt").exists()
+        assert (self.ws.path / "destination.txt").read_text() == "source"
 
     def test_cp_rejects_traversal(self):
         """cp 目标路径逃逸被拒绝。"""

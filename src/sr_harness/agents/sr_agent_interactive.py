@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 import logging
+import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -200,13 +201,15 @@ class SRAgentInteractive(SRAgent):
             yield tool_context
             return
 
-        from ..tools.workspace_shell import Workspace
+        from ..runtime.workspace import Workspace
 
-        with Workspace(self.workspace_files, self.save_path) as workspace:
-            _logger.note(f"Workspace initialized at: {workspace.path}")
-            tool_context.workspace = workspace.path
-            tool_context.args.workspace_manager = workspace
-            yield tool_context
+        workspace = Workspace(tempfile.mkdtemp(prefix="sr_workspace_"))
+        for source in self.workspace_files or ():
+            workspace.mount(source)
+        _logger.note(f"Workspace initialized at: {workspace.path}")
+        tool_context.workspace = workspace.path
+        tool_context.args.workspace_manager = workspace
+        yield tool_context
 
     # Interactive search-boundary hooks
 

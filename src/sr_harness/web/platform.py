@@ -667,9 +667,9 @@ def mount_platform(app, session: InteractiveSession):
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
-    def resolve(path, *, write=False):
+    def resolve(path, *, access="read"):
         try:
-            return session.resolve(path, write=write)
+            return session.resolve(path, access=access)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
 
@@ -680,7 +680,7 @@ def mount_platform(app, session: InteractiveSession):
             if not directory.is_dir():
                 raise HTTPException(404, 'Directory not found')
             readonly_roots = {
-                logical.name for logical in session.workspace_manager.readonly_mounts
+                logical.name for logical in session.workspace_manager.mount_map
             }
 
             def list_entries(logical_directory, resolved_directory, ancestors=frozenset()):
@@ -700,7 +700,7 @@ def mount_platform(app, session: InteractiveSession):
                         mounted = bool(
                             logical.parts and logical.parts[0] in readonly_roots
                         )
-                        locked = not mounted and session.workspace_manager.is_locked(resolved)
+                        locked = not mounted and session.workspace_manager.is_locked(logical)
                         entry = {'name': item.name, 'path': str(logical),
                                  'directory': is_directory,
                                  'read_only': mounted or locked,
@@ -833,7 +833,7 @@ def mount_platform(app, session: InteractiveSession):
             raise HTTPException(400, 'Directory path is required')
         with session.lock:
             try:
-                directory = resolve(path, write=True)
+                directory = resolve(path, access="create")
                 if directory.exists():
                     raise HTTPException(409, 'A file or directory already exists at this path')
                 directory.mkdir(parents=False)
@@ -866,8 +866,8 @@ def mount_platform(app, session: InteractiveSession):
             raise HTTPException(400, 'Source and destination paths are required')
         with session.lock:
             try:
-                source = resolve(source_path, write=True)
-                destination = resolve(destination_path, write=True)
+                source = session.resolve(source_path, access="remove")
+                destination = session.resolve(destination_path, access="create")
                 if not source.exists():
                     raise HTTPException(404, 'Source file or directory not found')
                 if destination.exists():
@@ -889,7 +889,7 @@ def mount_platform(app, session: InteractiveSession):
             raise HTTPException(400, 'The workspace root cannot be deleted')
         with session.lock:
             try:
-                item = resolve(path, write=True)
+                item = session.resolve(path, access="remove")
                 if not item.exists():
                     raise HTTPException(404, 'File or directory not found')
                 if item.is_dir():
@@ -973,7 +973,7 @@ def mount_platform(app, session: InteractiveSession):
         size = 0
         try:
             with session.lock:
-                destination = resolve(path, write=True)
+                destination = resolve(path, access="create")
                 if destination.exists():
                     raise HTTPException(409, 'File already exists; rename it before uploading')
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -988,7 +988,7 @@ def mount_platform(app, session: InteractiveSession):
                         raise HTTPException(413, 'Maximum file size is 256 MiB')
                     output.write(chunk)
             with session.lock:
-                current_destination = resolve(path, write=True)
+                current_destination = resolve(path, access="create")
                 if current_destination != destination:
                     raise HTTPException(409, 'Workspace changed while the file was uploading')
                 if destination.exists():

@@ -9,16 +9,15 @@ from __future__ import annotations
 import argparse
 import gzip
 import logging
-import os
 import re
 import shlex
 import shutil
 import stat
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Never
 
+from ..runtime.workspace import Workspace
 from .base_tool import BaseTool, ToolMetadata
 from .code_executor import LimitedWriter
 from ..utils import log_exception
@@ -66,266 +65,6 @@ class CommandArgumentParser(argparse.ArgumentParser):
             Never: The operation result.
         """
         raise CommandParseError(message or f"{self.prog}: invalid arguments")
-
-
-class Workspace:
-    """管理一个隔离的临时工作区目录。
-
-    初始化时将指定文件/目录以只读方式链接（或复制）到工作区内。
-    提供路径解析和安全校验，严格防止路径逃逸。
-    """
-
-    def __init__(
-        self,
-        workspace_files: List[str] | None = None,
-        temp_dir: str | None = None,
-        path: str | Path | None = None,
-    ):
-        self.retain = path is not None
-        self._path = Path(path).resolve() if path is not None else Path(
-            tempfile.mkdtemp(prefix="sr_workspace_", dir=temp_dir)
-        )
-        self._path.mkdir(parents=True, exist_ok=True)
-        self._readonly_mounts: dict[Path, Path] = {}
-        _logger.info(f"Initialized workspace at {self._path}")
-        sources = [Path(src).expanduser().resolve() for src in (workspace_files or [])]
-        missing = [str(src) for src in sources if not src.exists()]
-        if missing:
-            raise FileNotFoundError(f"Workspace inputs do not exist: {missing}")
-        names = [src.name for src in sources]
-        duplicates = sorted({name for name in names if names.count(name) > 1})
-        if duplicates:
-            raise FileExistsError(
-                f"Workspace input basenames must be unique; conflicts: {duplicates}"
-            )
-        for src in sources:
-            self.link_item(src)
-
-    @property
-    def path(self) -> Path:
-        """Run the ``path`` operation.
-
-        Returns:
-            Path: The operation result.
-        """
-        return self._path
-
-    @property
-    def readonly_mounts(self) -> dict[Path, Path]:
-        """Return read-only workspace entries and their source paths.
-
-        Returns:
-            A copy of the logical-to-source mount mapping.
-        """
-        return dict(self._readonly_mounts)
-
-    def is_readonly_mount(self, path: Path) -> bool:
-        """Return whether a path belongs to a startup read-only mount.
-
-        Args:
-            path: Resolved logical path inside the workspace.
-
-        Returns:
-            Whether the path is a mount root or one of its descendants.
-        """
-        return any(root in (path, *path.parents) for root in self._readonly_mounts)
-
-    @staticmethod
-    def is_locked(path: Path) -> bool:
-        """Return whether the owner write bit is disabled for a workspace item.
-
-        Args:
-            path: Existing file or directory.
-
-        Returns:
-            Whether the item is marked read-only with filesystem permissions.
-        """
-        return not bool(path.stat().st_mode & stat.S_IWUSR)
-
-    def set_locked(self, relative_path: str, locked: bool) -> Path:
-        """Set a file or directory tree's advisory filesystem lock.
-
-        Args:
-            relative_path: Workspace-relative file or directory path.
-            locked: Remove write bits when true; restore owner write access when false.
-
-        Returns:
-            The affected workspace path.
-
-        Raises:
-            ValueError: If the path is invalid, missing, or belongs to a startup mount.
-        """
-        path = self.resolve(relative_path)
-        if path is None or not path.exists():
-            raise ValueError(f"File or directory not found: {relative_path}")
-        logical = self._path / Path(relative_path)
-        if self.is_readonly_mount(logical):
-            raise ValueError("Startup read-only mounts cannot be unlocked or relocked")
-        items = [path]
-        if path.is_dir():
-            items.extend(item for item in path.rglob("*") if not item.is_symlink())
-        # Unlock directory parents before traversing their children. Lock children
-        # first so the tree remains traversable throughout the operation.
-        if locked:
-            items.reverse()
-        for item in items:
-            mode = stat.S_IMODE(item.stat().st_mode)
-            updated = mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
-            if not locked:
-                updated |= stat.S_IWUSR
-            item.chmod(updated)
-        return path
-
-    def resolve(
-        self,
-        relative_path: str,
-        *,
-        write: bool = False,
-        modify_entry: bool = False,
-    ) -> Path | None:
-        """Resolve a relative path inside the workspace.
-
-        ``None`` selects the workspace root. Absolute paths, traversal, and symbolic links escaping the workspace are rejected.
-
-        Args:
-            relative_path: Relative path supplied by the caller.
-            write: Whether the caller intends to modify the resolved path.
-            modify_entry: Whether the operation creates, removes, renames, or replaces
-                a directory entry. Such operations require a writable parent directory;
-                an in-place file-content write only requires a writable file.
-
-        Returns:
-            The resolved path, or ``None`` when it is invalid."""
-        if not relative_path:
-            return self._path
-        # 拒绝 POSIX 绝对路径
-        if os.path.isabs(relative_path):
-            return None
-        # 拒绝 Windows 驱动器号 (C:)
-        if len(relative_path) >= 2 and relative_path[0].isalpha() and relative_path[1] == ":":
-            return None
-        requested = Path(relative_path)
-        if ".." in requested.parts:
-            return None
-        logical = self._path / requested
-        if requested.parts:
-            mount = self._path / requested.parts[0]
-            if source := self._readonly_mounts.get(mount):
-                if write:
-                    return None
-                if source.is_file() and len(requested.parts) > 1:
-                    return None
-                candidate = (source / Path(*requested.parts[1:])).resolve() if source.is_dir() else source
-                try:
-                    candidate.relative_to(source if source.is_dir() else source.parent)
-                except ValueError:
-                    return None
-                return candidate
-        candidate = logical.resolve()
-        # 拒绝路径逃逸（解析后的路径不在工作区内）
-        try:
-            candidate.relative_to(self._path.resolve())
-        except ValueError:
-            return None
-        if write:
-            if modify_entry or not candidate.exists():
-                probe = candidate.parent
-                while not probe.exists() and probe != self._path:
-                    probe = probe.parent
-            else:
-                probe = candidate
-            if probe.exists() and self.is_locked(probe):
-                return None
-        return candidate
-
-    def cleanup(self):
-        """Run the ``cleanup`` operation."""
-        if self._path.exists():
-            shutil.rmtree(self._path, ignore_errors=True)
-            _logger.info(f"Cleaned up workspace at {self._path}")
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        if not self.retain:
-            self.cleanup()
-
-    def link_item(self, src: Path) -> Path:
-        """Link or copy a file or directory into the workspace as read-only.
-
-        Args:
-            src: Source file or directory.
-
-        Returns:
-            Metadata describing the workspace item."""
-        src = src.expanduser().resolve()
-        if not src.exists():
-            raise FileNotFoundError(f"Workspace input does not exist: {src}")
-        dst = self._path / src.name
-        if dst.is_symlink() and dst.resolve() == src:
-            self._readonly_mounts[dst] = src
-            return dst
-        if dst.exists() or dst.is_symlink():
-            raise FileExistsError(
-                f"Workspace input name {dst.name!r} is already in use; "
-                "rename one of the conflicting inputs."
-            )
-        try:
-            try:
-                os.symlink(src, dst, target_is_directory=src.is_dir())
-                self._readonly_mounts[dst] = src
-            except OSError as e:
-                if src.is_dir():
-                    file_num = sum(1 for f in src.rglob("*") if f.is_file())
-                    dir_size = sum(f.stat().st_size for f in src.rglob("*") if f.is_file())
-                    _logger.warning(
-                        f"Failed to symlink {src} to workspace: {e}"
-                        f" (is_dir={src.is_dir()}, file_num={file_num}, "
-                        f"total_size={dir_size:,} bytes), falling back to copy."
-                    )
-                    shutil.copytree(src, dst)
-                    for item in [dst, *dst.rglob("*")]:
-                        item.chmod(0o555 if item.is_dir() else 0o444)
-                else:
-                    file_size = src.stat().st_size
-                    _logger.warning(
-                        f"Failed to link {src} to workspace "
-                        f"(size={file_size:,} bytes), falling back to copy."
-                    )
-                    shutil.copy2(src, dst)
-                    dst.chmod(0o444)
-                self._readonly_mounts[dst] = src
-        except Exception as e:
-            _logger.error(
-                f"Failed to add {src} to workspace: "
-                f"{log_exception(e, with_traceback=False)}"
-            )
-            raise
-        return dst
-
-    def iter_files(self):
-        """Yield logical and resolved paths for every workspace file.
-
-        Yields:
-            Tuples containing a workspace-relative path and its readable path.
-        """
-        mounted = set(self._readonly_mounts)
-        for item in self._path.rglob("*"):
-            if any(parent in mounted for parent in (item, *item.parents)):
-                continue
-            if item.is_symlink():
-                continue
-            if item.is_file():
-                yield item.relative_to(self._path), item
-        for logical, source in self._readonly_mounts.items():
-            prefix = Path(logical.name)
-            if source.is_file():
-                yield prefix, source
-            else:
-                for item in source.rglob("*"):
-                    if item.is_file():
-                        yield prefix / item.relative_to(source), item
 
 
 @BaseTool.register("workspace_shell")
@@ -419,7 +158,7 @@ class WorkspaceShellTool(BaseTool):
         (e.g., ../) are forbidden.
 
         Args:
-            command: A shell command string. 
+            command: A shell command string.
                 Examples: "ls", "cat data.csv | head -5", "gunzip data.csv.gz".
             output_limit_bytes: Maximum stdout size returned by each command segment.
         """
@@ -885,7 +624,7 @@ class WorkspaceShellTool(BaseTool):
             return self._error("cp: exactly one source and one destination are supported")
         source, destination = options.paths
         src_path = ws.resolve(source)
-        dst_path = ws.resolve(destination, write=True)
+        dst_path = ws.resolve(destination)
         if src_path is None:
             return self._error(f"Invalid source path: {source}")
         if dst_path is None:
@@ -895,11 +634,12 @@ class WorkspaceShellTool(BaseTool):
         if src_path.is_dir() and not options.recursive:
             return self._error(f"cp: omitting directory {source!r}; use -r")
         effective_destination = dst_path / src_path.name if dst_path.is_dir() else dst_path
-        destination_name = str(effective_destination.relative_to(ws.path))
+        destination_name = str(
+            Path(destination) / src_path.name if dst_path.is_dir() else Path(destination)
+        )
         dst_path = ws.resolve(
             destination_name,
-            write=True,
-            modify_entry=src_path.is_dir(),
+            access="remove" if effective_destination.exists() else "create",
         )
         if dst_path is None:
             return self._error(f"Invalid destination path: {destination}")
@@ -921,8 +661,24 @@ class WorkspaceShellTool(BaseTool):
         if len(options.paths) != 2:
             return self._error("mv: exactly one source and one destination are supported")
         source, destination = options.paths
-        src_path = ws.resolve(source, write=True, modify_entry=True)
-        dst_path = ws.resolve(destination, write=True, modify_entry=True)
+        src_path = ws.resolve(source, access="remove")
+        destination_probe = ws.resolve(destination)
+        destination_name = str(
+            Path(destination) / src_path.name
+            if src_path is not None
+            and destination_probe is not None
+            and destination_probe.is_dir()
+            else Path(destination)
+        )
+        effective_probe = ws.resolve(destination_name)
+        dst_path = ws.resolve(
+            destination_name,
+            access=(
+                "remove"
+                if effective_probe is not None and effective_probe.exists()
+                else "create"
+            ),
+        )
         if src_path is None:
             return self._error(f"Invalid source path: {source}")
         if dst_path is None:
@@ -947,7 +703,7 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("rm", args, configure)
         for name in options.paths:
-            path = ws.resolve(name, write=True, modify_entry=True)
+            path = ws.resolve(name, access="remove")
             if path is None:
                 return self._error(f"Invalid path: {name}")
             if path == ws.path:
@@ -974,7 +730,7 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("mkdir", args, configure)
         for name in options.directories:
-            path = ws.resolve(name, write=True, modify_entry=True)
+            path = ws.resolve(name, access="create")
             if path is None:
                 return self._error(f"Invalid path: {name}")
             try:
@@ -1000,10 +756,14 @@ class WorkspaceShellTool(BaseTool):
             if Path(options.file).suffix == ".gz"
             else str(Path(options.file).parent / (Path(options.file).name + ".out"))
         )
-        out_path = ws.resolve(output_name, write=True)
+        output_probe = ws.resolve(output_name)
+        out_path = ws.resolve(
+            output_name,
+            access="remove" if output_probe is not None and output_probe.exists() else "create",
+        )
         if out_path is None or (
             not options.keep
-            and ws.resolve(options.file, write=True, modify_entry=True) is None
+            and ws.resolve(options.file, access="remove") is None
         ):
             return self._error("gunzip: read-only workspace inputs cannot be modified")
         if out_path.exists() and not options.force:
@@ -1029,10 +789,15 @@ class WorkspaceShellTool(BaseTool):
             return self._error(f"Invalid path: {options.file}")
         if not path.exists():
             return self._error(f"No such file: {options.file}")
-        out_path = ws.resolve(str(Path(options.file).parent / (Path(options.file).name + ".gz")), write=True)
+        output_name = str(Path(options.file).parent / (Path(options.file).name + ".gz"))
+        output_probe = ws.resolve(output_name)
+        out_path = ws.resolve(
+            output_name,
+            access="remove" if output_probe is not None and output_probe.exists() else "create",
+        )
         if out_path is None or (
             not options.keep
-            and ws.resolve(options.file, write=True, modify_entry=True) is None
+            and ws.resolve(options.file, access="remove") is None
         ):
             return self._error("gzip: read-only workspace inputs cannot be modified")
         if out_path.exists() and not options.force:
@@ -1055,13 +820,9 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("unzip", args, configure)
         path = ws.resolve(options.file)
-        destination = ws.resolve(
-            str(Path(options.directory) / ".workspace-extract-probe"),
-            write=True,
-            modify_entry=True,
-        )
-        if destination is not None:
-            destination = destination.parent
+        destination = ws.resolve(options.directory)
+        if destination is not None and not destination.exists():
+            destination = ws.resolve(options.directory, access="create")
         if path is None:
             return self._error(f"Invalid path: {options.file}")
         if destination is None:
@@ -1082,6 +843,12 @@ class WorkspaceShellTool(BaseTool):
                         return self._error(
                             f"Symbolic links are not allowed in archives: {member.filename}"
                         )
+                    logical_member = str(Path(options.directory) / member.filename)
+                    access = "remove" if member_path.exists() else "create"
+                    if ws.resolve(logical_member, access=access) is None:
+                        return self._error(
+                            f"Archive member targets a locked path: {member.filename}"
+                        )
                 zf.extractall(destination)
             return self._ok(f"Extracted to {options.directory}")
         except Exception as e:
@@ -1098,13 +865,9 @@ class WorkspaceShellTool(BaseTool):
 
         options = self._parse_args("tar", args, configure)
         path = ws.resolve(options.file)
-        destination = ws.resolve(
-            str(Path(options.directory) / ".workspace-extract-probe"),
-            write=True,
-            modify_entry=True,
-        )
-        if destination is not None:
-            destination = destination.parent
+        destination = ws.resolve(options.directory)
+        if destination is not None and not destination.exists():
+            destination = ws.resolve(options.directory, access="create")
         if path is None:
             return self._error(f"Invalid path: {options.file}")
         if destination is None:
@@ -1117,6 +880,18 @@ class WorkspaceShellTool(BaseTool):
         try:
             destination.mkdir(parents=True, exist_ok=True)
             with tarfile.open(path, mode) as tf:
+                for member in tf.getmembers():
+                    member_path = (destination / member.name).resolve()
+                    try:
+                        member_path.relative_to(destination.resolve())
+                    except ValueError:
+                        return self._error(f"Unsafe path in archive: {member.name}")
+                    logical_member = str(Path(options.directory) / member.name)
+                    access = "remove" if member_path.exists() else "create"
+                    if ws.resolve(logical_member, access=access) is None:
+                        return self._error(
+                            f"Archive member targets a locked path: {member.name}"
+                        )
                 tf.extractall(destination, filter="data")
             return self._ok(f"Extracted to {options.directory}")
         except Exception as e:

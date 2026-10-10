@@ -89,6 +89,9 @@ def test_session_state_is_restored_and_active_work_is_interrupted(tmp_path):
     session = registry.default_session
     session.initial_prompt = "Persist this prompt"
     session.settings["ranking_metric"] = "rmse"
+    protected = session.workspace / "protected.txt"
+    protected.write_text("keep")
+    session.workspace_manager.set_locked("protected.txt", True)
     session.sr_interaction_manager.command("message", "queued guidance")
     session.sr_interaction_manager.start_agent_execution()
     session.state = "running"
@@ -102,6 +105,8 @@ def test_session_state_is_restored_and_active_work_is_interrupted(tmp_path):
     recovered = restored.default_session
     assert recovered.initial_prompt == "Persist this prompt"
     assert recovered.settings["ranking_metric"] == "rmse"
+    assert recovered.workspace_manager.lock_rules == {"protected.txt": True}
+    assert recovered.workspace_manager.is_locked("protected.txt") is True
     assert recovered.state == "idle"
     assert recovered.result["status"] == "interrupted"
     events = recovered.sr_interaction_manager.get_recent_events()["events"]

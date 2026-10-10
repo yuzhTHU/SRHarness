@@ -30,8 +30,7 @@ class TestEvaluateCodeTool:
                 "    return {'a': 2.0, 'b': 1.0, 'description': '2.0 * x1 + 1.0'}"
             ),
             predict_code=(
-                "def predict(data, model):\n"
-                "    return model['a'] * data['x1'] + model['b']"
+                "def predict(data, model):\n    return model['a'] * data['x1'] + model['b']"
             ),
         )
 
@@ -61,10 +60,7 @@ class TestEvaluateCodeTool:
         y = np.array([1.0, 4.0, 9.0])
 
         result = self.make_tool(X, y).execute(
-            model_code=(
-                "def build_model(data):\n"
-                "    return {'power': 2, 'description': 'x1**2'}"
-            ),
+            model_code=("def build_model(data):\n    return {'power': 2, 'description': 'x1**2'}"),
             predict_code=(
                 "import numpy as np\n\n"
                 "def predict(data, model):\n"
@@ -111,8 +107,7 @@ class TestEvaluateCodeTool:
         result = tool.execute(
             model_code="def build_model(data):\n    return {'a': 2.0, 'b': 1.0}",
             predict_code=(
-                "def predict(data, model):\n"
-                "    return model['a'] * data['x1'] + model['b']"
+                "def predict(data, model):\n    return model['a'] * data['x1'] + model['b']"
             ),
             y="z",
         )
@@ -125,42 +120,39 @@ class TestEvaluateCodeTool:
         y = np.array([0.0, 1.0])
 
         result = self.make_tool(X, y).execute(
-            model_code=(
-                "def build_model(data):\n"
-                "    return {'description': 'sin(x1)'}"
-            ),
+            model_code=("def build_model(data):\n    return {'description': 'sin(x1)'}"),
             predict_code="def predict(data, model):\n    return np.sin(data['x1'])",
         )
 
         assert result["data_split_results"]["train"]["metrics"]["mse"] < 1e-12
 
-    def test_invalid_code_returns_tool_error(self):
+    def test_operating_system_module_is_confined_by_the_sandbox(self):
         tool = self.make_tool({"x1": np.array([1.0])}, np.array([1.0]))
         result = tool(
             "import os\n\ndef build_model(data):\n    return 1",
             "def predict(data, model):\n    return data['x1']",
         )
 
-        assert result.ok is False
-        assert "Unauthorized module: os" in result.result_str
+        assert result.ok is True
+        assert result.result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_missing_required_output_raises(self):
         tool = self.make_tool({"x1": np.array([1.0])}, np.array([1.0]))
 
-        with pytest.raises(Exception, match="signature must be"):
+        with pytest.raises(Exception, match=r"signature \(data\)"):
             tool.execute(
                 "def build_model(x):\n    return x",
                 "def predict(data, model):\n    return data['x1']",
             )
 
-    def test_extra_top_level_statement_is_rejected(self):
+    def test_extra_top_level_statement_is_isolated_instead_of_rejected(self):
         tool = self.make_tool({"x1": np.array([1.0])}, np.array([1.0]))
 
-        with pytest.raises(Exception, match="top-level imports and one function"):
-            tool.execute(
-                "constant = 1\n\ndef build_model(data):\n    return constant",
-                "def predict(data, model):\n    return data['x1']",
-            )
+        result = tool.execute(
+            "constant = 1\n\ndef build_model(data):\n    return constant",
+            "def predict(data, model):\n    return data['x1']",
+        )
+        assert result["data_split_results"]["train"]["metrics"]["mse"] == 0.0
 
     def test_registered_as_base_tool(self):
         assert BaseTool.create("evaluate_code", create_instance=False) is EvaluateCodeTool

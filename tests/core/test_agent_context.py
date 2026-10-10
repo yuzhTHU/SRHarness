@@ -6,7 +6,7 @@ import numpy as np
 from sr_harness.agents.sr_agent import SRAgent
 from sr_harness.core import AgentContext
 from sr_harness.evaluator import DefaultEvaluator
-from sr_harness.tools.workspace_shell import Workspace
+from sr_harness.runtime.workspace import Workspace
 
 
 class CountingSplitter(DefaultEvaluator):

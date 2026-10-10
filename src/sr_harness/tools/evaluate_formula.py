@@ -35,15 +35,11 @@ class EvaluateTool(BaseTool):
             show_diagnostics: Whether the result should include a compact residual error profile,
                 the worst samples, and the strongest residual-variable correlations.
         """
-        split_context = self.context.train_split
-        data = split_context.data
+        data = self.context.data
         y = y or self.context.target
         y = y.strip().strip('"').strip("'")
         eq_y = self.parse_formula(y)
         eq_f = self.parse_formula(f)
-        num_nodes = split_context.num_nodes
-        y_true = np.asarray(eq_y.eval(data, num_nodes=num_nodes))
-
         variables = [var for var in eq_f.iter_preorder() if isinstance(var, engine.Variable)]
         for var in variables:
             if var.name not in data:
@@ -56,6 +52,10 @@ class EvaluateTool(BaseTool):
             show_diagnostics=show_diagnostics,
             fit=fit,
         )
+        split_context = self.context.train_split
+        y_true = np.asarray(eq_y.eval(
+            split_context.data, num_nodes=split_context.num_nodes,
+        ))
         parameters = engine.parameter_values(self.parse_formula(evaluation["formula"])) if fit else None
         return {
             **evaluation,

@@ -11,7 +11,7 @@ from sr_harness.core import (
     update_context_data_descriptions,
 )
 from sr_harness.tools.validate_context_data import ValidateContextDataTool
-from sr_harness.tools.workspace_shell import Workspace
+from sr_harness.runtime.workspace import Workspace
 
 
 def write_manifest(directory, manifest):

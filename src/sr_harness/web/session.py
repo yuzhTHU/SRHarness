@@ -34,7 +34,7 @@ from ..evaluator.load_custom_evaluator import (
 from ..runtime import InteractionManager, ModelRouter, SRInteractionManager
 from ..skills import SkillManager
 from ..tools import BaseTool, ModelTestTool, ValidateEvaluatorTool
-from ..tools.workspace_shell import Workspace
+from ..runtime.workspace import Workspace
 from .demo_data import build_demo
 
 
@@ -99,10 +99,14 @@ class InteractiveSession:
             else Path(log_dir).expanduser().resolve() / self.run_id
         )
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.workspace_manager = Workspace(
-            workspace_files=workspace_files,
-            path=workspace_path,
+        workspace_root = (
+            Path(workspace_path)
+            if workspace_path is not None
+            else Path(tempfile.mkdtemp(prefix="sr_workspace_"))
         )
+        self.workspace_manager = Workspace(workspace_root)
+        for source in workspace_files or ():
+            self.workspace_manager.mount(source)
         self.workspace = self.workspace_manager.path
         self.evaluator_workspace = self.workspace / "context.evaluator"
         self.context = AgentContext(workspace=self.workspace_manager)
@@ -208,8 +212,7 @@ class InteractiveSession:
 
     def close(self) -> None:
         """Release temporary resources owned by the session."""
-        if not self.workspace_manager.retain:
-            self.workspace_manager.cleanup()
+        self.workspace_manager.close()
 
     def interrupt_active_work(self) -> None:
         """Force active model/tool operations toward a safe shutdown boundary."""
@@ -271,6 +274,7 @@ class InteractiveSession:
                 "evaluator_agent_settings": self.evaluator_agent_settings,
                 "initial_prompt": self.initial_prompt,
                 "prompt_overrides": self.prompt_overrides,
+                "workspace_lock_rules": self.workspace_manager.lock_rules,
                 "variable_descriptions": self.variable_descriptions,
                 "result": self.result,
                 "data_state": self.data_state,
@@ -293,7 +297,7 @@ class InteractiveSession:
         expected_fields = {
             "version", "run_id", "state", "settings", "pending_settings",
             "data_agent_settings", "evaluator_agent_settings", "initial_prompt",
-            "prompt_overrides", "variable_descriptions", "result", "data_state",
+            "prompt_overrides", "workspace_lock_rules", "variable_descriptions", "result", "data_state",
             "data_result", "data_agent_buffer", "evaluator_agent_state",
             "evaluator_agent_result", "context_target", "evaluator", "run_state",
             "interactions",
@@ -319,6 +323,7 @@ class InteractiveSession:
             self.evaluator_agent_settings = restored_evaluator_settings
             self.initial_prompt = str(snapshot["initial_prompt"])
             self.prompt_overrides = dict(snapshot["prompt_overrides"])
+            self.workspace_manager.load_lock_rules(dict(snapshot["workspace_lock_rules"]))
             if "system" in self.prompt_overrides:
                 self.prompt_overrides["system"] = SRAgentInteractive.normalize_system_prompt(
                     self.prompt_overrides["system"]
@@ -1608,17 +1613,17 @@ class InteractiveSession:
                 self.pending_settings = pending
         return self.snapshot()
 
-    def resolve(self, path, *, write: bool = False):
+    def resolve(self, path, *, access: str = "read"):
         """Resolve .
 
         Args:
             path: Filesystem path.
-            write: Whether the caller intends to modify the path.
+            access: Intended workspace operation.
 
         Returns:
             The resolved readable or writable path.
         """
-        candidate = self.workspace_manager.resolve(str(path), write=write)
+        candidate = self.workspace_manager.resolve(str(path), access=access)
         if candidate is None:
             raise ValueError("Path must stay inside the workspace")
         return candidate
