@@ -1,0 +1,93 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/publish-docker.yml"
+      - "Dockerfile"
+      - "pyproject.toml"
+      - "src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-docker
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.changes.outputs.publish }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect a substantive image change
+        id: changes
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          publish = os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+          if not publish:
+              before = os.environ["BEFORE"]
+              names = subprocess.check_output([
+                  "git", "diff", "--name-only", before, os.environ["GITHUB_SHA"],
+              ], text=True).splitlines()
+              publish = any(
+                  name == "Dockerfile"
+                  or name == ".dockerignore"
+                  or name == ".github/workflows/publish-docker.yml"
+                  or name.startswith("src/")
+                  for name in names
+              )
+              if not publish and "pyproject.toml" in names:
+                  previous = subprocess.check_output(
+                      ["git", "show", f"{before}:pyproject.toml"], text=True,
+                  )
+                  current = open("pyproject.toml", encoding="utf-8").read()
+                  normalize = lambda value: re.sub(
+                      r'(?m)^version\s*=\s*"[^"]+"\s*$', 'version = "<ignored>"', value,
+                  )
+                  publish = normalize(previous) != normalize(current)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"publish={str(publish).lower()}", file=output)
+          PY
+
+  publish:
+    needs: changes
+    if: needs.changes.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: yumeoww
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and publish latest image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: yumeoww/sr-harness:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/yuzhTHU/SRHarness
+            org.opencontainers.image.revision=${{ github.sha }}

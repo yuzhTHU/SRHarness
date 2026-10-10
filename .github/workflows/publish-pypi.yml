@@ -1,0 +1,91 @@
+name: Publish Python package
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - pyproject.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect project version change
+        id: version
+        shell: bash
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          current = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
+          changed = os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+          if not changed:
+              previous_source = subprocess.check_output([
+                  "git", "show", f"{os.environ['BEFORE']}:pyproject.toml",
+              ], text=True)
+              previous = tomllib.loads(previous_source)["project"]["version"]
+              changed = current != previous
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"changed={str(changed).lower()}", file=output)
+              print(f"version={current}", file=output)
+          PY
+
+  build:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: sr-harness-${{ needs.version.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - version
+      - build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sr-harness/${{ needs.version.outputs.version }}/
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: sr-harness-${{ needs.version.outputs.version }}
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}

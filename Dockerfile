@@ -7,7 +7,6 @@ LABEL org.opencontainers.image.title="SRHarness" \
       org.opencontainers.image.description="A harness for agentic symbolic regression" \
       org.opencontainers.image.url="https://github.com/yuzhTHU/SRHarness" \
       org.opencontainers.image.source="https://github.com/yuzhTHU/SRHarness" \
-      org.opencontainers.image.version="1.0.1" \
       org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
