@@ -5,11 +5,7 @@ on:
     branches:
       - master
     paths:
-      - ".dockerignore"
-      - ".github/workflows/publish-docker.yml"
-      - "Dockerfile"
       - "pyproject.toml"
-      - "src/**"
   workflow_dispatch:
 
 permissions:
@@ -24,12 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.changes.outputs.publish }}
+      version: ${{ steps.changes.outputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Detect a substantive image change
+      - name: Detect project version change
         id: changes
         shell: bash
         env:
@@ -37,33 +34,22 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          import re
           import subprocess
+          import tomllib
+          from pathlib import Path
 
           publish = os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+          current = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
           if not publish:
               before = os.environ["BEFORE"]
-              names = subprocess.check_output([
-                  "git", "diff", "--name-only", before, os.environ["GITHUB_SHA"],
-              ], text=True).splitlines()
-              publish = any(
-                  name == "Dockerfile"
-                  or name == ".dockerignore"
-                  or name == ".github/workflows/publish-docker.yml"
-                  or name.startswith("src/")
-                  for name in names
+              previous_source = subprocess.check_output(
+                  ["git", "show", f"{before}:pyproject.toml"], text=True,
               )
-              if not publish and "pyproject.toml" in names:
-                  previous = subprocess.check_output(
-                      ["git", "show", f"{before}:pyproject.toml"], text=True,
-                  )
-                  current = open("pyproject.toml", encoding="utf-8").read()
-                  normalize = lambda value: re.sub(
-                      r'(?m)^version\s*=\s*"[^"]+"\s*$', 'version = "<ignored>"', value,
-                  )
-                  publish = normalize(previous) != normalize(current)
+              previous = tomllib.loads(previous_source)["project"]["version"]
+              publish = current != previous
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               print(f"publish={str(publish).lower()}", file=output)
+              print(f"version={current}", file=output)
           PY
 
   publish:
@@ -80,12 +66,14 @@ jobs:
         with:
           username: yumeoww
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build and publish latest image
+      - name: Build and publish release image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: yumeoww/sr-harness:latest
+          tags: |
+            yumeoww/sr-harness:${{ needs.changes.outputs.version }}
+            yumeoww/sr-harness:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
