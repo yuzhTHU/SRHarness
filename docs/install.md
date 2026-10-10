@@ -34,14 +34,14 @@ python -c "import sr_harness, sr_harness_engine; print('SRHarness is ready')"
 
 ```bash
 docker volume create sr-harness-data
-docker pull yumeoww/sr-harness:1.0.0
+docker pull yumeoww/sr-harness:1.0.1
 docker run --detach \
   --name sr-harness \
   --restart unless-stopped \
   --env-file .env \
   --publish 127.0.0.1:8000:8000 \
   --volume sr-harness-data:/data \
-  yumeoww/sr-harness:1.0.0
+  yumeoww/sr-harness:1.0.1
 ```
 
 在浏览器中打开 `http://127.0.0.1:8000/`。名为 `sr-harness-data` 的 Docker volume 会持久保存对话注册表、各对话工作区和运行记录；删除或更新容器不会删除其中的数据。可以通过以下命令查看日志或管理服务：

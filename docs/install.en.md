@@ -34,14 +34,14 @@ The official image is published on [Docker Hub](https://hub.docker.com/r/yumeoww
 
 ```bash
 docker volume create sr-harness-data
-docker pull yumeoww/sr-harness:1.0.0
+docker pull yumeoww/sr-harness:1.0.1
 docker run --detach \
   --name sr-harness \
   --restart unless-stopped \
   --env-file .env \
   --publish 127.0.0.1:8000:8000 \
   --volume sr-harness-data:/data \
-  yumeoww/sr-harness:1.0.0
+  yumeoww/sr-harness:1.0.1
 ```
 
 Open `http://127.0.0.1:8000/` in a browser. The `sr-harness-data` Docker volume persistently stores the conversation registry, conversation workspaces, and run records; removing or replacing the container does not remove this data. Use these commands to inspect logs or manage the service:
