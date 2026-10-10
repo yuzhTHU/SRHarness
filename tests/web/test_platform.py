@@ -38,6 +38,10 @@ def platform(tmp_path):
 
 def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     client, session = platform
+    assert session._capability_skill_manager.skill_directories["custom"] == (
+        session.workspace / "skills"
+    )
+    assert not (session.workspace / "skills").exists()
     page = client.get('/')
     assert page.status_code == 200
     assert 'class="badge"' not in page.text
@@ -446,6 +450,8 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     ) in page.text
     assert 'id="data-agent-safety"' in page.text
     assert "api('/api/workspace/lock',{path,locked},'PUT')" in page.text
+    assert "mounted?'workspace-mounted':'workspace-locked'" in page.text
+    assert "label=_(mounted?'readOnlyItem':'lockedItem')" in page.text
     assert 'href="https://yuzhthu.github.io/SRHarness/web-ui/#agent-safety"' in page.text
     assert 'id="context-data-guide-link"' in page.text
     assert 'href="https://yuzhthu.github.io/SRHarness/context-data/"' in page.text
@@ -1141,7 +1147,8 @@ def test_provider_api_key_is_synced_to_dotenv_without_being_returned(
         assert response.json()['stored_in_env_file'] is True
         assert 'test-secret-key' not in response.text
         assert dotenv_values(env_path)['OPENROUTER_API_KEY'] == 'test-secret-key'
-        assert os.environ['OPENROUTER_API_KEY'] == 'test-secret-key'
+        assert 'OPENROUTER_API_KEY' not in os.environ
+        assert session.context.args.api_environment['OPENROUTER_API_KEY'] == 'test-secret-key'
 
         assert client.get(
             '/api/session/provider-credential', params={'provider': 'unknown'},

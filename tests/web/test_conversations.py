@@ -61,6 +61,9 @@ def test_conversation_can_be_exported_and_archived_without_deleting_state(tmp_pa
         created = client.post("/api/conversations", json={"name": "Export me"}).json()
         conversation_id = created["id"]
         assert client.put("/api/workspace/upload?path=notes.txt", content=b"retained").status_code == 200
+        assert client.put("/api/session/provider-credential", json={
+            "provider": "openrouter", "api_key": "must-not-be-exported",
+        }).status_code == 200
 
         exported = client.get(f"/api/conversations/{conversation_id}/export")
         assert exported.status_code == 200
@@ -68,6 +71,8 @@ def test_conversation_can_be_exported_and_archived_without_deleting_state(tmp_pa
             assert json.loads(archive.read("conversation.json"))["name"] == "Export me"
             assert archive.read("workspace/notes.txt") == b"retained"
             assert "interactive-session.json" in archive.namelist()
+            assert not any(name.endswith("/.env") for name in archive.namelist())
+            assert b"must-not-be-exported" not in exported.content
 
         archived = client.delete(f"/api/conversations/{conversation_id}").json()
         assert archived["archived"] == conversation_id
@@ -119,20 +124,23 @@ def test_session_state_is_restored_and_active_work_is_interrupted(tmp_path):
     restored.close()
 
 
-def test_session_snapshots_are_written_below_explicit_save_path(tmp_path):
+def test_conversation_storage_separates_workspace_session_and_run_data(tmp_path):
     workspace_dir = tmp_path / "workspace-root"
     save_path = tmp_path / "saved-run"
     registry = ConversationRegistry(
         workspace_dir,
-        initial_run_dir=save_path,
+        run_root=save_path / "runs",
         persist_sessions=True,
         persistence_interval=60,
     )
     conversation_id = registry.list("browser")["conversations"][0]["id"]
     registry.default_session.initial_prompt = "durable"
     registry.persist()
-    snapshot = save_path / "sessions" / f"{conversation_id}.json"
+    snapshot = workspace_dir / "sessions" / conversation_id / "interactive-session.json"
     assert json.loads(snapshot.read_text())["initial_prompt"] == "durable"
+    assert registry.default_session.workspace == workspace_dir / "workspaces" / conversation_id
+    assert registry.default_session.env_path == workspace_dir / "sessions" / conversation_id / ".env"
+    assert registry.default_session.run_dir == save_path / "runs" / conversation_id
     registry.close()
 
 

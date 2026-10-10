@@ -25,7 +25,7 @@ Open `http://127.0.0.1:8000/`.
 | Center tabs | Data Preparation, Task Setup, Symbolic Regression |
 | Right panel | Data and relationship previews, or search tree and candidates |
 
-Each conversation owns a workspace and an `InteractiveSession`. Switching conversations therefore switches data, timelines, settings, and search state.
+Each conversation owns an Agent workspace, a private session directory, and an `InteractiveSession`. Switching conversations therefore switches data, timelines, settings, and search state. See [Save paths and workspaces](sr-harness.en.md#save-paths-and-workspaces) for the directory layout.
 
 ## 1. Data Preparation
 

@@ -111,10 +111,16 @@ class InteractiveSession:
         self.evaluator_workspace = self.workspace / "context.evaluator"
         self.context = AgentContext(workspace=self.workspace_manager)
         self.context.args.save_path = str(self.run_dir)
-        self._capability_skill_manager = SkillManager()
+        self._capability_skill_manager = SkillManager(
+            custom_directory=self.workspace / "skills",
+        )
         self.context.args.skill_manager = self._capability_skill_manager
-        self.env_path = Path(env_path or Path.cwd() / ".env").resolve()
+        self.env_path = Path(env_path or self.run_dir / ".env").resolve()
         env_values = dotenv_values(self.env_path) if self.env_path.exists() else {}
+        self.context.args.api_environment = {
+            str(name): str(value) for name, value in env_values.items()
+            if value is not None
+        }
         file_http_proxy = env_values.get("HTTP_PROXY") or env_values.get("http_proxy")
         file_https_proxy = env_values.get("HTTPS_PROXY") or env_values.get("https_proxy")
         if file_http_proxy:
@@ -122,12 +128,12 @@ class InteractiveSession:
         if file_https_proxy:
             os.environ.setdefault("HTTPS_PROXY", file_https_proxy)
         configured_proxy = (
-            os.environ.get("HTTPS_PROXY")
+            file_https_proxy
+            or file_http_proxy
+            or os.environ.get("HTTPS_PROXY")
             or os.environ.get("https_proxy")
             or os.environ.get("HTTP_PROXY")
             or os.environ.get("http_proxy")
-            or file_https_proxy
-            or file_http_proxy
             or ""
         )
         self.settings = {
@@ -209,10 +215,6 @@ class InteractiveSession:
         self.sr_agent = None
         self._restored_data_agent_buffer = None
         self._manifest_description_revision = None
-
-    def close(self) -> None:
-        """Release temporary resources owned by the session."""
-        self.workspace_manager.close()
 
     def interrupt_active_work(self) -> None:
         """Force active model/tool operations toward a safe shutdown boundary."""
@@ -846,7 +848,7 @@ class InteractiveSession:
             variable = PROVIDER_API_KEY_VARIABLES[provider]
         except KeyError as exc:
             raise ValueError(f"Unsupported web model provider: {provider}") from exc
-        file_value = dotenv_values(self.env_path).get(variable) if self.env_path.exists() else None
+        file_value = self.context.args.api_environment.get(variable)
         configured = bool(file_value or os.environ.get(variable))
         return {
             "provider": provider,
@@ -856,7 +858,7 @@ class InteractiveSession:
         }
 
     def set_provider_credential(self, provider: str, api_key: str):
-        """Atomically update the project dotenv file and this server process.
+        """Atomically update this conversation's private dotenv file.
 
         Args:
             provider: The provider value.
@@ -878,7 +880,7 @@ class InteractiveSession:
                 api_key,
                 quote_mode="always",
             )
-            os.environ[status["env_var"]] = api_key
+            self.context.args.api_environment[status["env_var"]] = api_key
         return self.provider_credential(provider)
 
     def set_proxy(self, proxy: str) -> None:
@@ -895,11 +897,15 @@ class InteractiveSession:
         if proxy:
             set_key(self.env_path, "HTTP_PROXY", proxy, quote_mode="always")
             set_key(self.env_path, "HTTPS_PROXY", proxy, quote_mode="always")
+            self.context.args.api_environment["HTTP_PROXY"] = proxy
+            self.context.args.api_environment["HTTPS_PROXY"] = proxy
             for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
                 os.environ[name] = proxy
         else:
             unset_key(self.env_path, "HTTP_PROXY")
             unset_key(self.env_path, "HTTPS_PROXY")
+            self.context.args.api_environment.pop("HTTP_PROXY", None)
+            self.context.args.api_environment.pop("HTTPS_PROXY", None)
             for name in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
                 if previous and os.environ.get(name) == previous:
                     os.environ.pop(name, None)
@@ -1353,6 +1359,7 @@ class InteractiveSession:
             agent = SRAgentInteractive(
                 interaction_manager=manager,
                 context=self.context,
+                skill_manager=self._capability_skill_manager,
                 **options,
             )
             agent.prompt_overrides = self.prompt_overrides.copy()
@@ -1550,6 +1557,7 @@ class InteractiveSession:
                 model=settings["llm_model"],
                 tool_list=[probe_tool],
                 tool_parser_name=settings["tool_parser"],
+                environment=self.context.args.api_environment,
             )
             plain_rows = list(api(
                 "Reply with exactly SRHARNESS_OK.",

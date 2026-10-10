@@ -81,7 +81,7 @@ Common credentials are:
 | SiliconFlow | `SILICONFLOW_API_KEY` | [SiliconFlow API Keys](https://cloud.siliconflow.cn/account/ak) |
 | OpenAI/Azure OpenAI | `OPENAI_API_KEY`, `OPENAI_ENDPOINT`, `OPENAI_API_VERSION` | [OpenAI API Keys](https://platform.openai.com/api-keys) / [Azure Portal](https://portal.azure.com/) |
 
-You can also configure API keys in the [WebUI](web-ui.md). A configured key is saved to the `.env` file in the directory where `sr-harness run` was started and applied to the current server process.
+You can also configure API keys in the [WebUI](web-ui.md). A configured key is saved to the current conversation's private `sessions/{CONVERSATION_ID}/.env` and is not exposed to Agent workspaces or other conversations.
 
 ## Proxy configuration
 
@@ -92,7 +92,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-You can also configure a network proxy in the [WebUI](web-ui.md). The configured address is used for HTTP and HTTPS requests and saved to `.env`.
+You can also configure a network proxy in the [WebUI](web-ui.md). The configured address is used for HTTP and HTTPS requests and saved to the current conversation's private `.env`.
 
 ## Verify and run
 

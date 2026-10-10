@@ -148,6 +148,14 @@
 .evaluator-agent-settings .settings-form .api-key-setting{grid-column:1/-1;grid-template-columns:minmax(150px,.45fr) minmax(220px,1.2fr)}
 html:not(.ui-ready) body{visibility:hidden}
 @media(max-width:520px){.settings-actions{align-items:center;flex-wrap:wrap}.settings-actions>.small.muted{width:100%;text-align:left!important}.settings-actions>.spacer{display:none}.evaluator-agent-settings .settings-form .api-key-setting{grid-template-columns:1fr}}
+</style><style>
+.workspace-readonly svg{width:12px;height:12px}
+.workspace-readonly.workspace-mounted{color:#6f8eae}
+.workspace-readonly.workspace-locked{color:#9d865d}
+.file:hover .workspace-readonly.workspace-mounted{color:#496f98}
+.file:hover .workspace-readonly.workspace-locked{color:#78613b}
+:root[data-theme="dark"] .workspace-readonly.workspace-mounted{color:#88acd1}
+:root[data-theme="dark"] .workspace-readonly.workspace-locked{color:#c2a671}
 </style></head>
 <body>
 <header><div class="logo">SR<span>Harness</span></div><span class="spacer"></span><span id="connection">正在连接</span><a id="documentation-link" class="header-toggle header-documentation" href="https://yuzhthu.github.io/SRHarness/" target="_blank" rel="noopener" aria-label="打开文档" title="打开文档"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M3 3.5h4.2c1 0 1.8.8 1.8 1.8v9.2c0-1-.8-1.8-1.8-1.8H3zM15 3.5h-4.2c-1 0-1.8.8-1.8 1.8v9.2c0-1 .8-1.8 1.8-1.8H15z"/></svg></a><button id="theme-toggle" class="header-toggle" type="button" aria-label="切换到暗色主题" title="切换到暗色主题">☾</button><button id="language-toggle" class="header-toggle language-toggle" type="button" aria-label="Switch to English" title="Switch to English">EN</button><span id="status">连接中</span></header><div id="toast-stack" class="toast-stack" aria-live="polite"></div>
@@ -1170,7 +1178,7 @@ function workspaceItemIcon(item){
   if(extension==='npy'){icon.classList.add('type-npy');icon.innerHTML='<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M3 1.5h7l4 4v11H3z"/><path d="M10 1.5v4h4" fill="none"/><rect class="npy-cell" x="5" y="8" width="2.3" height="2.3" rx=".35"/><rect class="npy-cell" x="8.1" y="8" width="2.3" height="2.3" rx=".35"/><rect class="npy-cell" x="11.2" y="8" width="1.3" height="2.3" rx=".35"/><rect class="npy-cell" x="5" y="11.1" width="2.3" height="2.3" rx=".35"/><rect class="npy-cell" x="8.1" y="11.1" width="2.3" height="2.3" rx=".35"/><rect class="npy-cell" x="11.2" y="11.1" width="1.3" height="2.3" rx=".35"/></svg>';return icon}
   icon.classList.add('file-icon');icon.innerHTML='<svg viewBox="0 0 16 18" aria-hidden="true"><path d="M3 1.5h6l4 4v11H3z"/><path d="M9 1.5v4h4" fill="none"/></svg>';return icon
 }
-function workspaceReadonlyBadge(item){const badge=el('span',undefined,'workspace-readonly'),label=_(item.mounted?'readOnlyItem':'lockedItem');badge.innerHTML='<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="6" width="9" height="6.5" rx="1.5"/><path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6"/></svg>';badge.title=label;badge.setAttribute('aria-label',label);return badge}
+function workspaceReadonlyBadge(item){const mounted=Boolean(item.mounted),badge=el('span',undefined,'workspace-readonly '+(mounted?'workspace-mounted':'workspace-locked')),label=_(mounted?'readOnlyItem':'lockedItem');badge.innerHTML=mounted?'<svg viewBox="0 0 14 14" aria-hidden="true"><path d="m5.25 8.75-1.1 1.1a2.15 2.15 0 0 1-3.05-3.04l1.55-1.55a2.15 2.15 0 0 1 3.04 0"/><path d="m8.75 5.25 1.1-1.1a2.15 2.15 0 0 1 3.05 3.04l-1.55 1.55a2.15 2.15 0 0 1-3.04 0"/><path d="m4.75 7 4.5 0"/></svg>':'<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2.5" y="6" width="9" height="6.5" rx="1.5"/><path d="M4.5 6V4.5a2.5 2.5 0 0 1 5 0V6"/></svg>';badge.title=label;badge.setAttribute('aria-label',label);return badge}
 function updateWorkspaceEditorIcon(){const item=workspaceEditItem?{...workspaceEditItem,name:$('workspace-name-input').value||workspaceEditItem.name}:{directory:true,name:''},source=workspaceItemIcon(item),target=$('workspace-editor-icon');target.className='workspace-editor-icon '+[...source.classList].join(' ');target.innerHTML=source.innerHTML}
 function closeWorkspaceNameEditor(){workspaceEditItem=null;$('workspace-name-editor').hidden=true;$('workspace-name-input').value=''}
 function openWorkspaceNameEditor(item=null){workspaceEditItem=item;$('workspace-name-input').value=item?.name||'';$('workspace-name-input').placeholder=_(item?'renamePrompt':'newFolderPrompt');updateWorkspaceEditorIcon();$('workspace-name-editor').hidden=false;requestAnimationFrame(()=>{$('workspace-name-input').focus();$('workspace-name-input').select()})}

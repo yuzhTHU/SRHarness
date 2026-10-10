@@ -31,12 +31,16 @@ class SkillManager:
         custom_directory: str | Path | None = None,
     ):
         package_directory = Path(__file__).parent
+        runtime_directory = Path(tempfile.mkdtemp(prefix="sr_agent_runtime_skills_"))
         self.skill_directories: dict[str, Path] = {
             "built-in": Path(built_in_directory or package_directory),
-            "runtime": Path(tempfile.mkdtemp(prefix="sr_agent_runtime_skills_")),
-            "custom": Path(custom_directory or package_directory / "custom"),
+            "runtime": runtime_directory,
+            "custom": (
+                Path(custom_directory)
+                if custom_directory is not None
+                else runtime_directory / "custom"
+            ),
         }
-        self.skill_directories["custom"].mkdir(parents=True, exist_ok=True)
 
     def register_tool_docs(self, tool_cls_list: Iterable[type]) -> None:
         """Materialize documentation from enabled tools as read-only runtime skills.

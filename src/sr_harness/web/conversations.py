@@ -63,7 +63,7 @@ class ConversationRegistry:
         *,
         workspace_files: list[str] | None = None,
         isolate_users: bool = False,
-        initial_run_dir: str | Path | None = None,
+        run_root: str | Path | None = None,
         persist_sessions: bool = False,
         persistence_interval: float = 5.0,
     ):
@@ -71,17 +71,17 @@ class ConversationRegistry:
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.workspace_dir / "conversations.json"
         self.workspaces_dir = self.workspace_dir / "workspaces"
-        self.runs_dir = self.workspace_dir / "runs"
+        self.sessions_dir = self.workspace_dir / "sessions"
+        self.runs_dir = (
+            Path(run_root).expanduser().resolve()
+            if run_root is not None else self.workspace_dir / "runs"
+        )
         self.workspaces_dir.mkdir(exist_ok=True)
-        self.runs_dir.mkdir(exist_ok=True)
+        self.sessions_dir.mkdir(exist_ok=True)
+        self.runs_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_files = list(workspace_files or [])
         self.isolate_users = bool(isolate_users)
         self.persist_sessions = bool(persist_sessions)
-        self.persistence_dir = (
-            Path(initial_run_dir).expanduser().resolve()
-            if self.persist_sessions and initial_run_dir is not None
-            else None
-        )
         self.persistence_interval = max(1.0, float(persistence_interval))
         self.lock = threading.RLock()
         self._persistence_stop = threading.Event()
@@ -90,7 +90,7 @@ class ConversationRegistry:
         self._sessions: dict[str, InteractiveSession] = {}
         self._records = self._load_records()
         if not self._records:
-            self._create_record(owner_id=None, run_dir=initial_run_dir)
+            self._create_record(owner_id=None)
         self.session_proxy = ConversationSessionProxy(self)
         if self.persist_sessions:
             self._persistence_thread = threading.Thread(
@@ -152,7 +152,6 @@ class ConversationRegistry:
         *,
         owner_id: str | None,
         name: str | None = None,
-        run_dir: str | Path | None = None,
     ) -> dict[str, Any]:
         if name is None:
             name = f"Conversation {len(self._records) + 1}"
@@ -162,20 +161,25 @@ class ConversationRegistry:
                 raise ValueError("Conversation name cannot be empty")
         conversation_id = uuid.uuid4().hex
         created_at = _now()
+        run_dir = self.runs_dir / conversation_id
+        try:
+            stored_run_dir = str(run_dir.relative_to(self.workspace_dir))
+        except ValueError:
+            stored_run_dir = str(run_dir)
         record = {
             "id": conversation_id,
             "name": name,
             "owner_id": owner_id,
             "workspace": str(Path("workspaces") / conversation_id),
-            "run_dir": str(Path(run_dir).expanduser().resolve()) if run_dir else str(Path("runs") / conversation_id),
+            "run_dir": stored_run_dir,
             "created_at": created_at,
             "updated_at": created_at,
             "archived": False,
         }
         workspace = self.workspace_dir / record["workspace"]
         workspace.mkdir(parents=True, exist_ok=False)
-        resolved_run_dir = self._record_path(record, "run_dir")
-        resolved_run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self._session_dir(record).mkdir(parents=True, exist_ok=True)
         self._records.append(record)
         self._write_records()
         return record
@@ -184,17 +188,23 @@ class ConversationRegistry:
         path = Path(record[field])
         return path if path.is_absolute() else self.workspace_dir / path
 
+    def _session_dir(self, record: dict[str, Any]) -> Path:
+        return self.sessions_dir / record["id"]
+
     def _session_for(self, record: dict[str, Any]) -> InteractiveSession:
         conversation_id = record["id"]
         session = self._sessions.get(conversation_id)
         if session is None:
             workspace = self._record_path(record, "workspace")
+            session_dir = self._session_dir(record)
             workspace.mkdir(parents=True, exist_ok=True)
+            session_dir.mkdir(parents=True, exist_ok=True)
             session = InteractiveSession(
                 self._record_path(record, "run_dir").parent,
                 workspace_files=self.workspace_files,
                 run_dir=self._record_path(record, "run_dir"),
                 workspace_path=workspace,
+                env_path=session_dir / ".env",
             )
             snapshot_path = self._session_snapshot_path(record)
             if self.persist_sessions and snapshot_path.is_file():
@@ -209,9 +219,7 @@ class ConversationRegistry:
         return session
 
     def _session_snapshot_path(self, record: dict[str, Any]) -> Path:
-        if self.persistence_dir is not None:
-            return self.persistence_dir / "sessions" / f"{record['id']}.json"
-        return self._record_path(record, "run_dir") / "interactive-session.json"
+        return self._session_dir(record) / "interactive-session.json"
 
     def persist(self) -> None:
         """Atomically persist every materialized InteractiveSession."""
@@ -341,6 +349,8 @@ class ConversationRegistry:
         if not root.exists():
             return
         for path in sorted(root.rglob("*")):
+            if path.name == ".env":
+                continue
             relative = Path(prefix) / path.relative_to(root)
             if path.is_symlink():
                 info = zipfile.ZipInfo(relative.as_posix())

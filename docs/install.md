@@ -83,7 +83,7 @@ OPENROUTER_API_KEY="sk-or-v1-..."
 | SiliconFlow | `SILICONFLOW_API_KEY` | [SiliconFlow API Keys](https://cloud.siliconflow.cn/account/ak) |
 | OpenAI/Azure OpenAI | `OPENAI_API_KEY`、`OPENAI_ENDPOINT`、`OPENAI_API_VERSION` | [OpenAI API Keys](https://platform.openai.com/api-keys) / [Azure Portal](https://portal.azure.com/) |
 
-也可以在 [SRHarness 网页工作台](web-ui.md) 中配置 API Key。配置的 API Key 将被保存到启动 `sr-harness run` 时所在目录的 `.env` 文件中，并应用到当前服务进程。
+也可以在 [SRHarness 网页工作台](web-ui.md) 中配置 API Key。配置的 API Key 将被保存到当前对话私有的 `sessions/{CONVERSATION_ID}/.env`，不会暴露给 Agent 工作区或其它对话。
 
 ## 代理
 
@@ -94,7 +94,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-也可以在 [SRHarness 网页工作台](web-ui.md) 中配置网络代理。配置的代理地址将被用于 HTTP 和 HTTPS 请求，并被保存到 `.env` 中。
+也可以在 [SRHarness 网页工作台](web-ui.md) 中配置网络代理。配置的代理地址将被用于 HTTP 和 HTTPS 请求，并保存到当前对话私有的 `.env` 中。
 
 ## 验证安装
 

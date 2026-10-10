@@ -6,7 +6,8 @@ import json
 import logging
 from abc import ABC, abstractmethod
 from functools import cached_property
-from typing import Any, Callable, Dict, Generator, List, Literal
+import os
+from typing import Any, Callable, Dict, Generator, List, Literal, Mapping
 
 from ..core import APICallResult, ToolCall
 from ..parser import BaseParser
@@ -31,11 +32,24 @@ class BaseAPI(ABC, FactoryMixin):
         model: str | None = None,
         tool_list: ToolList | None = None,
         tool_parser_name: ToolParserName = "text",
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         self.model = model
         self.tool_list = tool_list
         self.tool_parser_name = tool_parser_name
+        self.environment = environment if environment is not None else {}
         self.tool_parser = self.build_parser(tool_parser_name)
+
+    def getenv(self, name: str, default: str | None = None) -> str | None:
+        """Read a session-scoped provider setting before the process environment."""
+        return self.environment.get(name, os.environ.get(name, default))
+
+    def require_env(self, name: str) -> str:
+        """Return a required session-scoped provider setting."""
+        value = self.getenv(name)
+        if value is None:
+            raise KeyError(name)
+        return value
 
     def __call__(
         self,

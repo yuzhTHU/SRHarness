@@ -84,6 +84,7 @@ class SRAgent(Agent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
+        skill_manager: SkillManager | None = None,
     ) -> None:
         """初始化 Agent。
 
@@ -116,6 +117,7 @@ class SRAgent(Agent):
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与其它 Agent 共享的数据和工作区上下文。None 表示新建独立上下文。
+            skill_manager: Skill 注册表。None 表示使用临时的自定义 skill 目录。
         """
         # 配置日志：如果用户尚未配置，则根据 verbose 和 save_path 自动配置
         log_path = Path(save_path) / "info.log" if save_path is not None else None
@@ -177,7 +179,7 @@ class SRAgent(Agent):
         self._last_model_route = None
 
         # 关键组件
-        self.skill_manager = SkillManager()
+        self.skill_manager = skill_manager or SkillManager()
         requested_tool_names = set(self.DEFAULT_TOOLS if tools is None else tools)
         initially_selected = [
             tool_cls for tool_cls in tool_cls_list
@@ -838,6 +840,7 @@ class SRAgent(Agent):
                     model=route.model,
                     tool_list=self.tools,
                     tool_parser_name=self.tool_parser,
+                    environment=getattr(self.context.args, "api_environment", None),
                 )
             api = self._strong_api
         _logger.info(

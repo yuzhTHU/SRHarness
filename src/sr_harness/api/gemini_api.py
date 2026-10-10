@@ -34,7 +34,7 @@ class GeminiAPI(BaseAPI):
             messages = self.add_tool_description(messages)
         else:
             raise NotImplementedError("GeminiAPI does not support parser='openai' native tool calls.")
-        api_key = os.environ.get("GEMINI_API_KEY", None)
+        api_key = self.getenv("GEMINI_API_KEY")
         config = types.GenerateContentConfig(
             candidate_count=n,
             thinking_config=types.ThinkingConfig(

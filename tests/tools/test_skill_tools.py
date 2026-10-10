@@ -130,6 +130,26 @@ def _restore_tool_registry():
 
 
 class TestSkillManager:
+    def test_default_custom_directory_is_runtime_local(self):
+        manager = SkillManager()
+
+        assert manager.skill_directories["custom"].parent == manager.skill_directories["runtime"]
+        assert not manager.skill_directories["custom"].exists()
+
+    def test_custom_directory_is_created_only_when_a_skill_is_written(self, tmp_path):
+        custom = tmp_path / "skills"
+        manager = _test_manager(custom)
+
+        assert manager.load_skills() == {}
+        assert not custom.exists()
+
+        manager.set_skill(
+            "created-lazily",
+            "---\nname: created-lazily\ndescription: Created lazily.\n---\n\nContent.\n",
+        )
+
+        assert (custom / "created-lazily" / "SKILL.md").is_file()
+
     def test_directories_are_paths_and_tool_docs_are_runtime_skills(self, tmp_path):
         registry = _test_manager(tmp_path / "custom")
         assert all(isinstance(path, Path) for path in registry.skill_directories.values())

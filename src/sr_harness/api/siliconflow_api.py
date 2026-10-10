@@ -35,7 +35,7 @@ class SiliconFlowAPI(BaseAPI):
         load_dotenv()
         url = 'https://api.siliconflow.cn/v1/chat/completions'
         headers = {
-            'Authorization': f"Bearer {os.environ['SILICONFLOW_API_KEY']}",
+            'Authorization': f"Bearer {self.require_env('SILICONFLOW_API_KEY')}",
             'Content-Type': 'application/json',
         }
         payload = {

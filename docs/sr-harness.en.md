@@ -25,9 +25,24 @@ SRHarness commands use the form `sr-harness <command> [options]`:
 | `--isolate-users` | off | Isolate different users' conversations by persistent browser cookie |
 | `--mount` | empty | Files or directories to mount into each workspace; pass multiple paths as `--mount a b c ...` |
 
-SRHarness stores the conversation registry in `--workspace-dir` and creates an independent workspace directory for every conversation. By default, `--save-path` is also used as `workspace-dir`, although a different workspace directory can be specified explicitly. If neither `workspace-dir` nor `save-path` is specified, SRHarness uses a temporary workspace directory and conversation records cannot be persisted.
+### Save paths and workspaces
 
-When `--save-path` (or `--save-dir`) is specified explicitly, SRHarness periodically saves session snapshots under `save-path`. If the service is interrupted, restart it with the same `workspace-dir` and `save-path` to restore the timeline, data context, settings, Evaluator, search state, and related session data.
+SRHarness stores the conversation registry, per-conversation Agent workspaces, and private session state under `--workspace-dir`. By default, `--save-path` is also used as `workspace-dir`, although a different directory can be specified explicitly. If neither path is specified, SRHarness uses a temporary directory and conversation records cannot be persisted.
+
+```text
+{WORKSPACE_DIR}/
+├── conversations.json
+├── workspaces/
+│   └── {CONVERSATION_ID}/
+└── sessions/
+    └── {CONVERSATION_ID}/
+        ├── .env
+        └── interactive-session.json
+```
+
+Agent tools can access files under `workspaces/`. The corresponding `sessions/` directory stores that conversation's API keys, proxy configuration, and session snapshot without exposing them to workspace tools. Display names live only in `conversations.json`, so renaming a conversation does not change its paths. Conversation exports exclude `.env` files.
+
+When `--save-path` (or `--save-dir`) is specified explicitly, run logs are written to `{SAVE_PATH}/runs/{CONVERSATION_ID}` and the snapshot under `sessions/` is updated periodically. Restart with the same `workspace-dir` and `save-path` to recover timelines, data, settings, Evaluators, and search state after an interruption.
 
 Local service:
 

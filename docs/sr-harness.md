@@ -31,9 +31,22 @@ sr-harness run [options]
 
 ### 保存路径与工作区
 
-SRHarness 会在 `--workspace-dir` 中保存对话注册信息，并为每个对话创建独立的工作区目录。默认使用 `--save-path` 作为 `workspace-dir`，但也可以显式地指定不同的目录作为 `workspace-dir`。当 `workspace-dir` 和 `save-path` 均未指定时，将使用临时目录作为 `workspace-dir`，此时对话记录无法持久保存。
+SRHarness 会在 `--workspace-dir` 中保存对话注册表、每个对话的 Agent 工作区和私有会话状态。默认使用 `--save-path` 作为 `workspace-dir`，但也可以显式地指定不同目录。当两者均未指定时，将使用临时目录，此时对话记录无法持久保存。
 
-当显式指定了 `--save-path`（或 `--save-dir`）时，SRHarness 会定期将会话快照保存到 `save-path` 中。即使服务中断，也可以通过使用相同的 `workspace-dir` 和 `save-path` 重启以恢复时间线、数据上下文、设置、评估器、搜索等状态。
+```text
+{WORKSPACE_DIR}/
+├── conversations.json
+├── workspaces/
+│   └── {CONVERSATION_ID}/
+└── sessions/
+    └── {CONVERSATION_ID}/
+        ├── .env
+        └── interactive-session.json
+```
+
+`workspaces/` 中的内容可由 Agent 工具访问；`sessions/` 保存每个对话独立的 API Key、代理配置和会话快照，不向工作区工具暴露。对话显示名称只存储在 `conversations.json` 中，因此重命名不会改变目录路径。导出对话时不会包含 `.env`。
+
+当显式指定了 `--save-path`（或 `--save-dir`）时，SRHarness 会将各对话的运行日志写入 `{SAVE_PATH}/runs/{CONVERSATION_ID}`，并定期更新 `sessions/` 中的会话快照。即使服务中断，也可以使用相同的 `workspace-dir` 和 `save-path` 重启，以恢复时间线、数据、设置、评估器和搜索状态。
 
 ### 网络暴露
 

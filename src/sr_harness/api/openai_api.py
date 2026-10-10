@@ -102,9 +102,9 @@ class OpenAIAPI(BaseAPI):
         ## Ensure this is a generator
         yield from []
         client = AzureOpenAI(
-            api_version=os.environ["OPENAI_API_VERSION"],
-            azure_endpoint=os.environ["OPENAI_ENDPOINT"],
-            api_key=os.environ["OPENAI_API_KEY"],
+            api_version=self.require_env("OPENAI_API_VERSION"),
+            azure_endpoint=self.require_env("OPENAI_ENDPOINT"),
+            api_key=self.require_env("OPENAI_API_KEY"),
         )
         payload = {
             "input": deepcopy(messages), # 因为后面可能要 pop, 所以 deepcopy 一下
@@ -231,9 +231,9 @@ class OpenAIAPI(BaseAPI):
         ## Ensure this is a generator
         yield from []
         client = AzureOpenAI(
-            api_version=os.environ['OPENAI_API_VERSION'],
-            azure_endpoint=os.environ["OPENAI_OLDTIME_ENDPOINT"],
-            api_key=os.environ["OPENAI_API_KEY"],
+            api_version=self.require_env("OPENAI_API_VERSION"),
+            azure_endpoint=self.require_env("OPENAI_OLDTIME_ENDPOINT"),
+            api_key=self.require_env("OPENAI_API_KEY"),
         )
         payload = {
             "messages": messages,

@@ -41,6 +41,7 @@ class EvaluatorConstructionAgent(Agent):
             model=llm_model,
             tool_list=tools,
             tool_parser_name=tool_parser,
+            environment=getattr(context.args, "api_environment", None),
         )
         self.buffer: list[dict[str, Any]] = [{
             "role": "system",

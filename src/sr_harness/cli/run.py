@@ -123,7 +123,7 @@ def main(args: argparse.Namespace) -> int:
         workspace_dir,
         workspace_files=args.mount,
         isolate_users=args.isolate_users,
-        initial_run_dir=save_path,
+        run_root=save_path / "runs",
         persist_sessions=requested_save_path is not None,
     )
     session = conversations.session_proxy

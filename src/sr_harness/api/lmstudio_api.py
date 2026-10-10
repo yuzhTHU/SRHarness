@@ -60,8 +60,8 @@ class LMStudioAPI(BaseAPI):
         yield from []
         load_dotenv()
 
-        endpoint = self.normalize_endpoint(os.environ["LMSTUDIO_ENDPOINT"])
-        api_key = os.environ["LMSTUDIO_API_KEY"]
+        endpoint = self.normalize_endpoint(self.require_env("LMSTUDIO_ENDPOINT"))
+        api_key = self.require_env("LMSTUDIO_API_KEY")
         payload = {
             "model": self.model,
             "messages": messages,
@@ -83,7 +83,7 @@ class LMStudioAPI(BaseAPI):
         # variables so a loopback proxy cannot intercept or block the request.
         session = requests.Session()
         session.trust_env = False
-        timeout = float(os.environ.get("LMSTUDIO_TIMEOUT", "300"))
+        timeout = float(self.getenv("LMSTUDIO_TIMEOUT", "300"))
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",

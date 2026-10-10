@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterator, List, Optional
 from ..api import BaseAPI
 from ..core import AgentContext, CandidateRecord, ToolCall, ToolCallResult
 from ..runtime import PendingMessage, SRInteractionManager
+from ..skills import SkillManager
 from .sr_agent import Message, ModelResponse, SRAgent, Usage
 from ..parser import BaseParser
 
@@ -67,6 +68,7 @@ class SRAgentInteractive(SRAgent):
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
         context: AgentContext | None = None,
+        skill_manager: SkillManager | None = None,
     ) -> None:
         """初始化 SRAgentInteractive。
 
@@ -100,6 +102,7 @@ class SRAgentInteractive(SRAgent):
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
             context: 与数据准备 Agent 共享的数据和工作区上下文。
+            skill_manager: Skill 注册表。交互式会话应将其自定义目录放在工作区中。
         """
         super().__init__(
             llm_provider=llm_provider,
@@ -128,6 +131,7 @@ class SRAgentInteractive(SRAgent):
             strong_llm_provider=strong_llm_provider,
             strong_llm_model=strong_llm_model,
             context=context,
+            skill_manager=skill_manager,
         )
 
         # 工作区

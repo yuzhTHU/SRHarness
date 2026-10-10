@@ -61,6 +61,7 @@ class Agent(ABC, FactoryMixin):
             model=self.llm_model,
             tool_list=self.tools,
             tool_parser_name=self.tool_parser,
+            environment=getattr(context.args, "api_environment", None),
         )
 
     def set_messages(self, messages: list[dict[str, Any]]) -> None:
