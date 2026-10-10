@@ -21,6 +21,33 @@ ToolList = list[BaseTool | type[BaseTool]]
 StreamCallback = Callable[[dict[str, Any]], None]
 
 
+class ModelResponseTruncatedError(RuntimeError):
+    """Report a length-limited response while preserving its partial message.
+
+    Args:
+        message: Human-readable explanation of the truncation.
+        partial_message: Provider response accumulated before truncation.
+        tool_calls: Tool calls parsed from the partial response.
+        usage: Token and price usage reported for the truncated response.
+        sample: One-based local-sample index that was truncated.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_message: dict[str, Any],
+        tool_calls: list[ToolCall],
+        usage: dict[str, dict[str, int | float]],
+        sample: int,
+    ) -> None:
+        super().__init__(message)
+        self.partial_message = partial_message
+        self.tool_calls = tool_calls
+        self.usage = usage
+        self.sample = sample
+
+
 class BaseAPI(ABC, FactoryMixin):
     """Common request, parser, and tool-call behavior for LLM providers."""
 

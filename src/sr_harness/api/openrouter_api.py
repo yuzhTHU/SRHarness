@@ -5,7 +5,7 @@ import logging
 from openai import OpenAI
 from dotenv import load_dotenv
 from typing import Any, Generator, List, Dict
-from .base_api import BaseAPI, StreamCallback
+from .base_api import BaseAPI, ModelResponseTruncatedError, StreamCallback
 from ..utils import log_exception
 
 _logger = logging.getLogger(f"sr_harness.{__name__}")
@@ -125,15 +125,27 @@ class OpenRouterAPI(BaseAPI):
                     retry_error = e
                 else:
                     tool_call = get_tool_call(message, content)
+                    choices = response_dict.get("choices") or [{}]
+                    finish_reason = (
+                        response_dict.get("finish_reason")
+                        or choices[0].get("finish_reason")
+                    )
+                    if finish_reason == "length":
+                        token_usage, price_usage = get_usage(completion)
+                        partial_message = dict(message)
+                        partial_message.pop("tool_calls", None)
+                        raise ModelResponseTruncatedError(
+                            f"OpenRouterAPI({self.model}) exhausted max_tokens={max_tokens}; "
+                            "the response was truncated before the model completed its turn. "
+                            "Increase the Agent's maximum output length and retry. "
+                            f"模型已耗尽 max_tokens={max_tokens}，响应在本轮完成前被截断；"
+                            "请增大 Agent 的最大输出长度后重试。",
+                            partial_message=partial_message,
+                            tool_calls=[],
+                            usage={"token": token_usage, "price": price_usage},
+                            sample=idx,
+                        )
                     if not (tool_call or content.strip()):
-                        if response_dict.get("finish_reason") == "length":
-                            raise RuntimeError(
-                                f"OpenRouterAPI({self.model}) exhausted max_tokens={max_tokens} "
-                                "while reasoning, before producing content or a tool call. "
-                                "Increase the Agent's maximum output length and retry. "
-                                f"推理已耗尽 max_tokens={max_tokens}，尚未生成正文或工具调用；"
-                                "请增大 Agent 的最大输出长度后重试。"
-                            )
                         retry_error = ValueError(f"OpenRouterAPI({self.model}) returned empty content and no usable tool calls.")
                     else:
                         retry_error = None

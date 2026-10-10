@@ -139,6 +139,6 @@ class TrajectoryRolloutEvaluator(DefaultEvaluator):
 
 Override `fit_candidate()` as well when the fitting objective itself should include rollout behavior. Override `fit()` or `evaluate()` only when both general equalities and formal candidates require a different base policy.
 
-A custom source file must define exactly one `DefaultEvaluator` subclass. `load_custom_evaluator()` validates and loads the source, instantiates the class, and retains source/file provenance. The WebUI can save, load, and test scripts in `context.evaluator/`, while the Evaluator Construction Agent can create or repair them; see [SRHarness WebUI](web-ui.md#evaluator-configuration).
+A custom source file must define exactly one `DefaultEvaluator` subclass. `load_custom_evaluator()` loads and inspects the source in an isolated process, returns a same-named protocol proxy in the main process, and retains source/file provenance. Subsequent `split`, `fit`, and `evaluate` calls also run through the operating-system sandbox; custom source is never executed directly inside the Web service process. The WebUI can save, load, and test scripts in `context.evaluator/`, while the Evaluator Construction Agent can create or repair them; see [SRHarness WebUI](web-ui.md#evaluator-configuration).
 
 See the [API Reference](https://yuzhthu.github.io/SRHarness/reference/) for complete signatures and [SRHarness Engine](engine.md) for expression syntax, parameters, and graph evaluation rules.

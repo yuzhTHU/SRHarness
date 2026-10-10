@@ -72,6 +72,7 @@ class DataPreparationAgent(Agent):
         self.api = None
         self.context = context
         self._force_recorded = False
+        self._pending_runtime_settings: dict[str, Any] | None = None
         self.buffer: list[dict[str, Any]] = [{
             "role": "system",
             "content": (
@@ -121,7 +122,25 @@ class DataPreparationAgent(Agent):
         with self.interaction_manager.wait() as messages:
             for pending in messages:
                 self._append_prompt({"role": "user", "content": pending.content})
+        self._apply_pending_runtime_settings()
         return bool(messages)
+
+    def queue_runtime_settings(self, settings: dict[str, Any]) -> None:
+        """Queue validated settings for the next safe iteration boundary."""
+        current = self._pending_runtime_settings or {}
+        self._pending_runtime_settings = {**current, **settings}
+
+    def _apply_pending_runtime_settings(self) -> None:
+        settings = self._pending_runtime_settings
+        if not settings:
+            return
+        self._pending_runtime_settings = None
+        for name in ("llm_provider", "llm_model", "tool_parser", "llm_max_tokens", "skills"):
+            if name in settings:
+                setattr(self, name, settings[name])
+        if "tools" in settings:
+            self.tool_cls_list = BaseTool.load_tool_classes(settings["tools"])
+        self.initialize_tools(self.context)
 
     def _record_force(self, update: dict[str, Any] | None = None) -> None:
         if self._force_recorded:

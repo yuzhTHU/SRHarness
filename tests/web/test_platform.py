@@ -60,11 +60,15 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'id="pause"' not in page.text
     assert 'id="stop"' not in page.text
     assert 'function renderComposerControl()' in page.text
+    assert 'function composerControlState()' in page.text
+    assert 'function agentComposerControlState({hasInput,interaction,startAction=null,canMessage=false,canControl=false,blocked=false})' in page.text
+    assert 'function renderAgentComposerButton(button,control,{sendLabel,pauseLabel,stoppingLabel=pauseLabel})' in page.text
+    assert 'async function sendAgentComposerMessage({input,button,request,render,apply=syncSession,beforeRequest})' in page.text
     assert "button.classList.add('send-icon')" in page.text
-    assert "if(state==='idle'){const label=_('startExploring');button.innerHTML='<svg" in page.text
-    assert "action:'pause'" in page.text
-    assert "action:'force_pause'" in page.text
-    assert "const control=await api('/api/control/command',{action:'message',message:prompt})" in page.text
+    assert "if(hasInput&&(startAction||canMessage))action=startAction||'message'" in page.text
+    assert "else if(!hasInput&&canControl&&interaction==='running')action='pause'" in page.text
+    assert "else if(!hasInput&&canControl&&interaction==='pausing')action='force_pause'" in page.text
+    assert "request:message=>api('/api/control/command',{action:'message',message})" in page.text
     assert '.composer #send.send-icon{display:grid;place-items:center;width:34px;height:34px' in page.text
     assert "for(const [inputId,buttonId] of [['R','next-c'],['C','next-r']]" in page.text
     assert "button.textContent='+1'" in page.text
@@ -165,8 +169,8 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "api('/api/evaluator/test',evaluatorPayload())" in page.text
     assert "api('/api/evaluator/agent/start',{message,source:$('evaluator-code').value})" in page.text
     assert "api('/api/evaluator/agent/stop',{})" in page.text
-    assert "['pausing','interrupting'].includes(agentState)" in page.text
-    assert "button.classList.toggle('stop',active)" in page.text
+    assert "return agentComposerControlState({hasInput:Boolean($('evaluator-agent-input').value.trim())" in page.text
+    assert "$('evaluator-agent-input').oninput=renderEvaluatorAgentControl" in page.text
     assert "if(evaluatorDirty)await saveEvaluatorConfiguration()" in page.text
     assert "const expandedDirectories=new Set(),shownSessionErrors=new Set()" in page.text
     assert "if(!shownSessionErrors.has(errorKey)){shownSessionErrors.add(errorKey);notice(sessionError)}" in page.text
@@ -264,7 +268,7 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert "documentation:'Open documentation'" in page.text
     assert "function compactEventContent(e)" in page.text
     assert "eventContent(card,meta,metaTime,compactEventContent(e))" in page.text
-    assert "s.interaction_state==='paused'" in page.text
+    assert "function sessionSettingsEditable(value=session){return ['idle','starting','running'].includes(value?.state)}" in page.text
     for removed_id in (
         'validation-fraction', 'split-by', 'split-seed', 'ranking-metric',
         'larger-better',
@@ -465,6 +469,8 @@ def test_workspace_roundtrip_and_boundaries(platform, tmp_path):
     assert 'function dataContextLink(turn)' in page.text
     assert "agent_scope:'data'" in page.text
     assert "/api/data/agent/stop" in page.text
+    assert "function dataAgentControlState()" in page.text
+    assert "$('data-agent-input').oninput=renderDataAgentControl" in page.text
     assert '.data-agent-send.stop' in page.text
     assert '.data-agent-card{display:grid;grid-template-columns:minmax(0,1fr)' in page.text
     assert '.reasoning-block.expanded .reasoning-content{display:block;width:100%' in page.text
@@ -1081,11 +1087,13 @@ def test_runtime_capabilities_can_be_configured(platform):
         'tools': ['evaluate_formula'],
         'skills': [],
         'max_refinement_depth': 12,
+        'pause_on_truncated_response': False,
     })
     assert response.status_code == 200
     assert response.json()['settings']['tools'] == ['evaluate_formula']
     assert response.json()['settings']['skills'] == []
     assert response.json()['settings']['max_refinement_depth'] == 12
+    assert response.json()['settings']['pause_on_truncated_response'] is False
     assert client.post('/api/session/settings', json={
         'tools': ['not-a-tool'],
     }).status_code == 400
@@ -1218,13 +1226,17 @@ def test_data_agent_can_be_stopped_independently(platform, monkeypatch):
     assert response.status_code == 200, response.text
     assert started.wait(2)
 
+    response = client.post('/api/data/agent', json={'message': 'Use the queued guidance.'})
+    assert response.status_code == 200, response.text
+    assert session.data_interaction_manager.status()['pending_messages'] == 1
+
     response = client.post('/api/data/agent/stop')
     assert response.status_code == 200, response.text
     assert response.json()['data_state'] == 'stopping'
     assert session.data_thread.is_alive()
     response = client.post('/api/data/agent/stop')
     assert response.status_code == 200, response.text
-    assert response.json()['data_force_pause_requested'] is True
+    assert response.json()['data_interaction_state'] == 'interrupting'
     session.data_thread.join(2)
     assert not session.data_thread.is_alive()
     assert session.data_state == 'stopped'
@@ -1249,13 +1261,20 @@ def test_evaluator_agent_can_be_stopped_independently(platform, monkeypatch):
     assert response.json()['evaluator_agent_state'] == 'running'
     assert started.wait(2)
 
+    response = client.post('/api/evaluator/agent/start', json={
+        'message': 'Also add a rollout metric.',
+        'source': '',
+    })
+    assert response.status_code == 200, response.text
+    assert session.evaluator_interaction_manager.status()['pending_messages'] == 1
+
     response = client.post('/api/evaluator/agent/stop')
     assert response.status_code == 200, response.text
     assert response.json()['evaluator_agent_state'] == 'stopping'
     assert session.evaluator_agent_thread.is_alive()
     response = client.post('/api/evaluator/agent/stop')
     assert response.status_code == 200, response.text
-    assert response.json()['evaluator_force_pause_requested'] is True
+    assert response.json()['evaluator_interaction_state'] == 'interrupting'
     session.evaluator_agent_thread.join(2)
     assert not session.evaluator_agent_thread.is_alive()
     assert session.evaluator_agent_state == 'stopped'

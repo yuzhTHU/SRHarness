@@ -139,6 +139,6 @@ class TrajectoryRolloutEvaluator(DefaultEvaluator):
 
 如果拟合过程本身也需要考虑 rollout，可以进一步重载 `fit_candidate()`；若一般等式和候选公式都需要不同的基础评估方式，则重载 `fit()` 或 `evaluate()`。
 
-自定义脚本必须定义且只定义一个 `DefaultEvaluator` 子类。`load_custom_evaluator()` 会检查源码、加载该类、实例化 Evaluator，并保留源码和文件来源。网页工作台可以保存、加载和测试 `context.evaluator/` 中的脚本，也可以让评测器构建 Agent 创建或修复实现；操作方式见 [SRHarness 网页工作台](web-ui.md#evaluator-configuration)。
+自定义脚本必须定义且只定义一个 `DefaultEvaluator` 子类。`load_custom_evaluator()` 会在隔离进程中加载并检查源码，在主进程中返回一个保持相同类名与接口的代理实例，并保留源码和文件来源。之后的 `split`、`fit` 和 `evaluate` 调用也通过操作系统沙箱执行；自定义代码不会在 Web 服务进程内直接运行。网页工作台可以保存、加载和测试 `context.evaluator/` 中的脚本，也可以让评测器构建 Agent 创建或修复实现；操作方式见 [SRHarness 网页工作台](web-ui.md#evaluator-configuration)。
 
 完整的方法签名见 [API Reference](reference/index.md)。表达式语法、参数以及图结构求值规则见 [SRHarness 符号引擎](engine.md)。

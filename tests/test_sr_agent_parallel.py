@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 from types import SimpleNamespace
 
+from sr_harness.api import ModelResponseTruncatedError
 from sr_harness.core import (
     AgentContext,
     CandidateRecord,
@@ -157,6 +158,7 @@ def test_interactive_refreshes_data_before_queued_human_guidance():
 def test_interactive_agent_requests_pause_after_tool_free_response():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._last_response_was_truncated = False
     agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
@@ -202,6 +204,7 @@ def test_interactive_agent_migrates_legacy_generated_workspace_guidance():
 def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = True
+    agent._last_response_was_truncated = False
     agent._forced_interruption_pending = False
     agent.best_candidate = lambda: SimpleNamespace(metric=lambda name, split: 0.0)
     agent.interaction_manager = SRInteractionManager()
@@ -216,6 +219,7 @@ def test_interactive_agent_does_not_special_case_zero_mse_after_tool_call():
 def test_web_tool_free_response_pauses_without_asking_a_question():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._last_response_was_truncated = False
     agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
@@ -243,6 +247,7 @@ def test_safe_pause_does_not_block_tools_already_requested_this_turn(monkeypatch
 def test_interactive_agent_honors_pending_control_before_automatic_guidance():
     agent = object.__new__(SRAgentInteractive)
     agent._last_iteration_had_tool_calls = False
+    agent._last_response_was_truncated = False
     agent._forced_interruption_pending = False
     agent.best_candidate = lambda: None
     agent.interaction_manager = SRInteractionManager()
@@ -253,6 +258,65 @@ def test_interactive_agent_honors_pending_control_before_automatic_guidance():
     assert agent.finish_iteration(buffer, R=1, L=2, C=1) is None
     assert agent.interaction_manager.state == "pausing"
     assert buffer == []
+
+
+@pytest.mark.parametrize("pause_on_truncation", [True, False])
+def test_interactive_truncated_response_completes_iteration_before_optional_pause(
+    tmp_path, pause_on_truncation,
+):
+    manager = SRInteractionManager()
+    manager.start_agent_execution()
+    agent = SRAgentInteractive(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=[],
+        skills=[],
+        save_path=str(tmp_path),
+        interaction_manager=manager,
+        pause_on_truncated_response=pause_on_truncation,
+    )
+    agent.tools = []
+
+    class TruncatedAPI:
+        def cancel(self):
+            pass
+
+        def __call__(self, *args, **kwargs):
+            raise ModelResponseTruncatedError(
+                "maximum output length reached",
+                partial_message={
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning": "partial reasoning",
+                },
+                tool_calls=[],
+                usage={"token": {"answer": 4096}, "price": {"total": 0.01}},
+                sample=1,
+            )
+
+    agent.api = TruncatedAPI()
+    responses, usage = agent.request_llm(
+        [{"role": "user", "content": "Find a formula."}], R=1, L=1, C=1,
+    )
+    results = agent.execute_tool_calls(responses, R=1, L=1, C=1)
+    buffer = []
+    agent.update_conversation(buffer, responses, results, {}, R=1, L=1, C=1)
+    agent.finish_iteration(buffer, R=1, L=1, C=1)
+
+    assert responses[0][1] == []
+    assert responses[0][2]["reasoning"] == "partial reasoning"
+    assert usage["token"]["answer"] == 4096
+    assert buffer[0]["role"] == "assistant"
+    assert buffer[0]["reasoning"] == "partial reasoning"
+    assert buffer[1]["role"] == "user"
+    assert "Previous model response was truncated" in buffer[1]["content"]
+    assert "Current progress" in buffer[2]["content"]
+    assert manager.state == ("pausing" if pause_on_truncation else "running")
+    assert any(
+        event["kind"] == "assistant_failed"
+        and "maximum output length reached" in event["payload"]["error"]
+        for event in manager.get_recent_events()["events"]
+    )
 
 
 def test_agent_exposes_only_skills_from_enabled_tools(tmp_path):

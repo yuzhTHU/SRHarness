@@ -988,19 +988,53 @@ class SRAgent(Agent):
                     message['content'] += "\n\n" + tool_call.raw_str
                 node_parents[self.run_state.node_id(R=R, C=C, L=L, K=K)] = 'context_merge'
         # 将 message 和 (tool_call, result) pairs 加入 buffer
-        if tool_calls or (message.get('content') or '').strip():
+        if tool_calls or (message.get('content') or '').strip() or message.get('reasoning'):
+            result_messages = (
+                self.parser.format_tool_result_messages(tool_calls, results)
+                if tool_calls else []
+            )
             self._append_buffer_messages(
                 buffer,
-                [message, *self.parser.format_tool_result_messages(tool_calls, results)],
+                [message, *result_messages],
                 R=R,
                 C=C,
                 L=L,
             )
         else:
             _logger.warning("Skipping empty LLM response (no content nor tool calls).")
+        followup_messages = self.build_response_followup_messages(
+            response_list, results_list, R=R, L=L, C=C,
+        )
+        if followup_messages:
+            self._append_buffer_messages(
+                buffer, followup_messages, R=R, C=C, L=L,
+            )
         process_message = self.build_progress_message(L)
         self._append_buffer_messages(buffer, [process_message], R=R, C=C, L=L)
         return buffer, node_parents
+
+    def build_response_followup_messages(
+        self,
+        response_list: list[ModelResponse],
+        results_list: list[list[ToolCallResult]],
+        *,
+        R: int,
+        L: int,
+        C: int,
+    ) -> list[Message]:
+        """Return framework messages to append after one model response.
+
+        Args:
+            response_list: Model responses for the current iteration.
+            results_list: Tool results aligned with the model responses.
+            R: One-based restart index.
+            L: One-based refinement-step index.
+            C: One-based conversation-branch index.
+
+        Returns:
+            Additional conversation messages, empty for the base agent.
+        """
+        return []
 
     # Progress prompts and candidate state
 

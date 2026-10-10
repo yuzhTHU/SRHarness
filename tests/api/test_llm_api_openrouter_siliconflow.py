@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+from sr_harness.api import ModelResponseTruncatedError
 from sr_harness.api.openrouter_api import OpenRouterAPI
 from sr_harness.api.siliconflow_api import SiliconFlowAPI
 from sr_harness.core import ToolCall
@@ -70,10 +71,12 @@ class _FakeOpenRouterCompletion:
 class _FakeOpenRouterClient:
     payloads: list[dict[str, Any]] = []
     api_keys: list[str | None] = []
+    base_urls: list[str | None] = []
     message: dict[str, Any] = {"content": "ok"}
 
     def __init__(self, *args, **kwargs):
         self.api_keys.append(kwargs.get("api_key"))
+        self.base_urls.append(kwargs.get("base_url"))
         self.chat = self
         self.completions = self
 
@@ -188,6 +191,7 @@ def _consume(result):
 
 def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_ENDPOINT", "http://openrouter-gateway:8080/api/v1")
     monkeypatch.setattr("sr_harness.api.openrouter_api.OpenAI", _FakeOpenRouterClient)
     _FakeOpenRouterClient.payloads = []
     _FakeOpenRouterClient.message = {
@@ -209,6 +213,7 @@ def test_openrouter_native_tools_are_sent_and_tool_calls_are_extracted(monkeypat
     chunks, return_value = _consume(api([{"role": "user", "content": "use the tool"}]))
 
     payload = _FakeOpenRouterClient.payloads[0]
+    assert _FakeOpenRouterClient.base_urls[-1] == "http://openrouter-gateway:8080/api/v1"
     assert payload["model"] == "qwen/qwen3.6-flash"
     assert payload["tools"][0]["function"]["name"] == "demo_tool"
     assert payload["tool_choice"] == "auto"
@@ -304,13 +309,16 @@ def test_openrouter_stream_preserves_reasoning_when_output_limit_is_exhausted(mo
     updates = []
     api = OpenRouterAPI(model="deepseek/deepseek-v4-flash-0731")
 
-    with pytest.raises(RuntimeError, match="exhausted max_tokens=64"):
+    with pytest.raises(ModelResponseTruncatedError, match="exhausted max_tokens=64") as caught:
         _consume(api(
             [{"role": "user", "content": "reason for a long time"}],
             max_tokens=64,
             stream_callback=updates.append,
         ))
 
+    assert caught.value.partial_message["reasoning"] == "a long chain of reasoning"
+    assert caught.value.tool_calls == []
+    assert caught.value.sample == 1
     assert ReasoningLengthClient.attempts == 1
     assert updates[-1]["type"] == "complete"
     assert updates[-1]["reasoning"] == "a long chain of reasoning"

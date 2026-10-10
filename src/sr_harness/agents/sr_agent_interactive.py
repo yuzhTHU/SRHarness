@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterator, List, Optional
 
-from ..api import BaseAPI
+from ..api import BaseAPI, ModelResponseTruncatedError
 from ..core import AgentContext, CandidateRecord, ToolCall, ToolCallResult
 from ..runtime import PendingMessage, SRInteractionManager
 from ..skills import SkillManager
@@ -64,6 +64,7 @@ class SRAgentInteractive(SRAgent):
         use_workspace: bool = False,
         workspace_files: List[str | Path] | None = None,
         force_initial_diagnostics: bool = False,
+        pause_on_truncated_response: bool = True,
         auto_routing: bool = True,
         strong_llm_provider: str | None = None,
         strong_llm_model: str | None = None,
@@ -98,6 +99,7 @@ class SRAgentInteractive(SRAgent):
             workspace_files: 初始化到工作区的文件/目录路径列表。
             interaction_manager: 连接 Agent 与 Web、终端等交互界面的管理器。
             force_initial_diagnostics: 是否在每个分支开始时强制执行初始诊断。
+            pause_on_truncated_response: 模型输出因长度限制截断后是否在安全边界暂停。
             auto_routing: 是否根据任务复杂度在基础与强模型后端之间自动路由。
             strong_llm_provider: 复杂任务使用的后端；默认沿用 llm_provider。
             strong_llm_model: 复杂任务使用的模型。None 表示仅使用基础模型。
@@ -142,8 +144,11 @@ class SRAgentInteractive(SRAgent):
         if not isinstance(interaction_manager, SRInteractionManager):
             raise TypeError("interaction_manager must be an SRInteractionManager")
         self.interaction_manager = interaction_manager
+        self.pause_on_truncated_response = pause_on_truncated_response
         self._last_iteration_had_tool_calls = True
+        self._last_response_was_truncated = False
         self._forced_interruption_pending = False
+        self._response_followup_messages: list[Message] = []
         self.initial_messages: list[PendingMessage] = []
         self.prompt_overrides: dict[str, str] = {}
         self.variable_descriptions: dict[str, str] = {}
@@ -320,6 +325,7 @@ class SRAgentInteractive(SRAgent):
                 "ranking_metric",
                 "larger_is_better",
                 "force_initial_diagnostics",
+                "pause_on_truncated_response",
                 "auto_routing",
                 "tool_parser",
             ):
@@ -383,9 +389,27 @@ class SRAgentInteractive(SRAgent):
             self._append_buffer_messages(buffer, [prompt], R=R, C=C, L=L)
             self._forced_interruption_pending = False
             return None
-        if not self._last_iteration_had_tool_calls:
+        if (
+            not self._last_iteration_had_tool_calls
+            and not self._last_response_was_truncated
+        ):
             self.interaction_manager.request_pause()
+        self._last_response_was_truncated = False
         return None
+
+    def build_response_followup_messages(
+        self,
+        response_list: list[ModelResponse],
+        results_list: list[list[ToolCallResult]],
+        *,
+        R: int,
+        L: int,
+        C: int,
+    ) -> list[Message]:
+        """Consume notices generated while receiving the current response."""
+        messages = self._response_followup_messages
+        self._response_followup_messages = []
+        return messages
 
     # Initial-prompt customization hooks
 
@@ -526,6 +550,8 @@ class SRAgentInteractive(SRAgent):
             })
 
         interrupted = False
+        response_error: str | None = None
+        self._last_response_was_truncated = False
         try:
             with self.interaction_manager.cancellable(self.api.cancel):
                 responses, usage = super().request_llm(
@@ -537,6 +563,7 @@ class SRAgentInteractive(SRAgent):
                 )
         except InterruptedError:
             interrupted = True
+            response_error = "用户强制中止"
             self._forced_interruption_pending = True
             responses = []
             for K in range(1, self.local_sample_size + 1):
@@ -549,6 +576,40 @@ class SRAgentInteractive(SRAgent):
                     message["reasoning"] = update["reasoning"]
                 responses.append((message["content"], [], message))
             usage = {"token": {}, "price": {}}
+        except ModelResponseTruncatedError as exc:
+            response_error = str(exc)
+            self._last_response_was_truncated = True
+            if self.pause_on_truncated_response:
+                self.interaction_manager.request_pause()
+            responses = []
+            for K in range(1, self.local_sample_size + 1):
+                update = latest_stream_updates.get(K, {})
+                if K == exc.sample:
+                    message = dict(exc.partial_message)
+                    calls = list(exc.tool_calls)
+                else:
+                    message = {
+                        "role": "assistant",
+                        "content": update.get("content", ""),
+                    }
+                    calls = []
+                if update.get("reasoning") and not message.get("reasoning"):
+                    message["reasoning"] = update["reasoning"]
+                responses.append((message.get("content", ""), calls, message))
+            usage = exc.usage
+            for name, value in usage["token"].items():
+                self.token_counter.add(name, value)
+            for name, value in usage["price"].items():
+                self.money_counter.add(name, value)
+            self._response_followup_messages.append({
+                "role": "user",
+                "content": (
+                    "[Previous model response was truncated]\n"
+                    f"{exc} The partial response above has been preserved in the conversation. "
+                    "Continue from the available work in the next iteration; do not "
+                    "assume that the unfinished response completed any intended tool call."
+                ),
+            })
         except Exception as exc:
             for K, response_id in response_ids.items():
                 self.interaction_manager.publish_event("assistant_failed", {
@@ -569,10 +630,11 @@ class SRAgentInteractive(SRAgent):
         }
         for K, (content, calls, message) in enumerate(responses, 1):
             self.interaction_manager.publish_event(
-                "assistant_failed" if interrupted else "assistant_completed",
+                "assistant_failed" if response_error else "assistant_completed",
                 {
                 "response_id": response_ids[K],
                 "content": content,
+                "reasoning": message.get("reasoning", ""),
                 "message": message,
                 "tool_calls": calls,
                 "tool_schemas": tool_schemas,
@@ -581,7 +643,7 @@ class SRAgentInteractive(SRAgent):
                 "cumulative_usage": cumulative_usage,
                 "provider": route.provider,
                 "model": route.model,
-                **({"error": "用户强制中止", "interrupted": True} if interrupted else {}),
+                **({"error": response_error, "interrupted": interrupted} if response_error else {}),
                 },
             )
         return responses, usage

@@ -31,6 +31,7 @@ class EvaluatorConstructionAgent(Agent):
             raise TypeError("interaction_manager must be an InteractionManager")
         self.interaction_manager = interaction_manager
         self._force_recorded = False
+        self._pending_runtime_settings: dict[str, Any] | None = None
         self.tools = tools
         for tool in self.tools:
             tool.cancel_event = self.interaction_manager.cancellation_signal
@@ -99,7 +100,37 @@ class EvaluatorConstructionAgent(Agent):
         with self.interaction_manager.wait() as messages:
             for pending in messages:
                 self._append_prompt({"role": "user", "content": pending.content})
+        self._apply_pending_runtime_settings()
         return bool(messages)
+
+    def queue_runtime_settings(self, settings: dict[str, Any]) -> None:
+        """Queue validated settings for the next safe iteration boundary."""
+        current = self._pending_runtime_settings or {}
+        self._pending_runtime_settings = {**current, **settings}
+
+    def _apply_pending_runtime_settings(self) -> None:
+        settings = self._pending_runtime_settings
+        if not settings:
+            return
+        self._pending_runtime_settings = None
+        for name in ("llm_provider", "llm_model", "tool_parser", "llm_max_tokens"):
+            if name in settings:
+                setattr(self, name, settings[name])
+        if "skills" in settings:
+            self.context.args.enabled_skills = settings["skills"]
+        if "tools" in settings:
+            classes = {tool_cls.metadata.name: tool_cls for tool_cls in BaseTool.load_tool_classes()}
+            self.tools = [classes[name](context=self.context) for name in settings["tools"]]
+            for tool in self.tools:
+                tool.cancel_event = self.interaction_manager.cancellation_signal
+        self.parser = BaseParser.create(self.tool_parser, tool_list=self.tools)
+        self.api = BaseAPI.create(
+            self.llm_provider,
+            model=self.llm_model,
+            tool_list=self.tools,
+            tool_parser_name=self.tool_parser,
+            environment=getattr(self.context.args, "api_environment", None),
+        )
 
     def _append_prompt(self, message: dict[str, Any]) -> None:
         self.buffer.append(message)

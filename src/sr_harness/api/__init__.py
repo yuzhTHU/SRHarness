@@ -1,5 +1,5 @@
 # Copyright (c) 2024-present, Yumeow. Licensed under the MIT License.
-from .base_api import BaseAPI, ToolList, ToolParserName
+from .base_api import BaseAPI, ModelResponseTruncatedError, ToolList, ToolParserName
 from ..core import APICallResult
 from .manual_api import ManualAPI
 from .openai_api import OpenAIAPI
@@ -16,6 +16,7 @@ __all__ = [
     "GeminiAPI",
     "LMStudioAPI",
     "ManualAPI",
+    "ModelResponseTruncatedError",
     "OpenAIAPI",
     "OpenRouterAPI",
     "SiliconFlowAPI",
