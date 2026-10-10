@@ -28,6 +28,35 @@ sr-harness --help
 python -c "import sr_harness, sr_harness_engine; print('SRHarness is ready')"
 ```
 
+## Run with Docker
+
+The official image is published on [Docker Hub](https://hub.docker.com/r/yumeoww/sr-harness). It includes the WebUI and the `tools` optional dependencies, so Python does not need to be installed on the host. First create a `.env` file in the current directory with the API key for your model provider, then run:
+
+```bash
+docker volume create sr-harness-data
+docker pull yumeoww/sr-harness:1.0.0
+docker run --detach \
+  --name sr-harness \
+  --restart unless-stopped \
+  --env-file .env \
+  --publish 127.0.0.1:8000:8000 \
+  --volume sr-harness-data:/data \
+  yumeoww/sr-harness:1.0.0
+```
+
+Open `http://127.0.0.1:8000/` in a browser. The `sr-harness-data` Docker volume persistently stores the conversation registry, conversation workspaces, and run records; removing or replacing the container does not remove this data. Use these commands to inspect logs or manage the service:
+
+```bash
+docker logs --follow --tail 100 sr-harness
+docker stop sr-harness
+docker start sr-harness
+```
+
+To accept connections from other hosts, change the port mapping to `--publish 8000:8000` and open the corresponding firewall port. SRHarness does not provide a complete authentication, authorization, or network-security boundary. Configure a reverse proxy, TLS, and access control before exposing it to an untrusted network.
+
+!!! warning
+    Docker can restrict an Agent's access to host files and processes, but code executed inside the container may still read environment variables passed to that container. Do not mount host directories containing sensitive files at `/data`. For a public deployment serving untrusted users, place model credentials in a separate gateway and restrict container egress instead of giving the Agent container a real API key.
+
 ## Install from source
 
 Use an editable installation when modifying SRHarness, running its tests, or building its documentation:

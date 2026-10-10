@@ -1,0 +1,187 @@
+services:
+  sr-harness:
+    image: sr-harness:port30000
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        APP_UID: "1015"
+        APP_GID: "1015"
+    command:
+      - run
+      - --save-path
+      - /data
+      - --workspace-dir
+      - /data
+      - --isolate-users
+      - --host
+      - 0.0.0.0
+      - --port
+      - "30000"
+    environment:
+      HOME: /tmp/home
+      OPENROUTER_API_KEY: internal-proxy-credential
+      OPENROUTER_ENDPOINT: http://openrouter-gateway:8080/api/v1
+      HTTP_PROXY: http://egress-proxy:3128
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: 127.0.0.1,localhost,openrouter-gateway
+    volumes:
+      - type: bind
+        source: ../../logs/port30000
+        target: /data
+    networks:
+      - sandbox
+    depends_on:
+      openrouter-gateway:
+        condition: service_healthy
+      egress-proxy:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=1g,mode=1777
+      - /usr/local/lib/python3.12/site-packages/sr_harness/skills/custom:rw,nosuid,nodev,noexec,size=16m,mode=0700,uid=1015,gid=1015
+    user: "1015:1015"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 8g
+    cpus: 4.0
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 45s
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; connection = socket.create_connection(('127.0.0.1', 30000), timeout=5); connection.close()"
+      interval: 15s
+      timeout: 6s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  web-gateway:
+    image: sr-harness-web-gateway:port30000
+    build:
+      context: .
+      dockerfile: web-gateway.Dockerfile
+    depends_on:
+      sr-harness:
+        condition: service_healthy
+    networks:
+      - sandbox
+      - egress
+    ports:
+      - "0.0.0.0:30000:30000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://127.0.0.1:30000/health
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"
+
+  openrouter-gateway:
+    image: sr-harness-openrouter-gateway:port30000
+    build:
+      context: .
+      dockerfile: openrouter-gateway.Dockerfile
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY before starting the deployment}
+    networks:
+      - sandbox
+      - egress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - --spider
+        - http://127.0.0.1:8080/health
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "2"
+
+  egress-proxy:
+    image: sr-harness-egress-proxy:port30000
+    build:
+      context: .
+      dockerfile: egress-proxy.Dockerfile
+    networks:
+      - sandbox
+      - egress
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777
+      - /var/log/squid:rw,nosuid,nodev,noexec,size=16m
+      - /var/spool/squid:rw,nosuid,nodev,noexec,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "test -s /tmp/squid.pid && kill -0 $$(cat /tmp/squid.pid)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "2"
+
+networks:
+  sandbox:
+    internal: true
+  egress: {}

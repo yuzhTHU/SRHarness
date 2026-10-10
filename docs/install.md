@@ -28,6 +28,35 @@ sr-harness --help
 python -c "import sr_harness, sr_harness_engine; print('SRHarness is ready')"
 ```
 
+## 使用 Docker
+
+官方镜像发布在 [Docker Hub](https://hub.docker.com/r/yumeoww/sr-harness)。镜像已经包含 WebUI 和 `tools` 可选依赖，不需要在宿主机中安装 Python。先在当前目录创建 `.env` 并写入所用模型服务的 API Key，然后执行：
+
+```bash
+docker volume create sr-harness-data
+docker pull yumeoww/sr-harness:1.0.0
+docker run --detach \
+  --name sr-harness \
+  --restart unless-stopped \
+  --env-file .env \
+  --publish 127.0.0.1:8000:8000 \
+  --volume sr-harness-data:/data \
+  yumeoww/sr-harness:1.0.0
+```
+
+在浏览器中打开 `http://127.0.0.1:8000/`。名为 `sr-harness-data` 的 Docker volume 会持久保存对话注册表、各对话工作区和运行记录；删除或更新容器不会删除其中的数据。可以通过以下命令查看日志或管理服务：
+
+```bash
+docker logs --follow --tail 100 sr-harness
+docker stop sr-harness
+docker start sr-harness
+```
+
+如需通过外部主机访问，可将端口映射改为 `--publish 8000:8000`，并开放相应的防火墙端口。SRHarness 本身未提供完整的认证、授权或网络安全边界；将服务暴露到不可信网络前，应配置反向代理、TLS 和访问控制。
+
+!!! warning
+    Docker 可以限制 Agent 对宿主机文件和进程的访问，但传入同一容器的环境变量仍可能被容器内执行的代码读取。不要把含有敏感文件的宿主机目录挂载到 `/data`。在面向不可信用户的公网部署中，还应将模型凭据放在独立网关中，并限制容器的出站网络，而不是直接把真实 API Key 交给运行 Agent 的容器。
+
 ## 从源码安装
 
 需要修改 SRHarness、运行测试或构建文档时，使用可编辑安装：
