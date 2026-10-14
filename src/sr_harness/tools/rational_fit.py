@@ -55,12 +55,12 @@ class RationalFitTool(BaseTool):
         top_k = min(max(int(top_k), 1), 20)
         complexity_penalty = max(float(complexity_penalty), 0.0)
         eq_y = self.parse_formula(target_name)
-        target = np.asarray(eq_y.eval(data), dtype=float).flatten()
+        target = np.asarray(self.expression_values(eq_y), dtype=float).flatten()
         symbols, valid_x, exceptions = [], [], []
         for expression in x:
             try:
                 symbol = self.parse_formula(expression)
-                value = np.asarray(symbol.eval(data), dtype=float).flatten()
+                value = np.asarray(self.expression_values(symbol), dtype=float).flatten()
                 if value.shape != target.shape:
                     raise ValueError("shape mismatch")
                 symbols.append(symbol)
@@ -118,7 +118,7 @@ class RationalFitTool(BaseTool):
         diagnostics = final["evaluation"]["data_split_results"]["train"].get("diagnostics")
         if diagnostics:
             for expression, symbol in zip(valid_x, symbols):
-                values = np.asarray(symbol.eval(data), dtype=float).flatten()
+                values = np.asarray(self.expression_values(symbol), dtype=float).flatten()
                 for sample in diagnostics["worst_samples"]:
                     sample["row"][expression] = float(values[sample["index"]])
         alternatives = []

@@ -103,7 +103,8 @@ class EvaluateCodeTool(BaseTool):
             if split_name not in predictions:
                 raise ValueError(f"Sandbox did not return {split_name} predictions")
             y_pred = np.asarray(predictions[split_name])
-            y_true = np.asarray(eq_y.eval(split_values))
+            split_context = self.context.train_split if split_name == "train" else self.context.validation_split
+            y_true = self.expression_values(eq_y, split_values, num_nodes=split_context.num_nodes)
             y_pred, y_true = np.broadcast_arrays(y_pred, y_true)
             metrics = self.calculate_metrics(opaque_f, y_true, y_pred)
             metrics["complexity"] = len(model_code) + len(predict_code)

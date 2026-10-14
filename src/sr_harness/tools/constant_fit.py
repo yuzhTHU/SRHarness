@@ -68,8 +68,10 @@ class ConstantFitTool(BaseTool):
         target_symbol = self.parse_formula(target_expression)
         train = self.context.train_split.data
         validation = self.context.validation_split.data
-        train_target = self._values(target_symbol, train)
-        validation_target = self._values(target_symbol, validation) if validation else None
+        train_target = self._values(target_symbol, train, self.context.train_split.num_nodes)
+        validation_target = self._values(
+            target_symbol, validation, self.context.validation_split.num_nodes,
+        ) if validation else None
 
         evaluated = []
         invalid = 0
@@ -85,9 +87,14 @@ class ConstantFitTool(BaseTool):
             formula = expression.to_str()
             try:
                 candidate = self.parse_formula(formula)
-                train_r2 = self._r2(train_target, self._values(candidate, train))
+                train_r2 = self._r2(
+                    train_target, self._values(candidate, train, self.context.train_split.num_nodes),
+                )
                 validation_r2 = (
-                    self._r2(validation_target, self._values(candidate, validation))
+                    self._r2(
+                        validation_target,
+                        self._values(candidate, validation, self.context.validation_split.num_nodes),
+                    )
                     if validation else None
                 )
             except (ArithmeticError, TypeError, ValueError, KeyError):
@@ -159,9 +166,9 @@ class ConstantFitTool(BaseTool):
                  "is_original": True}, *options[:cls.MAX_SIMPLE_CANDIDATES_PER_NUMBER]]
 
     @staticmethod
-    def _values(symbol: engine.Expression, data: Dict[str, Any]) -> np.ndarray:
+    def _values(symbol: engine.Expression, data: Dict[str, Any], num_nodes: int | None) -> np.ndarray:
         with np.errstate(all="ignore"):
-            return np.asarray(symbol.eval(data), dtype=float).ravel()
+            return np.asarray(symbol.eval(data, num_nodes=num_nodes), dtype=float).ravel()
 
     @staticmethod
     def _r2(target: np.ndarray, prediction: np.ndarray) -> float:

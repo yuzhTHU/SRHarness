@@ -61,7 +61,7 @@ class SINDyTool(BaseTool):
 
         try:
             eq_y = self.parse_formula(y)
-            data_y = eq_y.eval(data).flatten()
+            data_y = self.expression_values(eq_y).flatten()
             if not is_numeric_array(data_y):
                 raise ValueError(f"Target '{y}' did not produce numeric values.")
         except Exception as e:
@@ -75,7 +75,7 @@ class SINDyTool(BaseTool):
         for idx, xi in enumerate(x, 1):
             try:
                 eq_x = self.parse_formula(xi)
-                data_x = eq_x.eval(data).flatten()
+                data_x = self.expression_values(eq_x).flatten()
                 if not is_numeric_array(data_x):
                     raise ValueError(f"Feature '{xi}' did not produce numeric values.")
                 features['exprs'].append(eq_x)

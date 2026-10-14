@@ -56,7 +56,7 @@ class PolynomialFitTool(BaseTool):
 
         try:
             eq_y = self.parse_formula(y)
-            data_y = eq_y.eval(data).flatten()
+            data_y = self.expression_values(eq_y).flatten()
         except Exception as e:
             raise ValueError(
                 f"Failed to compute target '{y}': {str(e)}" +
@@ -67,7 +67,7 @@ class PolynomialFitTool(BaseTool):
         for xi in x:
             try:
                 eq_x = self.parse_formula(xi)
-                data_x = eq_x.eval(data).flatten()
+                data_x = self.expression_values(eq_x).flatten()
                 if not is_numeric_array(data_x):
                     exceptions.append(f"Feature '{xi}' did not produce numeric values.")
                     continue
@@ -376,7 +376,7 @@ class PolynomialFitTool(BaseTool):
         """Evaluate symbolic terms to build the design matrix."""
         columns = []
         for term in terms:
-            values = np.asarray(term.eval(data))
+            values = self.expression_values(term, data)
             if values.ndim == 0:
                 values = np.full(n_samples, float(values))
             else:

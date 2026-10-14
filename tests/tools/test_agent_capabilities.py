@@ -42,6 +42,31 @@ def test_sr_harness_engine_syntax_is_a_builtin_skill(tmp_path):
     assert "gather(A[i, j]" in graph_content
 
 
+def test_graph_discovery_skill_and_generic_methods_are_builtin(tmp_path):
+    manager = SkillManager(
+        built_in_directory="src/sr_harness/skills",
+        custom_directory=tmp_path / "custom",
+    )
+
+    skill = manager.get_skill("discover-graph-symbolic-laws")
+    content = manager.read_skill(skill.name)
+    reference = manager.read_skill(
+        skill.name,
+        "references/search-methods.md",
+    )
+
+    assert skill.readonly is True
+    assert "graph_data_analysis" in content
+    assert "graph_structure_screen" in content
+    assert "graph_feature_fit" in content
+    assert "graph_residual_analysis" in content
+    assert "graph_template_fit" in content
+    assert "evaluate_formula" in content
+    assert "references/search-methods.md" in manager.get_skill_tree(skill.name)
+    assert "benchmark" not in content.lower()
+    assert "nd2" not in reference.lower()
+
+
 def test_eic_is_reproducible_and_finite():
     tool = EICTool(context=AgentContext(data={"x": np.linspace(1.0, 2.0, 64)}))
     first = tool.execute("x + x**2", repeats=4, random_state=7)

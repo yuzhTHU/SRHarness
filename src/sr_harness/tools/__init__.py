@@ -34,6 +34,13 @@ from .nd2 import ND2Tool
 from .sr4mdl import SR4MDLTool
 from .model_test import ModelTestTool
 from .finish_search import FinishSearchTool
+from .graph_analysis import (
+    GraphDataAnalysisTool,
+    GraphFeatureFitTool,
+    GraphResidualAnalysisTool,
+    GraphStructureScreenTool,
+    GraphTemplateFitTool,
+)
 from .read_source import ReadSourceTool
 from .validate_evaluator import ValidateEvaluatorTool
 
@@ -41,6 +48,8 @@ __all__ = [
     "BaseTool", "CodeExecutorTool", "ConstantFitTool",
     "CreateSkill", "EditSkill", "EditTool", "EICTool", "EvaluateCodeTool",
     "EvaluateTool", "FinishSearchTool", "HarmonicInteractionFitTool", "LLMTool", "ModelTestTool",
+    "GraphDataAnalysisTool", "GraphFeatureFitTool", "GraphResidualAnalysisTool",
+    "GraphStructureScreenTool", "GraphTemplateFitTool",
     "ND2Tool", "PDFReadTool", "PolynomialFitTool", "PowerLawFitTool",
     "PropertyPredictorTool", "PySRTool", "RationalFitTool", "ReadSkill",
     "ReadSourceTool", "RelationshipAnalysisTool", "SINDyTool", "SR4MDLTool",

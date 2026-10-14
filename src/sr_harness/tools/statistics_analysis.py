@@ -42,7 +42,7 @@ class StatisticsTool(BaseTool):
             else:
                 try:
                     f = self.parse_formula(item)
-                    x = f.eval(data)
+                    x = self.expression_values(f)
                 except Exception as e:
                     exceptions.append(f"Failed to compute '{item}': {str(e)}")
                     continue

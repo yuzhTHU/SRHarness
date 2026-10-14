@@ -7,6 +7,8 @@ description: Use this skill when solving a symbolic-regression problem from tabu
 
 Treat symbolic regression as iterative scientific diagnosis. Make each computation answer one structural question, and distinguish a diagnostic surrogate from a final symbolic law.
 
+If the context contains graph relations or the formula needs `[i]`, `sum[j](...)`, or message passing, read `discover-graph-symbolic-laws` and `sr-harness-engine-graph-syntax` before searching.
+
 ## Keep evidence compact
 
 - Compute over all samples inside a tool or script; return summaries only.

@@ -73,7 +73,7 @@ Mathematically, `sum[j](A[i, j], eq)` means `sum[j](A[i, j] * eq)`. The two-argu
 An edge-aligned field with shape `(..., E)` uses the same complete relation indices:
 
 ```text
-sum[j](A[i, j], w[i, j] * sin(theta[j] - theta[i]))
+sum[j](A[i, j], w[i, j] * (x[j] - x[i]))
 ```
 
 A hyperedge-aligned field with shape `(..., H)` similarly uses all three indices. When several compatible relations make field association ambiguous, the data context must explicitly associate the field with its relation; changing the formula cannot resolve ambiguous data metadata.
@@ -96,26 +96,22 @@ sum[j](A[i, j], sum[j](x[j]))
 
 Rename the inner index, for example to `k`.
 
-## Network and hypergraph examples
+## Composition examples
 
-Unnormalized Kuramoto-like dynamics:
-
-```text
-omega[i] + param('K') * sum[j](A[i, j], sin(theta[j] - theta[i]))
-```
-
-Degree-normalized interaction:
-
-```text
-omega[i] + param('K') * sum[j](A[i, j], sin(theta[j] - theta[i])) / sum[j](A[i, j], 1)
-```
-
-Node, edge-weighted, and hypergraph terms in one RHS:
+These expressions demonstrate binding and output shapes only; they are not
+suggested model structures. A node term, an edge-weighted reduction, and a
+hypergraph reduction can appear in one expression:
 
 ```text
 (param('a') * x[i]
-+ param('b') * sum[j](A[i, j], w[i, j] * tanh(x[j] - x[i]))
++ param('b') * sum[j](A[i, j], w[i, j] * z[j])
 + param('c') * sum[j, k](T[i, j, k], x[j] * x[k]))
+```
+
+A relation count can be used in an explicitly requested normalization:
+
+```text
+sum[j](A[i, j], z[j]) / sum[j](A[i, j], 1)
 ```
 
 Use parentheses when a denominator might be zero and inspect the data before submitting singular expressions.

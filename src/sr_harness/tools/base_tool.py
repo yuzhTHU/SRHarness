@@ -178,6 +178,75 @@ class BaseTool(ABC, FactoryMixin):
             symbols={"pi": np.pi, "e": np.e},
         )
 
+    def parse_node_aligned_formula(self, eq: str) -> engine.Expression:
+        """Parse a graph formula and align bare node fields to the target index.
+
+        A residual target such as ``y + x[i]`` has an unambiguous nodewise
+        interpretation when both ``y`` and ``x`` end in the configured node
+        axis.  The symbolic engine intentionally rejects that mixed notation,
+        so graph-facing tools use this convenience parser to rewrite only bare
+        node fields to ``field[i]``.  Already indexed terms and relation fields
+        are preserved exactly.
+
+        Args:
+            eq: Formula text supplied by the agent.
+
+        Returns:
+            Parsed expression with bare node fields aligned when the formula
+            contains structural syntax; otherwise the ordinary parsed result.
+        """
+        expression = self.parse_formula(eq)
+        if self.context.num_nodes is None or not any(
+            isinstance(node, (engine.Indexed, engine.Reduction, engine.Gather, engine.Aggregate))
+            for node in expression.iter_preorder()
+        ):
+            return expression
+
+        from sr_harness_engine.tree import children, with_children
+
+        node_count = int(self.context.num_nodes)
+
+        def align(node: engine.Expression) -> engine.Expression:
+            if isinstance(node, engine.Indexed):
+                return node
+            if isinstance(node, engine.Symbol) and node.name not in self.context.relation_names:
+                value = self.context.data.get(node.name)
+                if is_numeric_array(value):
+                    array = np.asarray(value)
+                    if array.ndim > 0 and array.shape[-1] == node_count:
+                        return node[engine.Index("i")]
+            return with_children(node, tuple(align(child) for child in children(node)))
+
+        return align(expression)
+
+    def expression_values(
+        self,
+        expression: engine.Expression,
+        data: Dict[str, Any] | None = None,
+        *,
+        num_nodes: int | None = None,
+    ) -> np.ndarray:
+        """Evaluate an ordinary or indexed expression with graph context.
+
+        Formula-oriented tools should use this helper instead of calling
+        ``Expression.eval(data)`` directly.  It supplies ``num_nodes`` for
+        expressions containing ``[i]``, relation reductions, or ``gather``
+        while remaining equivalent for ordinary tabular expressions.
+
+        Args:
+            expression: Parsed SRHarness Engine expression.
+            data: Data mapping; defaults to the active context data.
+            num_nodes: Structural node count; defaults to the active context.
+
+        Returns:
+            The evaluated NumPy value.
+        """
+        if not isinstance(expression, engine.Expression):
+            raise TypeError("expression must be an sr_harness_engine.Expression")
+        values = self.context.data if data is None else data
+        nodes = self.context.num_nodes if num_nodes is None else num_nodes
+        return np.asarray(expression.eval(values, num_nodes=nodes))
+
     @classmethod
     def truncate_result_str(cls, text: str) -> str:
         """Bound text sent to the LLM while preserving the full raw result.

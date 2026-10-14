@@ -35,6 +35,11 @@ class SRAgent(Agent):
     DEFAULT_TOOLS = (
         "statistics_analysis",
         "relationship_analysis",
+        "graph_data_analysis",
+        "graph_structure_screen",
+        "graph_feature_fit",
+        "graph_residual_analysis",
+        "graph_template_fit",
         "evaluate_formula",
         "submit_formula",
         "evaluate_code",
@@ -180,21 +185,21 @@ class SRAgent(Agent):
         # 关键组件
         self.context = context if context is not None else AgentContext()
         self.skill_manager = skill_manager or SkillManager(workspace=self.context.workspace)
-        requested_tool_names = tuple(self.DEFAULT_TOOLS if tools is None else tools)
-        requested_tools = set(requested_tool_names)
+        requested_tool_order = list(dict.fromkeys(self.DEFAULT_TOOLS if tools is None else tools))
+        requested_tool_names = set(requested_tool_order)
         initially_selected = [
             tool_cls for tool_cls in tool_cls_list
-            if tool_cls.metadata.name in requested_tools
+            if tool_cls.metadata.name in requested_tool_names
         ]
         self.skill_manager.register_tool_docs(initially_selected)
         tool_cls_list += BaseTool.discover_custom_tools(self.skill_manager)
         self.available_tool_classes = {
             tool_cls.metadata.name: tool_cls for tool_cls in tool_cls_list
         }
-        if unknown_tools := requested_tools - self.available_tool_classes.keys():
+        if unknown_tools := requested_tool_names - self.available_tool_classes.keys():
             raise ValueError(f"Unknown tools: {', '.join(sorted(unknown_tools))}")
         self.tool_cls_list = [
-            self.available_tool_classes[name] for name in requested_tool_names
+            self.available_tool_classes[name] for name in requested_tool_order
         ]
         registered_skills = self.skill_manager.load_skills()
         self.skill_manager.register_tool_docs([
@@ -375,7 +380,7 @@ class SRAgent(Agent):
             _logger.info(f"Start Restart Loop (R={R}/{self.max_restart_loop})")
 
             # 用平凡结果或者历史最佳结果构建新的分支 buffer
-            restart_records = self.run_state.ranked_candidates()[:self.restart_top_k]
+            restart_records = self._select_restart_records()
             initial_buffer = self.create_initial_buffer(problem_description, X, y, restart_records)
             initial_node_parents = {record.node_id: "restart_seed" for record in restart_records}
             self.named_timer.add("create_initial_buffer")
@@ -773,11 +778,29 @@ class SRAgent(Agent):
         Returns:
             Dict[str, str]: The operation result.
         """
-        calls = [
-            ToolCall(name="statistics_analysis", params={}),
-            ToolCall(name="relationship_analysis", params={}),
-            ToolCall(name="read_skill", params={"name": "discover-symbolic-laws"}),
-        ]
+        enabled_tools = {
+            tool.metadata.name for tool in (self.tool_box.tools if self.tool_box else [])
+        }
+        if self.context.relation_names:
+            calls = []
+            if "graph_data_analysis" in enabled_tools:
+                calls.append(ToolCall(name="graph_data_analysis", params={}))
+            if "graph_structure_screen" in enabled_tools:
+                calls.append(ToolCall(name="graph_structure_screen", params={}))
+            if "discover-graph-symbolic-laws" in self.enabled_skills:
+                calls.append(ToolCall(
+                    name="read_skill", params={"name": "discover-graph-symbolic-laws"},
+                ))
+            if "sr-harness-engine-graph-syntax" in self.enabled_skills:
+                calls.append(ToolCall(
+                    name="read_skill", params={"name": "sr-harness-engine-graph-syntax"},
+                ))
+        else:
+            calls = [
+                ToolCall(name="statistics_analysis", params={}),
+                ToolCall(name="relationship_analysis", params={}),
+                ToolCall(name="read_skill", params={"name": "discover-symbolic-laws"}),
+            ]
         results = self.execute_action(calls)
         self.record_tool_calls(calls, results, R=R, L=L, C=C, forced=True)
         failures = [
@@ -1339,6 +1362,12 @@ class SRAgent(Agent):
         Returns:
             Metric and complexity sorting key, or ``None`` for invalid metrics.
         """
+        # Tool results can carry perfectly valid metrics for diagnostics or for an
+        # alternate left-hand side.  Those results are deliberately marked as
+        # non-candidates by BaseTool.evaluate and must not steer the surviving K
+        # branch as if they had been scored against the discovery target.
+        if isinstance(record, dict) and record.get("is_candidate") is not True:
+            return None
         _, metric_value = self.get_ranking_metric(record)
         if metric_value is None:
             return None
@@ -1366,6 +1395,19 @@ class SRAgent(Agent):
             -float(metric_value) if self.larger_is_better else float(metric_value),
             finite_complexity,
         )
+
+    def _select_restart_records(self) -> list[CandidateRecord]:
+        """Return the best distinct formulas used to seed the next restart."""
+        selected = []
+        seen_formulas = set()
+        for record in self.run_state.ranked_candidates():
+            if record.formula in seen_formulas:
+                continue
+            selected.append(record)
+            seen_formulas.add(record.formula)
+            if len(selected) >= self.restart_top_k:
+                break
+        return selected
 
     @staticmethod
     def candidate_to_dict(record: CandidateRecord) -> dict[str, Any]:

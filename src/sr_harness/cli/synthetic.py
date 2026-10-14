@@ -153,7 +153,8 @@ def setup_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
         "Random seed used by the random validation split."
     ))
     parser.add_argument("--force_initial_diagnostics", action=argparse.BooleanOptionalAction, default=True, help=(
-        "Before each branch's first LLM request, run statistics_analysis, relationship_analysis, and read discover-symbolic-laws."
+        "Before each branch's first LLM request, run the standard diagnostics and skill; "
+        "graph contexts also run the available graph data/structure screens and graph skill."
     ))
     parser.add_argument("--auto_routing", action=argparse.BooleanOptionalAction, default=True, help=(
         "Automatically route LLM requests between the base backend and the optional "

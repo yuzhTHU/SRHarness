@@ -104,14 +104,14 @@ class SR4MDLTool(BaseTool):
             if name != y and is_numeric_array(values)
         ]
         target_formula = self.parse_formula(y)
-        target_values = np.asarray(target_formula.eval(data)).flatten()
+        target_values = self.expression_values(target_formula).flatten()
         if not is_numeric_array(target_values):
             raise ValueError(f"Target {y!r} did not produce numeric values.")
 
         internal_data = {}
         original_expressions = []
         for index, expression in enumerate(x, start=1):
-            values = np.asarray(self.parse_formula(expression).eval(data)).flatten()
+            values = self.expression_values(self.parse_formula(expression)).flatten()
             if not is_numeric_array(values):
                 raise ValueError(f"Feature {expression!r} did not produce numeric values.")
             if values.shape != target_values.shape:

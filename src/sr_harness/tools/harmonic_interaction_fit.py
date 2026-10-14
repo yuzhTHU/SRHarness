@@ -50,9 +50,9 @@ class HarmonicInteractionFitTool(BaseTool):
         carrier_symbol = self.parse_formula(carrier)
         oscillator_symbol = self.parse_formula(oscillator)
         target_symbol = self.parse_formula(target_name)
-        target = np.asarray(target_symbol.eval(data), dtype=float).reshape(-1)
-        state = np.asarray(carrier_symbol.eval(data), dtype=float).reshape(-1)
-        phase = np.asarray(oscillator_symbol.eval(data), dtype=float).reshape(-1)
+        target = np.asarray(self.expression_values(target_symbol), dtype=float).reshape(-1)
+        state = np.asarray(self.expression_values(carrier_symbol), dtype=float).reshape(-1)
+        phase = np.asarray(self.expression_values(oscillator_symbol), dtype=float).reshape(-1)
         if not (target.shape == state.shape == phase.shape):
             raise ValueError("Target, carrier, and oscillator must have the same shape.")
         finite = np.isfinite(target) & np.isfinite(state) & np.isfinite(phase)

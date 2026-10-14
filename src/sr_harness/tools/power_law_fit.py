@@ -45,13 +45,13 @@ class PowerLawFitTool(BaseTool):
         target_name = (y or self.context.target).strip().strip('"').strip("'")
         x = x or [name for name, value in data.items() if name != target_name and is_numeric_array(value)]
         y_symbol = self.parse_formula(target_name)
-        target = np.asarray(y_symbol.eval(data), dtype=float).flatten()
+        target = np.asarray(self.expression_values(y_symbol), dtype=float).flatten()
         if target.size == 0:
             return {"exceptions": [f"{target_name}: no training values; power_law_fit requires positive samples."]}
 
         features = []
         for expression in x:
-            value = data[expression] if expression in data else self.parse_formula(expression).eval(data)
+            value = data[expression] if expression in data else self.expression_values(self.parse_formula(expression))
             if not is_numeric_array(value):
                 raise ValueError(f"'{expression}' did not produce numeric values")
             value = np.asarray(value, dtype=float).flatten()
@@ -221,10 +221,13 @@ class PowerLawFitTool(BaseTool):
         if not data:
             return None
         try:
-            target = np.asarray(y_symbol.eval(data), dtype=float).flatten()
+            split_context = self.context.validation_split
+            target = np.asarray(self.expression_values(y_symbol, data, num_nodes=split_context.num_nodes), dtype=float).flatten()
             validation_features = []
             for expression, _ in features:
-                values = data[expression] if expression in data else self.parse_formula(expression).eval(data)
+                values = data[expression] if expression in data else self.expression_values(
+                    self.parse_formula(expression), data, num_nodes=split_context.num_nodes,
+                )
                 values = np.asarray(values, dtype=float).flatten()
                 if values.shape != target.shape or not np.all(np.isfinite(values) & (values > 0)):
                     return None

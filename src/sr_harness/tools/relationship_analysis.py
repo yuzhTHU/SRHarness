@@ -42,7 +42,11 @@ class RelationshipAnalysisTool(BaseTool):
         if collapse_model not in {"bins", "spline", "isotonic"}:
             raise ValueError("collapse_model must be 'bins', 'spline', or 'isotonic'")
 
-        target_value = data[target_name] if target_name in data else self.parse_formula(target_name).eval(data)
+        target_value = (
+            data[target_name]
+            if target_name in data
+            else self.expression_values(self.parse_node_aligned_formula(target_name))
+        )
         if not is_numeric_array(target_value):
             raise ValueError(f"Target '{target_name}' did not produce numeric values.")
         target = np.asarray(target_value, dtype=float).flatten()
@@ -55,7 +59,7 @@ class RelationshipAnalysisTool(BaseTool):
         exceptions = []
         for expression in variables:
             try:
-                value = data[expression] if expression in data else self.parse_formula(expression).eval(data)
+                value = data[expression] if expression in data else self.expression_values(self.parse_formula(expression))
                 if not is_numeric_array(value):
                     raise ValueError("expression did not produce numeric values")
                 value = np.asarray(value, dtype=float).flatten()

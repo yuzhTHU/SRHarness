@@ -36,6 +36,24 @@ def test_expressions_and_optional_pairwise_matrix():
     )
 
 
+def test_graph_residual_target_aligns_bare_node_field():
+    relation = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    x = np.linspace(0.1, 1.0, 40).reshape(20, 2)
+    y = 2 * x
+    context = AgentContext(
+        data={"R": relation, "x": x, "y": y},
+        target="y",
+        relation_names={"R"},
+        num_nodes=2,
+    )
+
+    result = RelationshipAnalysisTool(context=context).execute(
+        variables=["x[i]"], y="y + x[i]", n_bins=5,
+    )
+
+    assert result["relationships"]["x[i]"]["pearson"] > 0.999
+
+
 def test_invalid_binning_is_wrapped_by_base_tool():
     tool = RelationshipAnalysisTool(
         context=AgentContext(data={"x": np.arange(4), "y": np.arange(4)}, target="y")

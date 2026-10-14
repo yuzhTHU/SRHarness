@@ -21,6 +21,7 @@ from sr_harness.agents.sr_agent_interactive import SRAgentInteractive
 from sr_harness.runtime import SRInteractionManager
 from sr_harness.tools.base_tool import BaseTool
 from sr_harness.tools.finish_search import FinishSearchTool
+from sr_harness.tools.graph_analysis import GraphDataAnalysisTool, GraphStructureScreenTool
 from sr_harness.tools.read_skill import ReadSkill
 from sr_harness.tools.relationship_analysis import RelationshipAnalysisTool
 from sr_harness.tools.statistics_analysis import StatisticsTool
@@ -716,6 +717,63 @@ def test_force_initial_diagnostics_runs_and_injects_results(tmp_path):
     assert all(record["forced"] is True for record in records)
 
 
+def test_force_initial_diagnostics_adds_graph_structure_evidence(tmp_path):
+    agent = SRAgent(
+        llm_provider="unused",
+        llm_model="unused",
+        tools=[
+            "statistics_analysis",
+            "relationship_analysis",
+            "graph_data_analysis",
+            "graph_structure_screen",
+            "read_skill",
+        ],
+        skills=[
+            "discover-symbolic-laws",
+            "discover-graph-symbolic-laws",
+            "sr-harness-engine-graph-syntax",
+        ],
+        save_path=str(tmp_path),
+        force_initial_diagnostics=True,
+    )
+    x = np.arange(12.0).reshape(4, 3) / 10
+    relation = np.array([[0, 1], [1, 2], [2, 0]], dtype=np.int64)
+    context = AgentContext(
+        args=argparse.Namespace(skill_manager=agent.skill_manager),
+        data={"R": relation, "x": x, "y": 2 * x},
+        target="y",
+        relation_names={"R"},
+        num_nodes=3,
+    )
+    agent.context = context
+    agent.tool_box = BaseParser.create("openai", tool_list=[
+        StatisticsTool(context=context),
+        RelationshipAnalysisTool(context=context),
+        GraphDataAnalysisTool(context=context),
+        GraphStructureScreenTool(context=context),
+        ReadSkill(context=context),
+    ])
+
+    prompt = agent.prepare_model_messages(
+        [{"role": "user", "content": "Find the graph law."}], R=1, L=1, C=1,
+    )
+
+    content = prompt[-1]["content"]
+    assert "## graph_data_analysis" in content
+    assert "## graph_structure_screen" in content
+    assert '<skill_content name="discover-graph-symbolic-laws">' in content
+    assert '<skill_content name="sr-harness-engine-graph-syntax">' in content
+    records = [
+        json.loads(line) for line in (tmp_path / "tool_calls.jsonl").read_text().splitlines()
+    ]
+    assert [record["name"] for record in records] == [
+        "graph_data_analysis",
+        "graph_structure_screen",
+        "read_skill",
+        "read_skill",
+    ]
+
+
 def test_force_initial_diagnostics_requires_all_tools(tmp_path):
     try:
         SRAgent(
@@ -989,6 +1047,7 @@ def test_update_conversation_sorts_unwrapped_tool_results(tmp_path):
             ToolCallResult(
                 True,
                 {
+                    "is_candidate": True,
                     "data_split_results": {"train": {"metrics": {"mse": 0.1, "complexity": 2}}},
                 },
                 "candidate",
@@ -1000,6 +1059,59 @@ def test_update_conversation_sorts_unwrapped_tool_results(tmp_path):
     agent.update_conversation(buffer, response_list, results_list, {}, R=1, L=1, C=1)
 
     assert buffer[-2]["content"] == "candidate"
+
+
+def test_update_conversation_ignores_non_candidate_metrics(tmp_path):
+    agent = make_agent(tmp_path)
+    agent.tool_box = SimpleNamespace(format_tool_result_messages=lambda *args: [])
+    buffer = [{"role": "user", "content": "Find a formula."}]
+    response_list = [
+        api_sample("real candidate"),
+        api_sample("alternate target"),
+    ]
+    results_list = [
+        [ToolCallResult(True, {
+            "is_candidate": True,
+            "data_split_results": {
+                "validation": {"metrics": {"mse": 0.1, "complexity": 2}},
+                "train": {"metrics": {"mse": 0.1, "complexity": 2}},
+            },
+        }, "candidate", {})],
+        [ToolCallResult(True, {
+            "is_candidate": False,
+            "candidate_ineligibility_reasons": ["the left-hand side is not the target"],
+            "data_split_results": {
+                "validation": {"metrics": {"mse": 0.0, "complexity": 1}},
+                "train": {"metrics": {"mse": 0.0, "complexity": 1}},
+            },
+        }, "diagnostic", {})],
+    ]
+
+    agent.update_conversation(buffer, response_list, results_list, {}, R=1, L=1, C=1)
+
+    assert buffer[-2]["content"] == "real candidate"
+
+
+def test_restart_records_are_distinct_formulas(tmp_path):
+    agent = make_agent(tmp_path)
+    agent.restart_top_k = 3
+    for index, (formula, mse) in enumerate([
+        ("x", 0.01),
+        ("x", 0.01),
+        ("x + 1", 0.02),
+        ("x + 2", 0.03),
+    ]):
+        agent.push_candidate(CandidateRecord(
+            formula=formula,
+            node_id=f"node-{index}",
+            details={"data_split_results": {
+                "train": {"metrics": {"mse": mse, "complexity": len(formula)}},
+            }},
+        ))
+
+    selected = agent._select_restart_records()
+
+    assert [record.formula for record in selected] == ["x", "x + 1", "x + 2"]
 
 
 def test_collect_candidates_records_pareto_front(tmp_path):

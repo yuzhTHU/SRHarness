@@ -19,6 +19,16 @@ def test_default_benchmark_tools_exclude_self_modification():
     assert "harmonic_interaction_fit" not in tools_action.choices
 
 
+def test_default_benchmark_tools_include_graph_diagnostics():
+    parser = update_parser(argparse.ArgumentParser())
+    tools = parser.get_default("tools")
+
+    assert "graph_data_analysis" in tools
+    assert "graph_feature_fit" in tools
+    assert "graph_residual_analysis" in tools
+    assert "graph_template_fit" in tools
+
+
 def test_failed_agent_with_formula_is_not_reported_as_success(monkeypatch, tmp_path):
     class FakeAgent:
         def __init__(self, **kwargs):
