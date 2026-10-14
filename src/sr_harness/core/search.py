@@ -580,6 +580,10 @@ class SearchRunState:
         for tool_call, call_result in zip(tool_calls, results):
             if not call_result.ok:
                 continue
+            result_is_candidate = bool(call_result.result.get("is_candidate"))
+            is_candidate = is_candidate or result_is_candidate
+            if not result_is_candidate:
+                continue
             split_results = call_result.result.get("data_split_results", {})
             split_name = "validation" if "validation" in split_results else "train"
             metrics = split_results.get(split_name, {}).get("metrics")
@@ -599,7 +603,6 @@ class SearchRunState:
                 < SearchRunState._score_key(best_record)
             ):
                 best_record = record
-            is_candidate = is_candidate or bool(call_result.result.get("is_candidate"))
         return {
             "formula": best_record.pop("formula") if best_record else None,
             "score": best_record,
