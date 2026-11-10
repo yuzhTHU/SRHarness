@@ -35,6 +35,12 @@ class EvaluateTool(BaseTool):
             show_diagnostics: Whether the result should include a compact residual error profile,
                 the worst samples, and the strongest residual-variable correlations.
         """
+        from ._hypergraph_known_edge_common import is_multivariate, known_edges_enabled
+        if known_edges_enabled(self.context) and is_multivariate(self.context):
+            raise ValueError(
+                'multivariate known-edges: do not evaluate_formula on component tuples; '
+                'submit_formula(f=candidate_id) after hypergraph_reintegrate can_submit=true'
+            )
         data = self.context.data
         y = y or self.context.target
         y = y.strip().strip('"').strip("'")
@@ -96,3 +102,69 @@ class SubmitFormulaTool(EvaluateTool):
             "It returns candidate formulas only when `y` is the default target and the formula does not contain the target itself."
         ),
     )
+
+    def execute(
+        self,
+        f: str,
+        y: str = None,
+        fit: bool = False,
+        show_diagnostics: bool = True,
+    ) -> Dict[str, Any]:
+        """Submit a formula, or a gated known-edges candidate ID.
+
+        Args:
+            f: Formula string, or the `candidate_id` returned by `hypergraph_reintegrate` (exact if can_submit, else best-effort).
+            y: Target variable name. Use target variable by default.
+            fit: Whether to optimize formula parameters using BFGS algorithm.
+            show_diagnostics: Whether the result should include residual diagnostics.
+        """
+        from ._hypergraph_known_edge_common import known_edges_enabled, require_submission, serialize_indexed
+
+        if known_edges_enabled(self.context):
+            cid = str(f).strip()
+            candidate = require_submission(self.context, cid)
+            f = serialize_indexed(self.context, candidate)
+            fit = False
+            if candidate.get('kind') in ('multivariate', 'vector'):
+                from ._hypergraph_known_edge_common import host_state, registry
+                gate = registry(self.context)['gates'].get(cid) or {}
+                exported = host_state(self.context).get('exported_vector') or {}
+                rmse = gate.get('resim_rmse')
+                mse = float(rmse) ** 2 if isinstance(rmse, (int, float)) and rmse == rmse else float('nan')
+                metrics = {
+                    'mse': mse,
+                    'rmse': rmse,
+                    'mae': rmse,
+                    'r2': None,
+                    'complexity': 1,
+                }
+                return {
+                    'formula': f,
+                    'is_candidate': True,
+                    'parameters_optimized': False,
+                    'training_samples': 0,
+                    'F': exported.get('F'),
+                    'G': exported.get('G'),
+                    'H': exported.get('H'),
+                    'resim_rmse': rmse,
+                    'data_split_results': {
+                        'train': {'metrics': dict(metrics)},
+                        'validation': {'metrics': dict(metrics)},
+                    },
+                }
+        return super().execute(f=f, y=y, fit=fit, show_diagnostics=show_diagnostics)
+
+    @classmethod
+    def format_result_dict(cls, result: Dict[str, Any]) -> str:
+        if result.get('F') is not None and result.get('G') is not None and result.get('H') is not None:
+            from ._hypergraph_known_edge_common import readable
+            return readable({
+                'formula': result.get('formula'),
+                'F': result.get('F'),
+                'G': result.get('G'),
+                'H': result.get('H'),
+                'resim_rmse': result.get('resim_rmse'),
+                'is_candidate': result.get('is_candidate'),
+                'note': 'Vector known-edges: this is the gated candidate_id submission. The stop metric is full-grid resim RMSE, not train-split MSE.',
+            })
+        return super().format_result_dict(result)

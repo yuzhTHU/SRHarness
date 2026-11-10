@@ -41,6 +41,11 @@ from .graph_analysis import (
     GraphStructureScreenTool,
     GraphTemplateFitTool,
 )
+from .hypergraph_formula_screen import HypergraphFormulaScreenTool
+from .hypergraph_known_edge_diagnostics import HypergraphKnownEdgeDiagnosticsTool
+from .hypergraph_node_parameter_fit import HypergraphNodeParameterFitTool
+from .hypergraph_formula_refine import HypergraphFormulaRefineTool
+from .hypergraph_reintegrate import HypergraphReintegrateTool
 from .read_source import ReadSourceTool
 from .validate_evaluator import ValidateEvaluatorTool
 
@@ -50,6 +55,9 @@ __all__ = [
     "EvaluateTool", "FinishSearchTool", "HarmonicInteractionFitTool", "LLMTool", "ModelTestTool",
     "GraphDataAnalysisTool", "GraphFeatureFitTool", "GraphResidualAnalysisTool",
     "GraphStructureScreenTool", "GraphTemplateFitTool",
+    "HypergraphFormulaScreenTool",
+    "HypergraphKnownEdgeDiagnosticsTool", "HypergraphNodeParameterFitTool",
+    "HypergraphFormulaRefineTool", "HypergraphReintegrateTool",
     "ND2Tool", "PDFReadTool", "PolynomialFitTool", "PowerLawFitTool",
     "PropertyPredictorTool", "PySRTool", "RationalFitTool", "ReadSkill",
     "ReadSourceTool", "RelationshipAnalysisTool", "SINDyTool", "SR4MDLTool",

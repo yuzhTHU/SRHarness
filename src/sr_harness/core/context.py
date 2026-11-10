@@ -13,6 +13,40 @@ if TYPE_CHECKING:
 _DEFAULT_EVALUATOR = object()
 
 
+def _coerce_num_nodes(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or isinstance(value, np.bool_):
+        raise ValueError("num_nodes must be a positive integer")
+    if isinstance(value, (int, np.integer)):
+        number = int(value)
+    elif isinstance(value, (float, np.floating)) and float(value) == int(value):
+        number = int(value)
+    else:
+        raise ValueError("num_nodes must be a positive integer")
+    if number < 1:
+        raise ValueError("num_nodes must be a positive integer")
+    return number
+
+
+def _relation_array(rows: Any, width: int) -> np.ndarray:
+    if rows is None:
+        return np.zeros((0, width), dtype=np.int64)
+    array = np.asarray(rows)
+    if array.size == 0:
+        return np.zeros((0, width), dtype=np.int64)
+    if array.ndim == 1 and array.size == width:
+        array = array.reshape(1, width)
+    if array.ndim != 2 or array.shape[1] != width:
+        raise ValueError(f"edges must have shape (E, {width})")
+    if array.dtype.kind == "f":
+        if not np.all(np.isfinite(array)) or not np.all(array == np.trunc(array)):
+            raise ValueError("edge endpoints must be integers")
+    elif array.dtype.kind not in "iu":
+        raise ValueError("edge endpoints must be integers")
+    return np.ascontiguousarray(array, dtype=np.int64)
+
+
 class AgentContext:
     """One authoritative context containing data, metadata, and runtime arguments.
 
@@ -243,6 +277,91 @@ class AgentContext:
             self.args.data_revision += 1
             self._validate()
         return {"revision": self.args.data_revision, "target": target, "features": list(self.feature_names()), "columns": list(arrays), "rows": len(arrays[target])}
+
+    def install_relations(self, *, pairwise: Any = None, triplet: Any = None, num_nodes: int | None = None) -> dict[str, Any]:
+        """Replace the candidate pairwise and triplet tables and keep them for formula evaluation.
+
+        Args:
+            pairwise: Rows shaped ``(E, 2)`` in ``(target, source)`` order. ``None`` installs an empty table.
+            triplet: Rows shaped ``(H, 3)`` in ``(target, source1, source2)`` order. ``None`` installs an empty table.
+            num_nodes: Node count. When omitted, use the last dimension of ``x`` or ``dx_dt``.
+
+        Returns:
+            The installed node count and the number of rows in each table.
+
+        Raises:
+            ValueError: If an edge table has the wrong shape, a non-integer endpoint,
+                or a node count that disagrees with the node axis of ``x`` or ``dx_dt``.
+        """
+        tables = {
+            "pairwise": _relation_array(pairwise, 2),
+            "triplet": _relation_array(triplet, 3),
+        }
+        descriptions = {
+            "pairwise": "Candidate pairwise edges, columns (target, source).",
+            "triplet": "Candidate triplet edges, columns (target, source1, source2).",
+        }
+        resolved_nodes = _coerce_num_nodes(num_nodes)
+        with self._lock:
+            saved = (
+                dict(self.data),
+                dict(self.variable_descriptions),
+                dict(self.variable_axes),
+                set(self.relation_names),
+                self.num_nodes,
+                self.evaluator,
+            )
+            try:
+                for name in ("x", "dx_dt"):
+                    if name not in self.data or np.asarray(self.data[name]).ndim < 1:
+                        continue
+                    observed = int(np.asarray(self.data[name]).shape[-1])
+                    if resolved_nodes is None:
+                        resolved_nodes = observed
+                    elif resolved_nodes != observed:
+                        raise ValueError(
+                            f"num_nodes {resolved_nodes} does not match {name}.shape[-1] {observed}"
+                        )
+                if resolved_nodes is None:
+                    raise ValueError("num_nodes is required when x and dx_dt are absent")
+                data = {
+                    name: value for name, value in self.data.items() if name not in tables
+                }
+                data.update(tables)
+                self.data = data
+                self.variable_descriptions = {
+                    name: self.variable_descriptions.get(name, "")
+                    for name in data
+                    if name not in tables
+                }
+                self.variable_descriptions.update(descriptions)
+                self.variable_axes = {
+                    name: axes for name, axes in self.variable_axes.items() if name in data and name not in tables
+                }
+                for name in tables:
+                    self.variable_axes[name] = ()
+                self.relation_names = (self.relation_names - set(tables)) | set(tables)
+                self.num_nodes = resolved_nodes
+                self._sync_builtin_evaluator()
+                self.invalidate_splits()
+                self.args.data_revision += 1
+                self._validate()
+            except Exception:
+                (
+                    self.data,
+                    self.variable_descriptions,
+                    self.variable_axes,
+                    self.relation_names,
+                    self.num_nodes,
+                    self.evaluator,
+                ) = saved
+                self.invalidate_splits()
+                raise
+        return {
+            "num_nodes": self.num_nodes,
+            "pairwise_count": int(tables["pairwise"].shape[0]),
+            "triplet_count": int(tables["triplet"].shape[0]),
+        }
 
     def add_features(self, features: dict[str, Any], *, descriptions: dict[str, str] | None = None) -> dict[str, Any]:
         """Add aligned feature arrays while preserving the current target.

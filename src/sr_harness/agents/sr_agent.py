@@ -304,6 +304,23 @@ class SRAgent(Agent):
             )
         else:
             self.context.target = target
+        ke = getattr(self.context.args, "hypergraph_known_edges", None)
+        if not isinstance(ke, dict):
+            ke = getattr(self.context.args, "known_edges", None)
+        if isinstance(ke, dict) and ke.get("enabled") and ke.get("tables"):
+            cfg = ke.get("config") or {}
+            n_nodes = cfg.get("num_nodes") or self.context.num_nodes
+            names = list(cfg.get("components") or [])
+            if n_nodes is None and names and names[0] in self.context.data:
+                n_nodes = int(np.asarray(self.context.data[names[0]]).shape[-1])
+            self.context.install_relations(
+                pairwise=ke["tables"]["pairwise"],
+                triplet=ke["tables"]["triplet"],
+                num_nodes=n_nodes,
+            )
+            from ..tools._hypergraph_known_edge_common import sync_relation_weights
+
+            sync_relation_weights(self.context, ke.get("weights") or {})
         self.context.invalidate_splits()
         self._active_X = X
         self._active_y = y
@@ -765,6 +782,17 @@ class SRAgent(Agent):
             best_candidate is not None and best_candidate.metric("mse", "train") == 0.0
         ):
             return "early_stopped"
+        from ..tools._hypergraph_known_edge_common import known_edges_enabled
+
+        if known_edges_enabled(self.context) and response_list and results_list:
+            for response, results in zip(response_list, results_list):
+                for call, result in zip(response.tool_calls, results):
+                    if (
+                        call.name == "submit_formula"
+                        and result.ok
+                        and result.result.get("is_candidate")
+                    ):
+                        return "early_stopped"
         return None
 
     def run_initial_diagnostics(self, R: int, L: int, C: int) -> Dict[str, str]:
@@ -781,7 +809,35 @@ class SRAgent(Agent):
         enabled_tools = {
             tool.metadata.name for tool in (self.tool_box.tools if self.tool_box else [])
         }
-        if self.context.relation_names:
+        has_installed_edges = any(
+            np.asarray(self.context.data[name]).ndim == 2
+            and np.asarray(self.context.data[name]).shape[1] in {2, 3}
+            and np.asarray(self.context.data[name]).shape[0] > 0
+            for name in self.context.relation_names
+        )
+        if (
+            "hypergraph_known_edge_diagnostics" in enabled_tools
+            and "discover-hypergraph-known-edge-laws" in self.enabled_skills
+        ):
+            calls = [
+                ToolCall(name="read_skill", params={"name": "discover-hypergraph-known-edge-laws"}),
+                ToolCall(name="hypergraph_known_edge_diagnostics", params={}),
+            ]
+            if "hypergraph_formula_screen" in enabled_tools:
+                calls.append(ToolCall(name="hypergraph_formula_screen", params={}))
+            if "sr-harness-engine-graph-syntax" in self.enabled_skills:
+                calls.append(ToolCall(
+                    name="read_skill", params={"name": "sr-harness-engine-graph-syntax"},
+                ))
+        elif has_installed_edges and "hypergraph_formula_screen" in enabled_tools:
+            calls = [
+                ToolCall(name="hypergraph_formula_screen", params={}),
+            ]
+            if "sr-harness-engine-graph-syntax" in self.enabled_skills:
+                calls.append(ToolCall(
+                    name="read_skill", params={"name": "sr-harness-engine-graph-syntax"},
+                ))
+        elif self.context.relation_names:
             calls = []
             if "graph_data_analysis" in enabled_tools:
                 calls.append(ToolCall(name="graph_data_analysis", params={}))
